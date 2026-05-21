@@ -8,6 +8,7 @@ import type {
   PermissionResponse,
   SessionEvent,
   SessionSummary,
+  SettingsSection,
   StoredMessage,
   ThemePreference,
   UiDensity,
@@ -56,6 +57,7 @@ function AppShell() {
   const [connections, setConnections] = useState<LlmConnection[]>([]);
   const [defaultConnection, setDefaultConnection] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRequestedSection, setSettingsRequestedSection] = useState<SettingsSection | undefined>(undefined);
   const [themePref, setThemePref] = useState<ThemePreference>('auto');
   const [density, setDensity] = useState<UiDensity>('comfortable');
   const [userLabel, setUserLabel] = useState<string>('');
@@ -389,6 +391,22 @@ function AppShell() {
     setSettingsOpen(true);
   }
 
+  /**
+   * Opens Settings and jumps directly to the named section. Writes the section
+   * to localStorage (so the next cold-open lands there too) and threads it
+   * through `requestedSection` so an already-open Settings modal switches
+   * tabs without close/reopen.
+   */
+  function openSettingsSection(section: SettingsSection) {
+    try {
+      localStorage.setItem('maka-settings-section-v1', section);
+    } catch {
+      /* localStorage unavailable; fall back to whatever section the modal picks */
+    }
+    setSettingsRequestedSection(section);
+    setSettingsOpen(true);
+  }
+
   function closeSettings() {
     setSettingsOpen(false);
   }
@@ -569,6 +587,7 @@ function AppShell() {
           density={density}
           onDensityChange={setDensity}
           onUserLabelChange={setUserLabel}
+          requestedSection={settingsRequestedSection}
         />
       )}
       {helpOpen && <KeyboardHelpModal onClose={closeHelp} />}
@@ -582,6 +601,7 @@ function AppShell() {
             onSelectSession: setActiveId,
             onNewChat: () => void createSession(),
             onOpenSettings: openSettings,
+            onOpenSettingsSection: (section) => openSettingsSection(section),
             onOpenShortcuts: () => {
               // useKeyboardHelp() exposes only close; trigger via window event
               // simulation by dispatching a `?` keypress on the document.

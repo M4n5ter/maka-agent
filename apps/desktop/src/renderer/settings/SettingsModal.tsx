@@ -50,7 +50,7 @@ type SettingsNavItem = {
   comingSoon?: boolean;
 };
 
-const SETTINGS_NAV: SettingsNavItem[] = [
+export const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'general', label: '通用', Icon: SettingsIcon, enabled: true },
   { id: 'personalization', label: '个性化', Icon: User, enabled: true },
   { id: 'theme', label: '主题', Icon: Palette, enabled: true },
@@ -216,6 +216,12 @@ export function SettingsModal(props: {
   density: UiDensity;
   onDensityChange(density: UiDensity): void;
   onUserLabelChange?(label: string): void;
+  /**
+   * Force the modal to a specific section when it (re-)mounts or when the
+   * value changes while already open. Used by the command palette so
+   * ⌘K → "网络" jumps straight to the section without an extra click.
+   */
+  requestedSection?: SettingsSection;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Escape closes the modal, Tab/Shift+Tab cycles inside the dialog,
@@ -242,6 +248,7 @@ export function SettingsModal(props: {
           density={props.density}
           onDensityChange={props.onDensityChange}
           onUserLabelChange={props.onUserLabelChange}
+          requestedSection={props.requestedSection}
         />
       </div>
     </div>
@@ -258,8 +265,19 @@ function SettingsSurface(props: {
   density: UiDensity;
   onDensityChange(density: UiDensity): void;
   onUserLabelChange?(label: string): void;
+  requestedSection?: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>(() => readLastSettingsSection());
+  const [section, setSection] = useState<SettingsSection>(() => props.requestedSection ?? readLastSettingsSection());
+
+  // When the parent updates requestedSection (e.g. the palette opens
+  // Settings with a different section while it's already mounted), reflect
+  // that into the local state.
+  useEffect(() => {
+    if (props.requestedSection && props.requestedSection !== section) {
+      setSection(props.requestedSection);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.requestedSection]);
 
   useEffect(() => {
     try {

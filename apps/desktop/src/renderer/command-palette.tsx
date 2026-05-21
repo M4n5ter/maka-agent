@@ -19,8 +19,9 @@ import {
   SunMoon,
   type LucideIcon,
 } from 'lucide-react';
-import type { SessionSummary, ThemePreference } from '@maka/core';
+import type { SessionSummary, SettingsSection, ThemePreference } from '@maka/core';
 import { useModalA11y } from '@maka/ui';
+import { SETTINGS_NAV } from './settings/SettingsModal';
 
 export type CommandKind = 'action' | 'session';
 
@@ -65,6 +66,7 @@ export function buildCommandList(args: {
   onSelectSession(id: string): void;
   onNewChat(): void;
   onOpenSettings(): void;
+  onOpenSettingsSection(section: SettingsSection): void;
   onOpenShortcuts(): void;
   onSetTheme(next: ThemePreference): void;
 }): Command[] {
@@ -130,6 +132,22 @@ export function buildCommandList(args: {
       run: () => args.onSetTheme('auto'),
     },
   ];
+
+  // One palette command per Settings section so ⌘K → label lands the user
+  // directly on that page. Coming Soon pages are intentionally included
+  // (they're real navigation targets, just without final feature behaviour).
+  for (const navItem of SETTINGS_NAV) {
+    cmds.push({
+      id: `settings:${navItem.id}`,
+      kind: 'action',
+      label: `设置 · ${navItem.label}`,
+      hint: navItem.comingSoon ? '即将推出' : undefined,
+      group: '设置',
+      Icon: navItem.Icon as LucideIcon,
+      keywords: [navItem.id, navItem.label, 'settings', '设置'],
+      run: () => args.onOpenSettingsSection(navItem.id),
+    });
+  }
 
   for (const session of args.sessions) {
     if (session.isArchived) continue;
