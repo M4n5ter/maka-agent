@@ -39,7 +39,13 @@ import type {
   StoredMessage,
   ToolResultContent,
 } from '@maka/core';
-import { materializeChat, materializeTools, type ToolActivityItem } from './materialize.js';
+import {
+  materializeChat,
+  materializeTools,
+  materializeTurns,
+  type ToolActivityItem,
+  type TurnViewModel,
+} from './materialize.js';
 
 export type NavSelection =
   | { section: 'sessions'; filter: SessionFilter }
@@ -695,9 +701,13 @@ export function ChatView(props: {
   onPromptSuggestion?(prompt: string): void;
   onPermissionModeChange?(mode: PermissionMode): void;
 }) {
+  // chat + storedTools survive for the empty-state and streaming-bubble
+  // paths; the main message log is now driven by `turns` (per @kenji UI-04
+  // turn-grouping projection).
   const chat = materializeChat(props.messages);
   const storedTools = materializeTools(props.messages);
   const tools = mergeTools(storedTools, props.tools);
+  const turns = materializeTurns(props.messages, props.tools);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
@@ -799,32 +809,22 @@ export function ChatView(props: {
           {chat.length === 0 && !props.streamingText && (
             props.emptyOverride ?? <EmptyChatHero onPromptSuggestion={props.onPromptSuggestion} userLabel={props.userLabel} />
           )}
-          {chat.map((item) => (
-            <article
-              key={item.id}
-              className={`maka-message-row message ${item.role}`}
-              title={item.ts ? formatAbsoluteTimestamp(item.ts) : undefined}
-            >
-              <span>
-                {messageRoleLabel(item.role, props.userLabel)}
-                {item.ts && (
-                  <small className="maka-message-time" aria-hidden="true">
-                    {formatRelativeTimestamp(item.ts)}
-                  </small>
-                )}
-              </span>
-              <MessageBody role={item.role} text={item.text} />
-            </article>
+          {turns.map((turn) => (
+            <TurnView key={turn.turnId} turn={turn} userLabel={props.userLabel} />
           ))}
           {props.streamingText && (
-            <article className="maka-message-row message assistant streaming">
-              <span>{messageRoleLabel('assistant', props.userLabel)}</span>
+            <article className="maka-message-row maka-turn-streaming message assistant streaming">
+              <MessageMeta role="assistant" userLabel={props.userLabel} />
               <div className="maka-bubble-assistant maka-bubble-streaming">
                 <Markdown text={props.streamingText} />
               </div>
             </article>
           )}
-          {tools.length > 0 && <ToolActivity items={tools} />}
+          {/* Defensive: if any tool ended up outside a turn (e.g. legacy
+              sessions without turnId), render those at the very end so they
+              still appear instead of vanishing. materializeTurns already
+              folds these into the `__loose` turn, so this is normally a
+              no-op. */}
         </div>
         {!pinnedToBottom && (
           <button
@@ -867,7 +867,7 @@ const MessageBody = memo(function MessageBody(props: { role: string; text: strin
   );
 });
 
-function MessageCopyButton(props: { text: string }) {
+function MessageCopyButton(props: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -880,15 +880,18 @@ function MessageCopyButton(props: { text: string }) {
     }
   }
 
+  const baseLabel = props.label ?? '复制消息';
   return (
     <button
       type="button"
       className="maka-message-copy"
       onClick={copy}
-      aria-label={copied ? 'Copied' : 'Copy message'}
+      aria-label={copied ? `已复制 · ${baseLabel}` : baseLabel}
       data-copied={copied}
+      data-labelled={props.label ? 'true' : undefined}
     >
       {copied ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+      {props.label && <span>{copied ? '已复制' : props.label}</span>}
     </button>
   );
 }
@@ -1123,6 +1126,166 @@ function messageRoleLabel(role: string, userLabel?: string): string {
   }
   if (role === 'assistant') return 'Maka';
   return role;
+}
+
+/**
+ * Initial-glyph derivation for the message avatar. Uses the first non-ASCII
+ * codepoint or first ASCII letter so a userLabel like "JK" → "J", a Chinese
+ * userLabel like "建文" → "建", an emoji name like "🦊 fox" → "🦊".
+ */
+function avatarInitial(label: string): string {
+  const trimmed = label.trim();
+  if (trimmed.length === 0) return '你';
+  // Pull the first codepoint so we don't slice an emoji surrogate pair.
+  const [first] = trimmed;
+  return first ?? '?';
+}
+
+/**
+ * Compact summary strip rendered between the user message and the tools/
+ * answer for the current turn. Surfaces the @kenji UI-04 follow-up
+ * questions: which model, how many tools, how long. Only renders when at
+ * least one signal is present so an in-flight first-render doesn't show
+ * an empty chip strip.
+ */
+function TurnSummary(props: { turn: TurnViewModel }) {
+  const { turn } = props;
+  const hasModel = Boolean(turn.modelId);
+  const hasTools = turn.tools.length > 0;
+  // Show duration only when the assistant has actually landed (durationMs
+  // is computed from assistant.ts). For in-progress turns we render an
+  // "进行中" pill instead of a number that would tick up forever — per
+  // @kenji's PR82 review.
+  const hasDuration = turn.durationMs !== undefined && turn.durationMs > 0;
+  const inProgress = turn.user !== undefined && turn.assistant === undefined;
+  const hasTokens = Boolean(turn.tokens && (turn.tokens.input > 0 || turn.tokens.output > 0));
+  // costUsd is only meaningful when present AND > 0 — never fabricate a
+  // "$0.00" hover, that reads as false precision (also @kenji PR82 review).
+  const hasCost = turn.tokens?.costUsd !== undefined && turn.tokens.costUsd > 0;
+  if (!hasModel && !hasTools && !hasDuration && !hasTokens && !inProgress) return null;
+  return (
+    <div className="maka-turn-summary" aria-label="turn summary">
+      {hasModel && (
+        <span className="maka-turn-summary-chip" data-kind="model" title={turn.modelId}>
+          <code>{turn.modelId}</code>
+        </span>
+      )}
+      {hasTools && (
+        <span className="maka-turn-summary-chip" data-kind="tools">
+          {turn.tools.length} 个工具
+        </span>
+      )}
+      {hasDuration ? (
+        <span className="maka-turn-summary-chip" data-kind="duration">
+          {formatTurnDuration(turn.durationMs!)}
+        </span>
+      ) : inProgress ? (
+        <span className="maka-turn-summary-chip" data-kind="duration" data-state="in-progress">
+          进行中
+        </span>
+      ) : null}
+      {hasTokens && (
+        <span
+          className="maka-turn-summary-chip"
+          data-kind="tokens"
+          title={hasCost ? `$${turn.tokens!.costUsd!.toFixed(4)}` : undefined}
+        >
+          {turn.tokens!.input.toLocaleString()} → {turn.tokens!.output.toLocaleString()} tok
+        </span>
+      )}
+    </div>
+  );
+}
+
+function formatTurnDuration(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m} m ${s} s`;
+}
+
+/**
+ * Renders one conversational turn: user message → tools used → assistant
+ * answer, in that order, as a single visual unit. Replaces the previous
+ * "message stack + tools panel at end" layout so the user sees the
+ * narrative of "ask → tools fired → answer" as one work unit.
+ */
+function TurnView(props: { turn: TurnViewModel; userLabel?: string }) {
+  const { turn } = props;
+  return (
+    <section className="maka-turn" data-turn-id={turn.turnId}>
+      {turn.user && (
+        <article
+          className="maka-message-row message user"
+          title={turn.user.ts ? formatAbsoluteTimestamp(turn.user.ts) : undefined}
+        >
+          <MessageMeta role="user" userLabel={props.userLabel} ts={turn.user.ts} />
+          <MessageBody role="user" text={turn.user.text} />
+        </article>
+      )}
+      <TurnSummary turn={turn} />
+
+      {turn.notes.map((note) => (
+        <article
+          key={note.id}
+          className="maka-message-row message system"
+          title={note.ts ? formatAbsoluteTimestamp(note.ts) : undefined}
+        >
+          <MessageMeta role="system" userLabel={props.userLabel} ts={note.ts} />
+          <MessageBody role="system" text={note.text} />
+        </article>
+      ))}
+      {turn.tools.length > 0 && (
+        <div className="maka-turn-tools">
+          <ToolActivity items={turn.tools} />
+        </div>
+      )}
+      {turn.assistant && (
+        <article
+          className="maka-message-row message assistant"
+          title={turn.assistant.ts ? formatAbsoluteTimestamp(turn.assistant.ts) : undefined}
+        >
+          <MessageMeta role="assistant" userLabel={props.userLabel} ts={turn.assistant.ts} />
+          <div className="maka-bubble-assistant-stack">
+            {turn.assistantThinking && (
+              <details className="maka-turn-thinking">
+                <summary>
+                  <span>查看思考过程</span>
+                  <span className="maka-turn-thinking-note">模型推理草稿，不是最终答案</span>
+                </summary>
+                <div className="maka-turn-thinking-body">
+                  <Markdown text={turn.assistantThinking} />
+                  <div className="maka-turn-thinking-actions">
+                    <MessageCopyButton text={turn.assistantThinking} label="复制思考过程" />
+                  </div>
+                </div>
+              </details>
+            )}
+            <MessageBody role="assistant" text={turn.assistant.text} />
+          </div>
+        </article>
+      )}
+    </section>
+  );
+}
+
+function MessageMeta(props: { role: string; userLabel?: string; ts?: number }) {
+  const label = messageRoleLabel(props.role, props.userLabel);
+  const initial = props.role === 'assistant' ? 'M' : avatarInitial(label);
+  return (
+    <span className="maka-message-meta">
+      <span className="maka-message-avatar" data-role={props.role} aria-hidden="true">
+        {initial}
+      </span>
+      <span className="maka-message-name">{label}</span>
+      {props.ts !== undefined && (
+        <small className="maka-message-time" aria-hidden="true">
+          {formatRelativeTimestamp(props.ts)}
+        </small>
+      )}
+    </span>
+  );
 }
 
 function ChatTab(props: {
@@ -1602,19 +1765,188 @@ function renderPermissionSummary(request: PermissionRequestEvent): ReactNode | u
   }
 }
 
-function OverlayPreview(props: { content: ToolResultContent }) {
-  const body = renderOverlayBody(props.content);
-  // Bound the height so a tool that prints kilobytes of output can't push the
-  // composer off-screen. Internal scroll is fine for inline preview.
-  return <pre className="maka-overlay-preview">{body}</pre>;
+/**
+ * Renders a ToolResultContent payload with kind-specific presentation:
+ * - `file_diff`: line-level red/green diff coloring
+ * - `terminal`: stdout + stderr split with exit-code badge + stderr in
+ *   destructive tone
+ * - `json`: pretty-printed in a code block
+ * - `text` / others: plain `<pre>` fallback
+ *
+ * All variants are height-bounded by `.maka-overlay-preview` to keep kilobyte
+ * outputs from pushing the composer off-screen.
+ */
+/**
+ * Cap displayed line count to keep a giant tool output (10k-line stderr from
+ * a failing test run) from creating 10k React elements and from drowning the
+ * chat surface visually. We slice, then append a single explainer line that
+ * lets the user know the rest exists.
+ */
+const TOOL_LINE_CAP = 500;
+
+function capLines(text: string): { body: string; capped: number } {
+  const lines = text.split('\n');
+  if (lines.length <= TOOL_LINE_CAP) return { body: text, capped: 0 };
+  return {
+    body: lines.slice(0, TOOL_LINE_CAP).join('\n'),
+    capped: lines.length - TOOL_LINE_CAP,
+  };
 }
 
-function renderOverlayBody(content: ToolResultContent): string {
-  if (content.kind === 'text') return content.text;
-  if (content.kind === 'json') return JSON.stringify(content.value, null, 2);
-  if (content.kind === 'terminal') return content.stdout || content.stderr;
-  if (content.kind === 'file_diff') return content.diff;
-  return content.kind;
+function OverlayPreview(props: { content: ToolResultContent }) {
+  const { content } = props;
+
+  if (content.kind === 'file_diff') {
+    return <FileDiffPreview diff={content.diff} paths={content.paths} />;
+  }
+
+  if (content.kind === 'terminal') {
+    return (
+      <TerminalPreview
+        cwd={content.cwd}
+        cmd={content.cmd}
+        exitCode={content.exitCode}
+        stdout={content.stdout}
+        stderr={content.stderr}
+      />
+    );
+  }
+
+  if (content.kind === 'json') {
+    let body: string;
+    try {
+      body = JSON.stringify(content.value, null, 2);
+    } catch {
+      body = String(content.value);
+    }
+    // JSON shouldn't contain secrets persisted by Maka (settings + telemetry
+    // are sanitized at write-time), but apply the renderer redactor as a
+    // second-layer defense in case a tool returned raw provider response.
+    return <pre className="maka-overlay-preview" data-kind="json">{redactSecrets(body)}</pre>;
+  }
+
+  if (content.kind === 'text') {
+    const { body, capped } = capLines(redactSecrets(content.text));
+    return (
+      <pre className="maka-overlay-preview" data-kind="text">
+        {body}
+        {capped > 0 && `\n\n… ${capped} more lines hidden`}
+      </pre>
+    );
+  }
+
+  // file_write / image / summary / unknown — show a compact descriptor so the
+  // user knows what kind landed without dumping binary or storage refs.
+  return (
+    <pre className="maka-overlay-preview" data-kind={content.kind}>
+      [{content.kind}]
+    </pre>
+  );
+}
+
+/**
+ * Line-level diff coloring. Splits the unified-diff text on newlines and
+ * tags each line with `data-line="add" | "del" | "hunk" | "meta" | "ctx"`
+ * for CSS to color. Doesn't try to parse the hunk semantics — we leave
+ * that to a future inline editor view; this is just a readable preview.
+ */
+function FileDiffPreview(props: { diff: string; paths: string[] }) {
+  // Apply UI-level redaction then cap the displayed lines. Both are
+  // @kenji's PR76 review items: never echo a token a tool happened to dump
+  // into a diff (commit body, .env file diff, etc.), and never let a
+  // 10k-line diff create 10k React elements.
+  const { body, capped } = capLines(redactSecrets(props.diff));
+  const lines = body.split('\n');
+  return (
+    <div className="maka-overlay-preview maka-tool-diff" data-kind="file_diff">
+      {props.paths.length > 0 && (
+        <div className="maka-tool-diff-paths">
+          {props.paths.map((path) => (
+            <code key={path}>{path}</code>
+          ))}
+        </div>
+      )}
+      <pre className="maka-tool-diff-body">
+        {lines.map((line, index) => (
+          <span
+            key={`${index}:${line.slice(0, 16)}`}
+            className="maka-tool-diff-line"
+            data-line={diffLineKind(line)}
+          >
+            {line || ' '}
+            {'\n'}
+          </span>
+        ))}
+        {capped > 0 && (
+          <span className="maka-tool-diff-line" data-line="meta">
+            {`\n… ${capped} more lines hidden\n`}
+          </span>
+        )}
+      </pre>
+    </div>
+  );
+}
+
+function diffLineKind(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'ctx' {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'meta';
+  if (line.startsWith('@@')) return 'hunk';
+  if (line.startsWith('+')) return 'add';
+  if (line.startsWith('-')) return 'del';
+  return 'ctx';
+}
+
+/**
+ * Terminal output preview. Shows the command + working directory header,
+ * an exit-code badge tinted by success/failure, then stdout and stderr
+ * in separate blocks (stderr only rendered when non-empty, in destructive
+ * tone). Empty output gets an explicit "(no output)" placeholder so a
+ * silent successful command doesn't look like a render bug.
+ */
+function TerminalPreview(props: {
+  cwd: string;
+  cmd: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}) {
+  const succeeded = props.exitCode === 0;
+  const hasOutput = props.stdout.length > 0 || props.stderr.length > 0;
+  // Redact + cap stdout/stderr independently. `npm test` against a misconfigured
+  // provider can dump megabytes of stderr; we keep the first TOOL_LINE_CAP
+  // lines and append a hidden-count marker.
+  const stdout = capLines(redactSecrets(props.stdout));
+  const stderr = capLines(redactSecrets(props.stderr));
+  // The cmd line is also user-runtime text — don't echo a `--api-key=...`
+  // arg into the chat without masking it.
+  const safeCmd = redactSecrets(props.cmd);
+  return (
+    <div className="maka-overlay-preview maka-tool-terminal" data-kind="terminal">
+      <header className="maka-tool-terminal-head">
+        <code className="maka-tool-terminal-cwd">{props.cwd}</code>
+        <code className="maka-tool-terminal-cmd">$ {safeCmd}</code>
+        <span
+          className="maka-tool-terminal-exit"
+          data-ok={succeeded ? 'true' : 'false'}
+          aria-label={`exit code ${props.exitCode}`}
+        >
+          exit {props.exitCode}
+        </span>
+      </header>
+      {!hasOutput && <p className="maka-tool-terminal-empty">(no output)</p>}
+      {props.stdout.length > 0 && (
+        <pre className="maka-tool-terminal-stream" data-stream="stdout">
+          {stdout.body}
+          {stdout.capped > 0 && `\n\n… ${stdout.capped} more stdout lines hidden`}
+        </pre>
+      )}
+      {props.stderr.length > 0 && (
+        <pre className="maka-tool-terminal-stream" data-stream="stderr">
+          {stderr.body}
+          {stderr.capped > 0 && `\n\n… ${stderr.capped} more stderr lines hidden`}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function mergeTools(stored: ToolActivityItem[], live: ToolActivityItem[]): ToolActivityItem[] {
