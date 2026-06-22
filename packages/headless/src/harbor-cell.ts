@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { exec as nodeExec } from 'node:child_process';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type {
   BackendKind,
   LlmConnection,
@@ -11,10 +13,10 @@ import {
   BackendRegistry,
   PermissionEngine,
   SessionManager,
-  buildBuiltinTools,
   buildProviderOptions,
   getAIModel,
   getBuiltinPricing,
+  type MakaTool,
   type InvocationResult,
 } from '@maka/runtime';
 import {
@@ -25,12 +27,15 @@ import {
 import { registerFakeBackend } from './backends.js';
 import { buildHarborCellOutput, validateHarborCellOutput, type HarborCellOutput } from './cell-output.js';
 import type { Config, Task } from './contracts.js';
-import type { HeadlessBackendContext, RealBackendIsolation } from './isolation.js';
-import { validateRealBackendIsolation } from './isolation.js';
+import type { HeadlessBackendContext, IsolatedToolExecutor, RealBackendIsolation } from './isolation.js';
+import { ISOLATED_HEADLESS_TOOL_NAMES, validateRealBackendIsolation } from './isolation.js';
 import { backendNeedsIsolation } from './runner.js';
+import { buildIsolatedHeadlessToolAvailability, buildIsolatedHeadlessTools } from './tools.js';
 
 export const HARBOR_CELL_OUTPUT_FILENAME = 'maka-cell-output.json';
 export const HARBOR_CELL_RUNTIME_EVENTS_FILENAME = 'runtime-events.jsonl';
+const execAsync = promisify(nodeExec);
+const HARBOR_CELL_TOOL_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 export interface RunHarborCellInput {
   config: Config;
@@ -94,7 +99,7 @@ export async function runHarborCell(input: RunHarborCellInput): Promise<RunHarbo
     task,
     workspaceDir: input.cwd,
     ...(backendNeedsIsolation(input.config.backend)
-      ? { realBackendIsolation: input.realBackendIsolation }
+      ? { realBackendIsolation: input.realBackendIsolation, toolExecutor: input.realBackendIsolation?.toolExecutor }
       : {}),
   });
 
@@ -182,19 +187,27 @@ export async function runHarborCellFromEnv(
     outputDir,
     storageRoot: env.MAKA_STORAGE_ROOT ?? join(outputDir, 'maka-storage'),
     ...(registerBackends ? { registerBackends } : {}),
-    ...(backendNeedsIsolation(backend) ? { realBackendIsolation: { kind: 'external', label: 'Harbor task container' } } : {}),
+    ...(backendNeedsIsolation(backend)
+      ? {
+          realBackendIsolation: {
+            kind: 'external',
+            label: 'Harbor task container',
+            toolExecutor: createHarborCellLocalToolExecutor(env),
+          },
+        }
+      : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.newId ? { newId: options.newId } : {}),
   });
 }
 
-function buildAiSdkCellBackendRegistration(input: {
+export function buildAiSdkCellBackendRegistration(input: {
   provider: ProviderType;
   model: string;
   env: RunHarborCellEnv;
   now: () => number;
   newId: () => string;
-}): RunHarborCellInput['registerBackends'] {
+}): NonNullable<RunHarborCellInput['registerBackends']> {
   const { connection, apiKey } = resolveHarborCellAiSdkEnv({
     provider: input.provider,
     model: input.model,
@@ -203,6 +216,9 @@ function buildAiSdkCellBackendRegistration(input: {
   });
   const permissionEngine = new PermissionEngine({ newId: input.newId, now: input.now });
   return (registry, context) => {
+    if (!context.toolExecutor) {
+      throw new Error('Harbor ai-sdk backend requires an isolated tool executor');
+    }
     registry.register('ai-sdk', (ctx) =>
       new AiSdkBackend({
         sessionId: ctx.sessionId,
@@ -213,9 +229,10 @@ function buildAiSdkCellBackendRegistration(input: {
         modelId: input.model,
         permissionEngine,
         modelFactory: getAIModel,
-        tools: buildBuiltinTools(),
+        tools: buildHarborCellAiSdkTools(context.toolExecutor!),
+        toolAvailability: buildIsolatedHeadlessToolAvailability(),
         providerOptions: buildProviderOptions(connection, input.model),
-        systemPrompt: context.config.systemPrompt,
+        systemPrompt: harborCellSystemPrompt(context.config.systemPrompt),
         lookupPricing: getBuiltinPricing,
         newId: input.newId,
         now: input.now,
@@ -223,6 +240,77 @@ function buildAiSdkCellBackendRegistration(input: {
       }),
     );
   };
+}
+
+export function buildHarborCellAiSdkTools(executor: IsolatedToolExecutor): MakaTool[] {
+  const nonInteractiveToolNames = new Set<string>(ISOLATED_HEADLESS_TOOL_NAMES);
+  return buildIsolatedHeadlessTools(executor).map((tool) => (
+    nonInteractiveToolNames.has(tool.name)
+      ? { ...tool, permissionRequired: false }
+      : tool
+  ));
+}
+
+export function createHarborCellLocalToolExecutor(env: RunHarborCellEnv = process.env): IsolatedToolExecutor {
+  const childEnv = childProcessEnv(env);
+  return {
+    exec: async ({ command, cwd, timeoutMs }) => {
+      try {
+        const result = await execAsync(command, {
+          cwd,
+          env: childEnv,
+          timeout: timeoutMs ?? 120_000,
+          maxBuffer: HARBOR_CELL_TOOL_MAX_BUFFER_BYTES,
+        });
+        return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+      } catch (error) {
+        return {
+          exitCode: shellErrorExitCode(error),
+          stdout: shellErrorText(error, 'stdout'),
+          stderr: shellErrorText(error, 'stderr') || shellErrorMessage(error),
+        };
+      }
+    },
+  };
+}
+
+function harborCellSystemPrompt(configPrompt: string | undefined): string {
+  return [
+    [
+      'You are Maka Runtime running inside an isolated Harbor benchmark task container.',
+      'Prefer Read, Glob, and Grep for file inspection and search.',
+      'Prefer Edit and Write for file changes.',
+      'Use Bash for running programs, tests, and shell-specific debugging only.',
+    ].join('\n'),
+    configPrompt,
+  ].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n\n');
+}
+
+function childProcessEnv(env: RunHarborCellEnv): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) childEnv[key] = value;
+  }
+  return childEnv;
+}
+
+function shellErrorExitCode(error: unknown): number {
+  if (isRecord(error) && typeof error.code === 'number') return error.code;
+  if (isRecord(error) && typeof error.signal === 'string') return 124;
+  return 1;
+}
+
+function shellErrorText(error: unknown, field: 'stdout' | 'stderr'): string {
+  if (isRecord(error) && typeof error[field] === 'string') return error[field];
+  return '';
+}
+
+function shellErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 export function resolveHarborCellAiSdkEnv(input: {

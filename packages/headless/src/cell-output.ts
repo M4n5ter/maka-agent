@@ -24,6 +24,13 @@ export interface HarborCellRuntimeRefs {
   turnId: string;
 }
 
+export interface HarborCellToolSummary {
+  providerVisibleToolCount: number;
+  actualToolCalls: number;
+  actualToolNames: string[];
+  actualToolCallCounts: Record<string, number>;
+}
+
 export interface HarborCellOutput {
   schemaVersion: typeof HARBOR_CELL_OUTPUT_SCHEMA_VERSION;
   status: InvocationResult['status'];
@@ -31,6 +38,7 @@ export interface HarborCellOutput {
   runtimeEventsPath: string;
   promptHash?: string;
   tokenSummary: HarborCellTokenSummary;
+  toolSummary: HarborCellToolSummary;
   steps: number;
   durationMs: number;
   startedAt: number;
@@ -50,6 +58,7 @@ export function buildHarborCellOutput(input: {
     runtimeEventsPath: input.runtimeEventsPath,
     ...promptHashField(invocation.events),
     tokenSummary: summarizeCellTokens(invocation.events),
+    toolSummary: summarizeCellTools(invocation.events),
     steps: invocation.events.length,
     durationMs: invocation.finishedAt - invocation.startedAt,
     startedAt: invocation.startedAt,
@@ -76,6 +85,7 @@ export function validateHarborCellOutput(value: unknown): HarborCellOutput {
   const runtimeEventsPath = requireString(value.runtimeEventsPath, 'runtimeEventsPath');
   const promptHash = 'promptHash' in value ? requireOptionalString(value.promptHash, 'promptHash') : undefined;
   const tokenSummary = validateTokenSummary(value.tokenSummary);
+  const toolSummary = validateToolSummary(value.toolSummary);
   const steps = requireNumber(value.steps, 'steps');
   const durationMs = requireNumber(value.durationMs, 'durationMs');
   const startedAt = requireNumber(value.startedAt, 'startedAt');
@@ -88,6 +98,7 @@ export function validateHarborCellOutput(value: unknown): HarborCellOutput {
     runtimeEventsPath,
     ...(promptHash !== undefined ? { promptHash } : {}),
     tokenSummary,
+    toolSummary,
     steps,
     durationMs,
     startedAt,
@@ -146,6 +157,32 @@ export function summarizeCellTokens(events: readonly RuntimeEvent[]): HarborCell
   return summary;
 }
 
+export function summarizeCellTools(events: readonly RuntimeEvent[]): HarborCellToolSummary {
+  const counts = new Map<string, number>();
+  let providerVisibleToolCount = 0;
+  for (const event of events) {
+    const content = event.content;
+    if (content?.kind === 'function_call') {
+      counts.set(content.name, (counts.get(content.name) ?? 0) + 1);
+    }
+    const promptSegments = event.actions?.tokenUsage?.promptSegments;
+    if (promptSegments) {
+      for (const segment of promptSegments) {
+        if (segment.kind === 'tool_schema' && typeof segment.toolCount === 'number') {
+          providerVisibleToolCount = Math.max(providerVisibleToolCount, segment.toolCount);
+        }
+      }
+    }
+  }
+  const sorted = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  return {
+    providerVisibleToolCount,
+    actualToolCalls: sorted.reduce((sum, [, count]) => sum + count, 0),
+    actualToolNames: sorted.map(([name]) => name),
+    actualToolCallCounts: Object.fromEntries(sorted),
+  };
+}
+
 function promptHashField(events: readonly RuntimeEvent[]): Pick<HarborCellOutput, 'promptHash'> {
   for (const event of events) {
     const hash = event.actions?.tokenUsage?.systemPromptHash;
@@ -174,6 +211,33 @@ function validateTokenSummary(value: unknown): HarborCellTokenSummary {
       requireOptionalStringUnion(value.pricingSource, 'tokenSummary.pricingSource', ['runtime'] as const)
       ?? 'runtime',
   };
+}
+
+function validateToolSummary(value: unknown): HarborCellToolSummary {
+  if (!isRecord(value)) throw new Error('toolSummary must be a JSON object');
+  const actualToolCallCounts = validateToolCallCounts(value.actualToolCallCounts);
+  return {
+    providerVisibleToolCount: requireNumber(value.providerVisibleToolCount, 'toolSummary.providerVisibleToolCount'),
+    actualToolCalls: requireNumber(value.actualToolCalls, 'toolSummary.actualToolCalls'),
+    actualToolNames: validateStringArray(value.actualToolNames, 'toolSummary.actualToolNames'),
+    actualToolCallCounts,
+  };
+}
+
+function validateToolCallCounts(value: unknown): Record<string, number> {
+  if (!isRecord(value)) throw new Error('toolSummary.actualToolCallCounts must be a JSON object');
+  const counts: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    counts[key] = requireNumber(raw, `toolSummary.actualToolCallCounts.${key}`);
+  }
+  return counts;
+}
+
+function validateStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error(`${field} must be an array of strings`);
+  }
+  return [...value];
 }
 
 function validateRuntimeRefs(value: unknown): HarborCellRuntimeRefs {

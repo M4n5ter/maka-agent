@@ -701,6 +701,12 @@ function harborOutput(input: {
       runtimeEventsPath: `/logs/${input.taskId}/runtime-events.jsonl`,
       ...(input.omitPromptHash ? {} : { promptHash: input.promptHash ?? hashSystemPrompt('fixed prompt\n') }),
       tokenSummary: input.tokenSummary ?? tokenSummary({ input: 1, output: 2, reasoning: 0, total: 3, costUsd: 0.02 }),
+      toolSummary: {
+        providerVisibleToolCount: 0,
+        actualToolCalls: 0,
+        actualToolNames: [],
+        actualToolCallCounts: {},
+      },
       steps: 2,
       durationMs: 40,
       startedAt: 20,

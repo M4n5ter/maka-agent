@@ -6,11 +6,13 @@ export type {
   HarborCellOutput,
   HarborCellRuntimeRefs,
   HarborCellTokenSummary,
+  HarborCellToolSummary,
 } from './cell-output.js';
 export {
   HARBOR_CELL_OUTPUT_SCHEMA_VERSION,
   buildHarborCellOutput,
   summarizeCellTokens,
+  summarizeCellTools,
   validateHarborCellOutput,
 } from './cell-output.js';
 export type {
@@ -20,6 +22,9 @@ export type {
   RunHarborCellResult,
 } from './harbor-cell.js';
 export {
+  buildAiSdkCellBackendRegistration,
+  buildHarborCellAiSdkTools,
+  createHarborCellLocalToolExecutor,
   HARBOR_CELL_OUTPUT_FILENAME,
   HARBOR_CELL_RUNTIME_EVENTS_FILENAME,
   runHarborCell,

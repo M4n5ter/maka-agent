@@ -228,11 +228,16 @@ class MakaAgent(BaseInstalledAgent):
             "maka_cache_write_input_tokens": _optional_int(token_summary, "cacheWriteInput"),
             "maka_estimated_cost_usd": _optional_float(token_summary, "costUsd"),
             "maka_pricing_source": token_summary.get("pricingSource") if isinstance(token_summary, dict) else None,
+            "maka_provider_visible_tool_count": _optional_int(output.get("toolSummary"), "providerVisibleToolCount"),
+            "maka_actual_tool_calls": _optional_int(output.get("toolSummary"), "actualToolCalls"),
+            "maka_actual_tool_names": _optional_string_list(output.get("toolSummary"), "actualToolNames"),
+            "maka_actual_tool_call_counts": _optional_dict(output.get("toolSummary"), "actualToolCallCounts"),
         }
         self._write_trajectory(output)
 
     def _write_trajectory(self, output: dict[str, Any]) -> None:
         token_summary = output.get("tokenSummary")
+        tool_summary = output.get("toolSummary")
         final_metrics = FinalMetrics(
             total_prompt_tokens=_optional_int(token_summary, "input"),
             total_completion_tokens=_optional_int(token_summary, "output"),
@@ -249,6 +254,10 @@ class MakaAgent(BaseInstalledAgent):
                 "cache_write_input_tokens": _optional_int(token_summary, "cacheWriteInput"),
                 "estimated_cost_usd": _optional_float(token_summary, "costUsd"),
                 "pricing_source": token_summary.get("pricingSource") if isinstance(token_summary, dict) else None,
+                "provider_visible_tool_count": _optional_int(tool_summary, "providerVisibleToolCount"),
+                "actual_tool_calls": _optional_int(tool_summary, "actualToolCalls"),
+                "actual_tool_names": _optional_string_list(tool_summary, "actualToolNames"),
+                "actual_tool_call_counts": _optional_dict(tool_summary, "actualToolCallCounts"),
             },
         )
         trajectory = Trajectory(
@@ -279,6 +288,22 @@ def _optional_float(value: Any, key: str) -> float | None:
         return None
     raw = value.get(key)
     return float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+
+
+def _optional_string_list(value: Any, key: str) -> list[str] | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get(key)
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        return None
+    return raw
+
+
+def _optional_dict(value: Any, key: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get(key)
+    return raw if isinstance(raw, dict) else None
 
 
 def _apply_trial_pricing(agent: MakaAgent, token_summary: dict[str, Any]) -> None:

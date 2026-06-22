@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import type { BackendKind, SessionEvent, SessionHeader } from '@maka/core';
 import type { BackendSendInput, PermissionDecision } from '@maka/core/backend-types';
-import { BackendRegistry, type AgentBackend, type SessionStore } from '@maka/runtime';
+import { BackendRegistry, type AgentBackend, type BackendFactoryContext, type SessionStore } from '@maka/runtime';
 import type { Config } from '../contracts.js';
-import type { HeadlessBackendContext } from '../isolation.js';
+import type { HeadlessBackendContext, IsolatedToolExecutor } from '../isolation.js';
 import {
+  buildAiSdkCellBackendRegistration,
+  buildHarborCellAiSdkTools,
   HARBOR_CELL_OUTPUT_FILENAME,
   HARBOR_CELL_RUNTIME_EVENTS_FILENAME,
   resolveHarborCellAiSdkEnv,
@@ -207,11 +209,63 @@ describe('runHarborCell', () => {
       assert.equal(seenContexts[0].config.llmConnectionSlug, 'openai');
       assert.equal(seenContexts[0].config.model, 'gpt-4o-mini');
       assert.equal(seenContexts[0].config.systemPrompt, 'Use the benchmark prompt.');
-      assert.deepEqual(seenContexts[0].realBackendIsolation, {
-        kind: 'external',
-        label: 'Harbor task container',
-      });
+      assert.equal(seenContexts[0].realBackendIsolation?.kind, 'external');
+      assert.equal(seenContexts[0].realBackendIsolation?.label, 'Harbor task container');
+      assert.equal(typeof seenContexts[0].realBackendIsolation?.toolExecutor?.exec, 'function');
+      assert.equal(typeof seenContexts[0].toolExecutor?.exec, 'function');
     });
+  });
+
+  test('Harbor ai-sdk backend registration exposes native file tools to the provider schema', async () => {
+    await withDirs(async ({ workspaceDir }) => {
+      const registry = new BackendRegistry();
+      const toolExecutor = fakeToolExecutor();
+      const register = buildAiSdkCellBackendRegistration({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        env: { OPENAI_API_KEY: 'test-key' },
+        now: () => 123,
+        newId: () => 'id',
+      });
+      await register(registry, {
+        config: {
+          id: 'harbor-ai-sdk',
+          backend: 'ai-sdk',
+          llmConnectionSlug: 'openai',
+          model: 'gpt-4o-mini',
+        },
+        task: { id: 'harbor-cell', instruction: 'solve', workspaceDir },
+        workspaceDir,
+        realBackendIsolation: { kind: 'external', label: 'Harbor task container', toolExecutor },
+        toolExecutor,
+      });
+
+      const backend = await registry.build('ai-sdk', backendContext(workspaceDir));
+      const backendInput = (backend as unknown as {
+        input: {
+          tools: Array<{ name: string; permissionRequired?: boolean }>;
+          systemPrompt?: string;
+        };
+      }).input;
+      const toolNames = backendInput.tools.map((tool) => tool.name);
+
+      for (const expected of ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']) {
+        assert.ok(toolNames.includes(expected), `expected provider schema tool ${expected}`);
+      }
+      assert.equal(backendInput.tools.find((tool) => tool.name === 'Bash')?.permissionRequired, false);
+      assert.equal(backendInput.tools.find((tool) => tool.name === 'Write')?.permissionRequired, false);
+      assert.match(backendInput.systemPrompt ?? '', /Prefer Read, Glob, and Grep/);
+    });
+  });
+
+  test('Harbor tool builder keeps the six container-native tools non-interactive', () => {
+    const tools = buildHarborCellAiSdkTools(fakeToolExecutor());
+    const names = tools.map((tool) => tool.name);
+
+    for (const expected of ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']) {
+      assert.ok(names.includes(expected), `expected Harbor tool ${expected}`);
+      assert.equal(tools.find((tool) => tool.name === expected)?.permissionRequired, false);
+    }
   });
 
   test('env entrypoint keeps slashful model ids when provider is explicit', async () => {
@@ -268,6 +322,43 @@ describe('runHarborCell', () => {
     assert.equal(deepseek.connection.baseUrl, 'https://fallback.example/v1');
   });
 });
+
+function fakeToolExecutor(): IsolatedToolExecutor {
+  return {
+    async exec() {
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  };
+}
+
+function backendContext(workspaceDir: string): BackendFactoryContext {
+  return {
+    sessionId: 'session-1',
+    workspaceRoot: workspaceDir,
+    header: {
+      id: 'session-1',
+      cwd: workspaceDir,
+      workspaceRoot: workspaceDir,
+      createdAt: 123,
+      lastUsedAt: 123,
+      name: 'harbor cell test',
+      isFlagged: false,
+      labels: [],
+      isArchived: false,
+      status: 'active',
+      hasUnread: false,
+      backend: 'ai-sdk',
+      llmConnectionSlug: 'openai',
+      connectionLocked: true,
+      model: 'gpt-4o-mini',
+      permissionMode: 'execute',
+      schemaVersion: 1,
+    },
+    store: {
+      appendMessage: async () => {},
+    } as unknown as SessionStore,
+  };
+}
 
 async function withDirs<T>(
   fn: (dirs: { workspaceDir: string; outputDir: string; storageRoot: string }) => Promise<T>,

@@ -25,8 +25,19 @@ describe('Harbor cell output contract', () => {
             total: 17,
             costUsd: 0.00123,
             systemPromptHash: 'sha256:prompt-a',
+            promptSegments: [
+              { kind: 'tool_schema', chars: 700, estimatedTokens: 175, toolCount: 6 },
+            ],
           },
         },
+      }),
+      runtimeEvent({
+        id: 'call-read',
+        content: { kind: 'function_call', id: 'tool-1', name: 'Read', args: { path: 'vm.js' } },
+      }),
+      runtimeEvent({
+        id: 'call-bash',
+        content: { kind: 'function_call', id: 'tool-2', name: 'Bash', args: { command: 'node vm.js' } },
       }),
       runtimeEvent({
         id: 'usage-2',
@@ -78,7 +89,13 @@ describe('Harbor cell output contract', () => {
         costUsd: 0.00523,
         pricingSource: 'runtime',
       },
-      steps: 3,
+      toolSummary: {
+        providerVisibleToolCount: 6,
+        actualToolCalls: 2,
+        actualToolNames: ['Bash', 'Read'],
+        actualToolCallCounts: { Bash: 1, Read: 1 },
+      },
+      steps: 5,
       durationMs: 150,
       startedAt: 100,
       finishedAt: 250,
