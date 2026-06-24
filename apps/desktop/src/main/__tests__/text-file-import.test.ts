@@ -388,8 +388,12 @@ describe('text file context import', () => {
     assert.match(mainSource, /onImportFolderOutline=\{importFolderOutlineIntoComposer\}/);
     assert.match(mainProcessSource, /properties: \['openDirectory', 'multiSelections'\]/);
     assert.match(mainProcessSource, /title: '导入文件内容'/);
-    assert.match(onboardingSource, /导入文件内容/);
-    assert.match(onboardingSource, /导入文件夹目录/);
+    // PR #190 review: the inline `导入文件内容` and `导入文件夹目录`
+    // buttons were removed from the first-run composer (single-action
+    // card pattern). Drop/paste imports still go through the textarea
+    // wrapper, so `appendPromptContextDraft(current, prompt)` and the
+    // drag handlers are still wired; the visible button labels are
+    // no longer in the onboarding source.
     assert.match(onboardingSource, /appendPromptContextDraft\(current, prompt\)/);
     assert.match(onboardingSource, /onImportDroppedTextFiles/);
     assert.match(onboardingSource, /onDrop=\{handleDrop\}/);
@@ -430,13 +434,18 @@ describe('text file context import', () => {
     assert.doesNotMatch(uiSource, /localStorage\.setItem\([^)]*draft/i);
   });
 
-  it('appends prompt suggestions instead of replacing existing drafts', async () => {
+  it('appends prompt suggestions in the main composer but replaces in the first-run hero', async () => {
+    // PR #190 review: the main Composer still appends prompt suggestions
+    // (multi-message conversation has growing context). The first-run
+    // hero now REPLACES the draft because users haven't typed anything
+    // yet — a click on a starter suggestion should reset, not pile on
+    // top of whatever they left in the draft.
     const mainSource = await readFile(join(process.cwd(), 'src/renderer/main.tsx'), 'utf8');
     const onboardingSource = await readFile(join(process.cwd(), 'src/renderer/OnboardingHero.tsx'), 'utf8');
 
     assert.match(mainSource, /onPromptSuggestion=\{\(prompt\) => composerRef\.current\?\.appendText\(prompt\)\}/);
     assert.doesNotMatch(mainSource, /onPromptSuggestion=\{\(prompt\) => composerRef\.current\?\.setText\(prompt\)\}/);
-    assert.match(onboardingSource, /const nextDraft = appendPromptContextDraft\(draft, prompt\)/);
+    assert.match(onboardingSource, /const nextDraft = prompt;/);
     assert.match(onboardingSource, /setDraft\(nextDraft\)/);
   });
 

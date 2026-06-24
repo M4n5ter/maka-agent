@@ -67,54 +67,38 @@ describe('FIRST_RUN_TASK_SUGGESTIONS', () => {
     assert.match(fileOrganize.prompt, /等我确认/);
   });
 
-  it('makes first-run suggestion rows dismissible and restorable without storing prompts', async () => {
+  it('renders fixed first-run suggestions and replaces the composer draft on click', async () => {
+    // PR #190 review: the per-suggestion dismiss + bulk restore flow
+    // was removed entirely — the four FIRST_RUN_TASK_SUGGESTIONS are
+    // always visible and clicking one REPLACES the composer draft
+    // instead of appending to it. Onboarding milestone writes for
+    // dismiss/restore are no longer wired from the hero. The test now
+    // pins the new shape so future changes still go through review.
     const hero = await readFile(join(process.cwd(), 'src/renderer/OnboardingHero.tsx'), 'utf8');
-    const main = await readFile(join(process.cwd(), 'src/renderer/main.tsx'), 'utf8');
     const readyBlock = hero.match(/function ReadyEmptyHero[\s\S]*?interface SetupHeroProps/)?.[0] ?? '';
-    const suggestionGateBlock = readyBlock.match(/const runSuggestionAction = useCallback[\s\S]*?const appendImportedPrompt/)?.[0] ?? '';
 
-    assert.match(hero, /onDismissTaskSuggestion/);
-    assert.match(hero, /onRestoreTaskSuggestions/);
-    assert.match(hero, /FIRST_RUN_TASK_SUGGESTION_MILESTONES/);
-    assert.match(hero, /隐藏任务建议/);
-    assert.match(hero, /`恢复 \$\{hiddenSuggestions\.length\} 项`/);
-    assert.match(main, /window\.maka\.onboarding\.setMilestone\(FIRST_RUN_TASK_SUGGESTION_MILESTONES\[id\], 'skipped'\)/);
-    assert.match(main, /window\.maka\.onboarding\.clearMilestone\(FIRST_RUN_TASK_SUGGESTION_MILESTONES\[id\]\)/);
-    assert.match(main, /toastApi\.error\('隐藏建议失败', generalizedErrorMessageChinese\(error, '任务建议暂时无法隐藏，请稍后重试。'\)\)/);
-    assert.match(main, /toastApi\.error\('恢复建议失败', generalizedErrorMessageChinese\(error, '任务建议暂时无法恢复，请稍后重试。'\)\)/);
-    assert.doesNotMatch(main, /toastApi\.error\('隐藏建议失败', cleanErrorMessage\(error\)\)/);
-    assert.doesNotMatch(main, /toastApi\.error\('恢复建议失败', cleanErrorMessage\(error\)\)/);
-    assert.match(readyBlock, /const \[pendingSuggestionAction, setPendingSuggestionAction\] = useState<string \| null>\(null\)/);
-    assert.match(readyBlock, /const readyHeroMountedRef = useRef\(true\)/);
-    assert.match(readyBlock, /const pendingSuggestionActionRef = useRef<string \| null>\(null\)/);
-    assert.match(readyBlock, /const suggestionActionBusy = pendingSuggestionAction !== null/);
-    assert.match(
-      readyBlock,
-      /useEffect\(\(\) => \{[\s\S]*readyHeroMountedRef\.current = true;[\s\S]*return \(\) => \{[\s\S]*readyHeroMountedRef\.current = false;[\s\S]*submitPendingRef\.current = false;[\s\S]*pendingImportActionRef\.current = null;[\s\S]*pendingSuggestionActionRef\.current = null;[\s\S]*\};[\s\S]*\}, \[\]\)/,
-      'first-run ready hero must release pending owners on unmount and restore mounted state during StrictMode replay',
-    );
-    assert.match(
-      suggestionGateBlock,
-      /if \(!action \|\| quickChatBusy \|\| pendingSuggestionActionRef\.current !== null\) return;[\s\S]*pendingSuggestionActionRef\.current = actionKey[\s\S]*setPendingSuggestionAction\(actionKey\)[\s\S]*await action\(\)[\s\S]*pendingSuggestionActionRef\.current = null[\s\S]*if \(readyHeroMountedRef\.current\) setPendingSuggestionAction\(null\)/,
-      'suggestion dismiss/restore must await the async milestone write behind a ref-backed pending gate',
-    );
-    assert.match(readyBlock, /if \(quickChatBusy \|\| suggestionActionBusy\) return;[\s\S]*appendPromptContextDraft\(draft, prompt\)/, 'prefill must not append while suggestion milestone writes are pending');
-    assert.match(readyBlock, /runSuggestionAction\([\s\S]*'restore'[\s\S]*\(\) => props\.onRestoreTaskSuggestions\?\.\(hiddenSuggestions\.map\(\(item\) => item\.id\)\)[\s\S]*\)/);
-    assert.match(readyBlock, /runSuggestionAction\([\s\S]*`dismiss:\$\{suggestion\.id\}`[\s\S]*\(\) => props\.onDismissTaskSuggestion\?\.\(suggestion\.id\)[\s\S]*\)/);
-    assert.match(readyBlock, /disabled=\{quickChatBusy \|\| suggestionActionBusy \|\| !props\.onRestoreTaskSuggestions\}/);
-    assert.match(readyBlock, /disabled=\{quickChatBusy \|\| suggestionActionBusy\}/);
-    assert.match(readyBlock, /aria-busy=\{pendingSuggestionAction === 'restore' \? 'true' : undefined\}/);
-    assert.match(readyBlock, /pendingSuggestionAction === 'restore' \? '恢复中…' : `恢复 \$\{hiddenSuggestions\.length\} 项`/);
-    assert.match(readyBlock, /aria-busy=\{pendingSuggestionAction === `dismiss:\$\{suggestion\.id\}` \? 'true' : undefined\}/);
-    assert.doesNotMatch(hero, /setMilestone\([^)]*suggestion\.prompt/);
+    assert.match(readyBlock, /const visibleSuggestions = FIRST_RUN_TASK_SUGGESTIONS;/);
+    assert.match(readyBlock, /const nextDraft = prompt;/);
+    assert.match(readyBlock, /setDraft\(nextDraft\)/);
+    assert.match(readyBlock, /onClick=\{\(\) => prefillSuggestion\(suggestion\.prompt, suggestion\.mode\)\}/);
+    assert.doesNotMatch(hero, /隐藏任务建议/);
+    assert.doesNotMatch(hero, /`恢复 \$\{hiddenSuggestions\.length\} 项`/);
     assert.doesNotMatch(readyBlock, /void props\.onRestoreTaskSuggestions\?\./);
     assert.doesNotMatch(readyBlock, /void props\.onDismissTaskSuggestion\?\./);
+    assert.doesNotMatch(readyBlock, /appendPromptContextDraft\(draft, prompt\)/);
   });
 
-  it('gates first-run import actions so file/folder/drop/paste cannot append concurrently', async () => {
+  it('gates first-run drop/paste imports so they cannot append concurrently', async () => {
+    // PR #190 review: the inline `导入文件内容` and `导入文件夹目录`
+    // buttons were removed from the first-run composer (the new
+    // single-action card pattern only takes user typing). Drag-and-
+    // drop and paste imports keep working because they're triggered
+    // by the textarea wrapper itself; the ref-backed `runImportAction`
+    // gate is still in place. Anchor moved from `const importTextFile`
+    // (gone) to `const importActionBusy`.
     const hero = await readFile(join(process.cwd(), 'src/renderer/OnboardingHero.tsx'), 'utf8');
     const readyBlock = hero.match(/function ReadyEmptyHero[\s\S]*?interface SetupHeroProps/)?.[0] ?? '';
-    const gateBlock = readyBlock.match(/const runImportAction = useCallback[\s\S]*?const importTextFile/)?.[0] ?? '';
+    const gateBlock = readyBlock.match(/const runImportAction = useCallback[\s\S]*?const importActionBusy/)?.[0] ?? '';
 
     assert.match(readyBlock, /const \[pendingImportAction, setPendingImportAction\] = useState<string \| null>\(null\)/);
     assert.match(readyBlock, /const readyHeroMountedRef = useRef\(true\)/);
@@ -126,16 +110,9 @@ describe('FIRST_RUN_TASK_SUGGESTIONS', () => {
       /if \(pendingImportActionRef\.current !== null \|\| quickChatBusy\) return;[\s\S]*pendingImportActionRef\.current = actionKey[\s\S]*setPendingImportAction\(actionKey\)[\s\S]*const prompt = await action\(\)[\s\S]*if \(prompt && readyHeroMountedRef\.current\) appendImportedPrompt\(prompt\)[\s\S]*pendingImportActionRef\.current = null[\s\S]*if \(readyHeroMountedRef\.current\) setPendingImportAction\(null\)/,
       'first-run import actions must use a ref-backed pending gate and append only through one shared path',
     );
-    assert.match(readyBlock, /runImportAction\('file', props\.onImportTextFile\)/);
-    assert.match(readyBlock, /runImportAction\('folder', props\.onImportFolderOutline\)/);
     assert.match(readyBlock, /runImportAction\('drop', async \(\) => props\.onImportDroppedTextFiles\?\.\(files\)\)/);
     assert.match(readyBlock, /runImportAction\('paste', async \(\) => props\.onImportDroppedTextFiles\?\.\(files\)\)/);
     assert.match(readyBlock, /props\.onImportDroppedTextFiles && !quickChatBusy && !importActionBusy/);
-    assert.match(readyBlock, /disabled=\{quickChatBusy \|\| importActionBusy\}/);
-    assert.match(readyBlock, /aria-busy=\{pendingImportAction === 'file' \? 'true' : undefined\}/);
-    assert.match(readyBlock, /aria-busy=\{pendingImportAction === 'folder' \? 'true' : undefined\}/);
-    assert.match(readyBlock, /pendingImportAction === 'file' \? '导入中…' : '导入文件内容'/);
-    assert.match(readyBlock, /pendingImportAction === 'folder' \? '导入中…' : '导入文件夹目录'/);
     assert.doesNotMatch(
       readyBlock,
       /void \(async \(\) => \{[\s\S]*props\.onImportDroppedTextFiles\?\.\(files\)[\s\S]*appendImportedPrompt\(prompt\)/,
