@@ -1355,27 +1355,42 @@ via `deriveTurnLineageMap()`（PR109d）。
 
 ### 9.10 Sources / Skills / Automations 可见系统（@kenji item 5）
 
-Maka 当前 skills 是文件系统扫描结果（`window.maka.skills.list()`），无 source、
-无 automation；reference implementation 把这三类做成可审计 + 可禁用的一等公民。
+Maka 当前第一步实现为 core contract + existing module surface：skills 仍来自
+文件系统扫描结果（`window.maka.skills.list()`），automations 复用 Plan Reminder。
+`@maka/core/capability-audit` 把这两类现有快照派生成一个可测试的
+`CapabilityAuditReport`，并在 Skills / Automations 页面顶部显示同一份
+审计摘要。后续接入真实 MCP/API source 时，应填充同一个 `SourceRecord`
+输入，而不是新增平行 UI contract。
 
 **Contract**：
 
 | 实体 | 字段 | UI 表面 |
 |---|---|---|
-| `Source` | `id / name / auth / scope / lastSyncAt / status` | Settings · 来源（新 panel） |
-| `Skill` | `id / name / declaredTools[] / requestedTools[] / installedAt / source` | Settings · 技能（已有，需扩 `requestedTools`） |
-| `Automation` | `id / name / trigger / lastRunAt / status / lastError` | Settings · 自动化（新 panel） |
+| `SourceRecord` | `slug / name / type / enabled / authType / scopeSummary[] / status / lastTestAt / lastErrorReason` | Skills / Automations 顶部审计摘要；未来可扩 Settings · 来源 |
+| `SkillAuditRecord` | `id / name / description / declaredTools[] / enabled / sourceSlug / permissionMode` | Skills 顶部审计摘要 + 已安装技能列表 |
+| `AutomationRecord` | `id / name / enabled / trigger / permissionMode / lastRunAt / lastRunStatus` | Automations 顶部审计摘要 + 计划提醒列表 / 执行记录 |
 
 **关键不变量**：
 - **skill 不等于 permission widening**：skill 声明 `allowed-tools` 仅是 *请求*，
   实际能用的工具仍受 PermissionEngine 检查；UI 表现要让用户看到 "声明" vs
-  "实际授权" 的差异（参考 PR51 的 "declared / requested" 区分）
+  "实际授权" 的差异。`SkillAuditRecord.permissionMode` 只能是 `explore | ask`，
+  不允许因为 `declaredTools` 升级到 `execute`。
 - **source 凭据不渲染原文**：与 connection apiKey 一致，masked + safeStorage
 - **automation last-run 失败 → 自动禁用**？ 决策点：弱协议（仅显示 error），还是
   连续 N 次失败自动 disable？后者需要新的 backend 状态机
 
-**Gate**：smoke path `sources-skills-automations`：seed 3 个 source、5 个 skill、
-2 个 automation，验各自 panel 渲染 + 禁用切换 + last-run/sync 时间显示。
+**当前 Gate**：
+- `packages/core/src/__tests__/capability-audit.test.ts`：锁定 source /
+  skill / automation enum、workspace skills source 派生、Skill 不放大权限、
+  Plan Reminder → Automation last-run 映射。
+- `apps/desktop/src/main/__tests__/capability-audit-ui-contract.test.ts`：
+  server-render 审计摘要条，确认 Skills / Automations 共享同一份
+  `CapabilityAuditReport`，并锁定窄屏指标布局。
+- 现有 visual fixture 覆盖入口：`skills` 打开 Skills module；
+  `plan-reminders` 打开 Automations module。未来如果新增独立
+  Sources 面板或禁用切换，必须新增 `sources-skills-automations`
+  smoke path：seed 3 个 source、5 个 skill、2 个 automation，验各自 panel
+  渲染 + 禁用切换 + last-run/sync 时间显示。
 
 ### 9.11 Health Center 表面契约（@kenji item 7 — 扩 9.3）
 
