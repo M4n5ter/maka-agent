@@ -577,16 +577,14 @@ function ProviderCatalogCard(props: { type: ProviderType; count: number; onSelec
         <ProviderLogo type={props.type} />
       </ItemMedia>
       <ItemContent>
-        <ItemTitle className="providerCatalogTitle">
-          {display.name}
-          {display.badge && <span className="providerCatalogBadge">{display.badge}</span>}
-        </ItemTitle>
+        <ItemTitle className="providerCatalogTitle">{display.name}</ItemTitle>
         <ItemDescription className="providerCatalogDesc">
           {display.description}
           {props.count > 0 && <span className="providerCatalogCount">已配置 {props.count} 个</span>}
         </ItemDescription>
       </ItemContent>
-      <ItemActions>
+      <ItemActions className="providerCatalogActions">
+        {display.badge && <span className="providerCatalogBadge">{display.badge}</span>}
         <ChevronRight className="providerCatalogChevron" size={15} strokeWidth={2} aria-hidden="true" />
       </ItemActions>
     </Item>
@@ -798,13 +796,11 @@ function ModelOAuthSection(props: { onConnectionsChanged(): Promise<void> }) {
                 <ProviderLogo type={card.providerType} />
               </ItemMedia>
               <ItemContent>
-                <ItemTitle className="providerCatalogTitle">
-                  {card.name}
-                  <span className="providerCatalogBadge providerOAuthCardBadge">{liveBadge}</span>
-                </ItemTitle>
+                <ItemTitle className="providerCatalogTitle">{card.name}</ItemTitle>
                 <ItemDescription className="providerCatalogDesc providerOAuthCardDescription">{liveDescription}</ItemDescription>
               </ItemContent>
-              <ItemActions>
+              <ItemActions className="providerCatalogActions">
+                <span className="providerCatalogBadge providerOAuthCardBadge">{liveBadge}</span>
                 <ChevronRight className="providerCatalogChevron" size={15} strokeWidth={2} aria-hidden="true" />
               </ItemActions>
             </Item>

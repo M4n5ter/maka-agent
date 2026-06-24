@@ -9528,8 +9528,14 @@ button:active {
 }
 
 .providerCatalogTitle {
-  justify-content: space-between;
   font-weight: 600;
+}
+
+/* Trailing badge + chevron live in ItemActions (a direct child of the row),
+ * so they sit vertically centered against the full two-line row rather than
+ * pinned to the title line. */
+.providerCatalogActions {
+  gap: 10px;
 }
 
 .providerCatalogCount {
