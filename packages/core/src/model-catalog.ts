@@ -6,7 +6,7 @@ import type {
 } from './llm-connections.js';
 import { PROVIDER_DEFAULTS } from './llm-connections.js';
 import type { PricingConfig } from './usage-stats/types.js';
-import { catalogFallbackModelsForProvider, lookupModelMetadata } from './model-metadata.js';
+import { curatedCatalogFallbackModelsForProvider, lookupModelMetadata } from './model-metadata.js';
 
 export type ModelCapabilitySource =
   | 'provider_api'
@@ -161,7 +161,7 @@ export function buildModelCatalogEntries(input: BuildModelCatalogInput): ModelCa
 export function buildConnectionModelCatalogEntries(input: BuildConnectionModelCatalogInput): ModelCatalogEntry[] {
   const { connection } = input;
   const defaults = PROVIDER_DEFAULTS[connection.providerType];
-  const catalogFallbackModels = catalogFallbackModelsForProvider(connection.providerType);
+  const catalogFallbackModels = curatedCatalogFallbackModelsForProvider(connection.providerType);
   return buildModelCatalogEntries({
     providerType: connection.providerType,
     connectionSlug: connection.slug,
@@ -213,27 +213,33 @@ function makeEntry(
   recommendedRanks: ReadonlyMap<string, number>,
 ): ModelCatalogEntry {
   const normalizedModel = { ...model, id: model.id.trim() };
-  const unavailableReason = deriveModelUnavailableReason(input, normalizedModel);
   const pricing = findPricing(input, normalizedModel.id);
   const metadata = lookupModelMetadata(input.providerType, normalizedModel.id);
   const recommendedRank = recommendedRanks.get(normalizedModel.id);
+  const contextWindow = normalizedModel.contextWindow ?? metadata.contextWindow;
+  const maxOutputTokens = normalizedModel.maxOutputTokens ?? metadata.maxOutputTokens;
+  const capabilities = mergeCapabilities(normalizedModel.capabilities, metadata.capabilities);
+  const unavailableReason = deriveModelUnavailableReason(input, {
+    ...normalizedModel,
+    capabilities,
+  });
   return {
     id: normalizedModel.id,
     ...displayNameForModel(input.providerType, normalizedModel),
     providerType: input.providerType,
     ...(input.connectionSlug ? { connectionSlug: input.connectionSlug } : {}),
     source,
-    capabilitySource: model.capabilities ? source : 'unknown',
+    capabilitySource: normalizedModel.capabilities ? source : metadata.capabilities ? 'static_catalog' : 'unknown',
     unavailableReason,
     availability: availabilityOf(unavailableReason),
     canUseAsChatDefault: canUseUnavailableReasonAsDefault(unavailableReason),
     isDefault: normalizedModel.id === normalizedDefaultModel,
-    capabilities: normalizeCapabilities(normalizedModel),
+    capabilities: normalizeCapabilities(capabilities),
     lifecycle: metadata.lifecycle ?? 'unknown',
     ...(recommendedRank ? { recommendedRank } : {}),
     ...(metadata.docsUrl ? { docsUrl: metadata.docsUrl } : {}),
-    ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-    ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(pricing ? { pricing } : {}),
     provenance: {
       modelSource,
@@ -241,6 +247,21 @@ function makeEntry(
       ...(pricing ? { pricingModelKey: `${input.providerType}:${normalizedModel.id}` } : {}),
       sources: provenanceSources(input, normalizedModel.id, source, savedChoiceSources, normalizedDefaultModel),
     },
+  };
+}
+
+function mergeCapabilities(
+  providerCapabilities: ModelInfo['capabilities'] | undefined,
+  metadataCapabilities: ModelInfo['capabilities'] | undefined,
+): ModelInfo['capabilities'] | undefined {
+  if (!providerCapabilities) return metadataCapabilities;
+  if (!metadataCapabilities) return providerCapabilities;
+  return {
+    chat: providerCapabilities.chat ?? metadataCapabilities.chat,
+    vision: providerCapabilities.vision ?? metadataCapabilities.vision,
+    reasoning: providerCapabilities.reasoning ?? metadataCapabilities.reasoning,
+    functionCalling: providerCapabilities.functionCalling ?? metadataCapabilities.functionCalling,
+    imageGeneration: providerCapabilities.imageGeneration ?? metadataCapabilities.imageGeneration,
   };
 }
 
@@ -261,15 +282,17 @@ function makeMissingDefaultEntry(
     providerType: input.providerType,
     ...(input.connectionSlug ? { connectionSlug: input.connectionSlug } : {}),
     source: 'unknown',
-    capabilitySource: 'unknown',
+    capabilitySource: metadata.capabilities ? 'static_catalog' : 'unknown',
     unavailableReason,
     availability: availabilityOf(unavailableReason),
     canUseAsChatDefault: canUseUnavailableReasonAsDefault(unavailableReason),
     isDefault: true,
-    capabilities: {},
+    capabilities: normalizeCapabilities(metadata.capabilities),
     lifecycle: metadata.lifecycle ?? 'unknown',
     ...(recommendedRank ? { recommendedRank } : {}),
     ...(metadata.docsUrl ? { docsUrl: metadata.docsUrl } : {}),
+    ...(metadata.contextWindow !== undefined ? { contextWindow: metadata.contextWindow } : {}),
+    ...(metadata.maxOutputTokens !== undefined ? { maxOutputTokens: metadata.maxOutputTokens } : {}),
     provenance: {
       modelSource,
       ...(input.modelsFetchedAt ? { modelsFetchedAt: input.modelsFetchedAt } : {}),
@@ -295,15 +318,17 @@ function makeMissingUserChoiceEntry(
     providerType: input.providerType,
     ...(input.connectionSlug ? { connectionSlug: input.connectionSlug } : {}),
     source: 'unknown',
-    capabilitySource: 'unknown',
+    capabilitySource: metadata.capabilities ? 'static_catalog' : 'unknown',
     unavailableReason,
     availability: availabilityOf(unavailableReason),
     canUseAsChatDefault: canUseUnavailableReasonAsDefault(unavailableReason),
     isDefault: id === normalizedDefaultModel,
-    capabilities: {},
+    capabilities: normalizeCapabilities(metadata.capabilities),
     lifecycle: metadata.lifecycle ?? 'unknown',
     ...(recommendedRank ? { recommendedRank } : {}),
     ...(metadata.docsUrl ? { docsUrl: metadata.docsUrl } : {}),
+    ...(metadata.contextWindow !== undefined ? { contextWindow: metadata.contextWindow } : {}),
+    ...(metadata.maxOutputTokens !== undefined ? { maxOutputTokens: metadata.maxOutputTokens } : {}),
     provenance: {
       modelSource,
       ...(input.modelsFetchedAt ? { modelsFetchedAt: input.modelsFetchedAt } : {}),
@@ -349,7 +374,7 @@ function recommendedRanksForProvider(
   providerType: ProviderType,
   fallbackModels: readonly string[] | undefined,
 ): Map<string, number> {
-  const ids = catalogFallbackModelsForProvider(providerType) ?? fallbackModels ?? [];
+  const ids = curatedCatalogFallbackModelsForProvider(providerType) ?? fallbackModels ?? [];
   const result = new Map<string, number>();
   for (const id of ids) {
     const trimmed = id.trim();
@@ -420,8 +445,7 @@ export function isModelExplicitlyUnsupportedForChat(model: ModelInfo): boolean {
     caps.functionCalling !== true;
 }
 
-function normalizeCapabilities(model: ModelInfo): KnownModelCapabilities {
-  const caps = model.capabilities;
+function normalizeCapabilities(caps: ModelInfo['capabilities']): KnownModelCapabilities {
   if (!caps) return {};
   return {
     ...(caps.chat === true ? { chat: true as const } : {}),
