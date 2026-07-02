@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Plus, Search, Trash2 } from '@maka/ui/icons';
 import { Button } from '../src/ui.js';
+import { Spinner } from '../src/primitives/spinner.js';
 
 const meta = {
   title: 'Design System/Tokens',
@@ -288,6 +289,59 @@ export const PrimaryActions: Story = {
             <Trash2 />
           </Button>
         </div>
+      </div>
+
+      <div style={{ display: 'grid', gap: 10 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, margin: 0, color: 'var(--foreground-70)' }}>
+          loading
+        </h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <Button disabled>
+            <Spinner style={{ height: 14, width: 14 }} />
+            <span>Saving</span>
+          </Button>
+          <Button variant="secondary" disabled>
+            <Spinner style={{ height: 14, width: 14 }} />
+            <span>Syncing</span>
+          </Button>
+          <Button variant="outline" disabled aria-label="删除">
+            <Trash2 />
+          </Button>
+        </div>
+      </div>
+    </section>
+  ),
+};
+
+const semanticRoles = [
+  ['action', '--action', 'CTA 填充：主按钮、提交、发送'],
+  ['control', '--control', '选中态：checkbox、switch、progress'],
+  ['link', '--link', '链接文字'],
+  ['focus-ring', '--focus-ring', '键盘聚焦环'],
+  ['status-running', '--status-running', '运行中状态、live dot'],
+  ['nav-active', '--nav-active', '导航选中'],
+  ['toast-accent', '--toast-accent', 'toast 强调'],
+] as const;
+
+export const SemanticColors: Story = {
+  render: () => (
+    <section style={{ display: 'grid', gap: 24, maxWidth: 820 }}>
+      <div style={{ display: 'grid', gap: 4 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Semantic Color Roles</h2>
+        <p style={{ color: 'var(--foreground-60)', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+          每个 semantic role 独立命名,即使当前多个 alias 指向同一值。PR5 将进一步分离 action/control。
+        </p>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+        }}
+      >
+        {semanticRoles.map(([name, token, usage]) => (
+          <SwatchTile key={token} name={name} token={token} fill={token} usage={usage} />
+        ))}
       </div>
     </section>
   ),
