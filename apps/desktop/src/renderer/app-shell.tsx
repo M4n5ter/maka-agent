@@ -11,7 +11,7 @@ import type {
   ThemePalette,
   ThemePreference,
 } from '@maka/core';
-import { generalizedErrorMessageChinese } from '@maka/core';
+import { generalizedErrorMessageChinese, hasSettledInitialOnboarding } from '@maka/core';
 import {
   type AssistantStreamSlot,
   type ChatHeaderAlert,
@@ -665,6 +665,7 @@ export function AppShell() {
     toastApi,
   });
   const onboardingState = onboarding.snapshot?.state;
+  const onboardingSettled = hasSettledInitialOnboarding(onboarding.snapshot?.milestones ?? []);
   // Seed sessions from the onboarding snapshot on first load — the snapshot
   // already fetches the session list + connections internally, so separate
   // `sessions:list` / `connections:list` / `getDefault` IPCs are redundant.
@@ -704,11 +705,9 @@ export function AppShell() {
   // while the initial snapshot is in flight. Otherwise sessions.length===0
   // + snapshot===null flashes the prompt-suggestion EmptyChatHero before
   // the state-routed OnboardingHero mounts.
-  const isOnboardingLoading = sessions.length === 0 && onboardingState === undefined;
-  // Hide composer skeleton while onboarding is still loading — prevents
-  // the composer skeleton from flashing before the OnboardingHero appears.
+  const isOnboardingLoading = sessions.length === 0 && onboardingState === undefined && !onboardingSettled;
   const showOnboardingHero =
-    sessions.length === 0 && onboardingState !== undefined && onboardingState.kind !== 'ready_with_history';
+    sessions.length === 0 && !onboardingSettled && onboardingState !== undefined && onboardingState.kind !== 'ready_with_history';
   const onboardingComposerHidden = isOnboardingLoading || (showOnboardingHero && onboardingState !== undefined);
   const [sessionListWidth, setSessionListWidth] = useState(() => readSessionListWidth());
   const [sessionListCollapsed, setSessionListCollapsed] = useState(() => readSessionListCollapsed());
@@ -1365,6 +1364,14 @@ export function AppShell() {
                         quickChatPending={quickChatPending}
                         connections={connections}
                         onRefreshConnections={refreshConnections}
+                        onSkip={async () => {
+                          try {
+                            await window.maka.onboarding.setMilestone('initial_onboarding', 'skipped');
+                            onboarding.refresh();
+                          } catch (error) {
+                            toastApi.error('跳过失败', generalizedErrorMessageChinese(error, '请稍后重试。'));
+                          }
+                        }}
                         onImportDroppedTextFiles={importDroppedTextFilesPrompt}
                       />
                       {onboardingState.kind === 'ready_empty' && (
