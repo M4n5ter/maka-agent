@@ -25,6 +25,7 @@ export interface MainWindowController {
   getBrowserViews(): BrowserViewManager<BrowserViewController>;
   disposeBrowserViews(): Promise<void>;
   hasOpenWindows(): boolean;
+  focus(): void;
 }
 
 interface MainWindowControllerDeps {
@@ -306,6 +307,12 @@ export function createMainWindowController(deps: MainWindowControllerDeps): Main
     disposeBrowserViews,
     hasOpenWindows() {
       return BrowserWindow.getAllWindows().length > 0;
+    },
+    focus() {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     },
   };
 }
