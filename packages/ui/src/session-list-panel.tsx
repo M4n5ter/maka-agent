@@ -758,10 +758,16 @@ function SessionRow(props: {
     if (pendingActionRef.current) return;
     pendingActionRef.current = actionId;
     setPendingAction(actionId);
-    void Promise.resolve().then(action).finally(() => {
-      pendingActionRef.current = null;
-      if (rowMountedRef.current) setPendingAction(null);
-    });
+    void (async () => {
+      try {
+        await action();
+      } catch {
+        // The AppShell row-action owner reports the visible failure toast.
+      } finally {
+        pendingActionRef.current = null;
+        if (rowMountedRef.current) setPendingAction(null);
+      }
+    })();
   }
 
   function commitRename(rawValue: string) {

@@ -170,16 +170,20 @@ export function ChatModelSwitcher(props: {
           pendingModelChangeRef.current = { sessionId, token };
           pendingRef.current = true;
           setLocalPending(true);
-          void Promise.resolve()
-            .then(() => props.onChange?.(next))
-            .finally(() => {
+          void (async () => {
+            try {
+              await props.onChange?.(next);
+            } catch {
+              // The AppShell action owner reports the visible model-switch failure.
+            } finally {
               const owner = pendingModelChangeRef.current;
               if (modelSwitcherMountedRef.current && owner?.sessionId === sessionId && owner.token === token) {
                 pendingModelChangeRef.current = null;
                 pendingRef.current = false;
                 setLocalPending(false);
               }
-            });
+            }
+          })();
         }}
       >
         <SelectTrigger
