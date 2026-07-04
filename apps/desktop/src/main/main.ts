@@ -98,6 +98,9 @@ import {
   errorReason,
   requireReadyConnection,
 } from './chat-readiness.js';
+import {
+  sessionReadMessagesFailureMessage,
+} from './session-read-error-copy.js';
 import { createFileCredentialStore, migrateLegacyCredentials } from './credential-store.js';
 import { bindOnboardingDeps, createOnboardingService } from './onboarding-service.js';
 import { handleQuickChatStart as runQuickChatStart, type QuickChatResult } from './quick-chat.js';
@@ -1015,8 +1018,18 @@ function registerIpc(): void {
   });
   ipcMain.handle('sessions:readMessages', async (_event, sessionId: string) => {
     if (visualSmokeFixture) return store.readMessages(sessionId);
-    const messages = await runtime.getMessages(sessionId);
-    await runtime.markSessionRead(sessionId, latestStoredMessageTs(messages));
+    let messages: StoredMessage[];
+    try {
+      messages = await runtime.getMessages(sessionId);
+    } catch (error) {
+      throw new Error(sessionReadMessagesFailureMessage(error));
+    }
+    try {
+      await runtime.markSessionRead(sessionId, latestStoredMessageTs(messages));
+    } catch {
+      // Reading the content already succeeded. Leave the persisted unread
+      // state for a later refresh instead of turning this into a load error.
+    }
     return messages;
   });
   ipcMain.handle('sessions:listTurns', (_event, sessionId: string) => runtime.listTurns(sessionId));

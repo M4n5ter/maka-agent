@@ -1,6 +1,7 @@
 import type { PermissionMode, PermissionResponse, SessionSummary, StoredMessage } from '@maka/core';
 import { generalizedErrorMessageChinese } from '@maka/core';
 import type { NavSelection } from '@maka/ui';
+import { messageRefreshErrorMessage } from './app-shell-copy';
 import {
   isNoRealConnectionError,
   noRealConnectionReasonFromError,
@@ -212,7 +213,7 @@ export function createAppShellChatActions(deps: {
       return true;
     } catch (error) {
       if (activeIdRef.current === sessionId) {
-        const message = generalizedErrorMessageChinese(error, '对话内容暂时无法刷新，请稍后重试。');
+        const message = messageRefreshErrorMessage(error);
         setMessageLoadErrorBySession((current) => ({ ...current, [sessionId]: message }));
         toastApi.error('刷新对话失败', message);
       }
