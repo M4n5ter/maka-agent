@@ -39,6 +39,8 @@ import type {
   ErrorEvent,
   TextCompleteEvent,
   TokenUsageEvent,
+  StorageRef,
+  AttachmentRef,
 } from '@maka/core/events';
 import { createHash } from 'node:crypto';
 import type {
@@ -371,6 +373,13 @@ export type HistoryCompactWriter = (
 export type ActiveFullCompactBlockRecorder = (block: ActiveFullCompactBlock) => void | Promise<void>;
 export type SemanticCompactBlockRecorder = (block: SemanticCompactBlock) => void | Promise<void>;
 
+/** Reads attachment bytes for a StorageRef. Injected by the caller (wired to the
+ * session ArtifactStore); runtime itself never imports @maka/storage, so this
+ * is the seam through which image attachments become provider image parts. */
+export type AttachmentByteReader = (
+  ref: StorageRef,
+) => Promise<{ ok: true; bytes: Uint8Array } | { ok: false; reason: string }>;
+
 export interface AiSdkBackendInput {
   // ── Session context ────────────────────────────────────────────────────
   sessionId: string;
@@ -444,6 +453,12 @@ export interface AiSdkBackendInput {
    * file-backed persistence.
    */
   recordToolArtifacts?: ToolArtifactRecorder;
+  /**
+   * Optional attachment byte reader. When set, image attachments on the current
+   * user turn are rendered as provider image parts instead of placeholder text.
+   * Caller wires this to the session ArtifactStore; runtime never imports storage.
+   */
+  readAttachmentBytes?: AttachmentByteReader;
   /**
    * Optional archive writer for replay-only stale tool-result pruning. The
    * runtime rewrites only candidates whose original body has been durably
@@ -672,13 +687,13 @@ export class AiSdkBackend implements AgentBackend {
           await this.resolveTurnTailPrompt(),
           await this.resolveShellRunContextSummary(),
         ]);
-        const currentUserContent = formatTextWithAttachmentRefs(input.text, input.attachments);
+        const currentUserContent = await this.buildCurrentUserContent(input.text, input.attachments);
         const messages = [
           ...priorReplay.messages,
           {
             role: 'user' as const,
             content: this.appendTurnTailPrompt(currentUserContent, turnTailPrompt),
-          },
+          } as ModelMessage,
         ];
         // Diagnostics describe the provider-visible (active) tool subset. A group
         // loaded *this* turn expands that subset on later steps (via prepareStep),
@@ -698,7 +713,7 @@ export class AiSdkBackend implements AgentBackend {
               toolCount: active.length,
               priorMessages: priorReplay.messages,
               priorRuntimeEventCount: priorReplay.runtimeEventCount,
-              currentUserContent,
+              currentUserContent: formatTextWithAttachmentRefs(input.text, input.attachments),
               turnTailPrompt,
             }),
             requestShape: computeRequestShapeDiagnostic({
@@ -1163,7 +1178,7 @@ export class AiSdkBackend implements AgentBackend {
     runtimeEventCount?: number;
     contextBudget?: ContextBudgetDiagnostic;
   }> {
-    const projectedMessages = this.materializePriorMessages(
+    const projectedMessages = await this.materializePriorMessages(
       input.context.filter((message) => message.turnId !== input.turnId),
     );
     if (!input.runtimeContext) {
@@ -1343,7 +1358,7 @@ export class AiSdkBackend implements AgentBackend {
 
     if (!plan.hasProviderNativeSemantics) {
       return {
-        messages: plan.textMessages,
+        messages: await this.materializeRuntimeReplayPlan(plan),
         gate: 'runtime_replay_text_only',
         diagnostics: plan.diagnostics,
         runtimeEventCount: runtimeContext.length,
@@ -1362,7 +1377,7 @@ export class AiSdkBackend implements AgentBackend {
     }
 
     return {
-      messages: this.materializeRuntimeReplayPlan(plan),
+      messages: await this.materializeRuntimeReplayPlan(plan),
       gate: 'runtime_replay_provider_native',
       diagnostics: plan.diagnostics,
       runtimeEventCount: runtimeContext.length,
@@ -1973,7 +1988,7 @@ export class AiSdkBackend implements AgentBackend {
     return true;
   }
 
-  private materializeRuntimeReplayPlan(plan: RuntimeEventModelReplayPlan): ModelMessage[] {
+  private async materializeRuntimeReplayPlan(plan: RuntimeEventModelReplayPlan): Promise<ModelMessage[]> {
     const out: ModelMessage[] = [];
     let toolBlock: {
       calls: Extract<RuntimeEventModelReplayItem, { kind: 'tool_call' }>[];
@@ -2021,15 +2036,18 @@ export class AiSdkBackend implements AgentBackend {
         continue;
       }
       flushToolBlock();
-      out.push(this.materializeRuntimeReplayItem(item));
+      out.push(await this.materializeRuntimeReplayItem(item));
     }
     flushToolBlock();
     return out;
   }
 
-  private materializeRuntimeReplayItem(item: RuntimeEventModelReplayItem): ModelMessage {
+  private async materializeRuntimeReplayItem(item: RuntimeEventModelReplayItem): Promise<ModelMessage> {
     switch (item.kind) {
       case 'text':
+        if (item.role === 'user') {
+          return { role: 'user', content: await this.appendImageParts(item.content, item.attachments) } as ModelMessage;
+        }
         return { role: item.role, content: item.content };
       case 'thinking':
         return {
@@ -2065,10 +2083,12 @@ export class AiSdkBackend implements AgentBackend {
     }
   }
 
-  private materializePriorMessages(stored: readonly StoredMessage[]): ModelMessage[] {
+  private async materializePriorMessages(stored: readonly StoredMessage[]): Promise<ModelMessage[]> {
     const out: ModelMessage[] = [];
     for (const m of stored) {
-      if (m.type === 'user') out.push({ role: 'user', content: m.text });
+      if (m.type === 'user') {
+        out.push({ role: 'user', content: await this.appendImageParts(formatTextWithAttachmentRefs(m.text, m.attachments), m.attachments) } as ModelMessage);
+      }
       else if (m.type === 'assistant') out.push({ role: 'assistant', content: m.text });
       // tool_call / tool_result / permission_decision / token_usage / system_note skipped
     }
@@ -2076,9 +2096,45 @@ export class AiSdkBackend implements AgentBackend {
   }
 
   /** Append provider-visible volatile turn facts after the durable user content. */
-  private appendTurnTailPrompt(content: string, turnTailPrompt?: string): string {
+  private appendTurnTailPrompt(content: ModelMessage['content'], turnTailPrompt?: string): ModelMessage['content'] {
     if (!turnTailPrompt) return content;
-    return `${content}\n\n${turnTailPrompt}`;
+    if (typeof content === 'string') return `${content}\n\n${turnTailPrompt}`;
+    return [...(content as unknown[]), { type: 'text', text: turnTailPrompt }] as ModelMessage['content'];
+  }
+
+  /**
+   * Render provider-visible content for a user message: keep the given
+   * (already-formatted) text, and append image attachments as provider image
+   * parts via the injected reader. Non-image attachments stay as placeholder
+   * refs in the text; when there are no readable images, content stays a
+   * plain string. Shared by the current turn, RuntimeEvent replay, and the
+   * stored-message fallback so all three paths present images identically.
+   */
+  private async appendImageParts(
+    textContent: string,
+    attachments?: AttachmentRef[],
+  ): Promise<ModelMessage['content']> {
+    const images = attachments?.filter((a) => a.kind === 'image') ?? [];
+    if (images.length === 0 || !this.input.readAttachmentBytes) {
+      return textContent;
+    }
+    const parts: Array<{ type: 'text'; text: string } | { type: 'image'; image: Uint8Array; mediaType: string }> = [
+      { type: 'text', text: textContent },
+    ];
+    for (const image of images) {
+      const read = await this.input.readAttachmentBytes(image.ref);
+      if (read.ok) {
+        parts.push({ type: 'image', image: read.bytes, mediaType: image.mimeType });
+      }
+    }
+    return parts as ModelMessage['content'];
+  }
+
+  private async buildCurrentUserContent(
+    text: string,
+    attachments?: AttachmentRef[],
+  ): Promise<ModelMessage['content']> {
+    return this.appendImageParts(formatTextWithAttachmentRefs(text, attachments), attachments);
   }
 
   private async resolveSystemPrompt(): Promise<string | undefined> {

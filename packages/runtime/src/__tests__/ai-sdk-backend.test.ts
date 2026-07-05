@@ -125,6 +125,233 @@ describe('AiSdkBackend model history', () => {
     ]);
   });
 
+  test('stored-message fallback keeps placeholder text when no reader is wired', async () => {
+    const model = completionModel();
+    const backend = new AiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      permissionEngine: new PermissionEngine({ newId: () => 'permission-id', now: () => 1 }),
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+
+    await drain(backend.send({
+      turnId: 'turn-current',
+      text: 'current user',
+      context: [
+        {
+          type: 'user',
+          id: 'projection-u',
+          turnId: 'turn-prev',
+          ts: 1,
+          text: 'see the attached chart',
+          attachments: [
+            {
+              kind: 'image',
+              name: 'chart.png',
+              mimeType: 'image/png',
+              bytes: 123,
+              ref: { kind: 'session_file', sessionId: 'sess-1', relativePath: 'attachments/chart.png' },
+            },
+          ],
+        },
+        { type: 'assistant', id: 'projection-a', turnId: 'turn-prev', ts: 2, text: 'projection assistant', modelId: 'm' },
+      ],
+      runtimeContext: [
+        {
+          id: 'rt-terminal',
+          invocationId: 'inv-1',
+          runId: 'run-prev',
+          sessionId: 'session-1',
+          turnId: 'turn-prev',
+          ts: 1,
+          partial: false,
+          role: 'model',
+          author: 'agent',
+          status: 'completed',
+          actions: { endInvocation: true },
+        },
+      ],
+    }));
+
+    const prompt = compactPrompt(model) as Array<{ role: string; content: unknown }>;
+    const historicalUser = prompt[0];
+    const parts = historicalUser.content as Array<{ type: string; text: string }>;
+    const text = parts[0]?.text ?? '';
+    assert.ok(text.includes('see the attached chart'), `expected user text in: ${text}`);
+    assert.ok(
+      text.includes('[attachment: chart.png (image/png)]'),
+      `expected attachment ref preserved in stored-message fallback, got: ${text}`,
+    );
+  });
+
+  test('stored-message fallback renders image attachments as image parts when a reader is wired', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6]);
+    const model = completionModel();
+    const backend = new AiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      permissionEngine: new PermissionEngine({ newId: () => 'permission-id', now: () => 1 }),
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      readAttachmentBytes: async () => ({ ok: true, bytes: pngBytes }),
+    } as never);
+
+    await drain(backend.send({
+      turnId: 'turn-current',
+      text: 'current user',
+      context: [
+        {
+          type: 'user',
+          id: 'projection-u',
+          turnId: 'turn-prev',
+          ts: 1,
+          text: 'see the attached chart',
+          attachments: [
+            {
+              kind: 'image',
+              name: 'chart.png',
+              mimeType: 'image/png',
+              bytes: 123,
+              ref: { kind: 'session_file', sessionId: 'sess-1', relativePath: 'attachments/chart.png' },
+            },
+          ],
+        },
+        { type: 'assistant', id: 'projection-a', turnId: 'turn-prev', ts: 2, text: 'projection assistant', modelId: 'm' },
+      ],
+      runtimeContext: [
+        {
+          id: 'rt-terminal',
+          invocationId: 'inv-1',
+          runId: 'run-prev',
+          sessionId: 'session-1',
+          turnId: 'turn-prev',
+          ts: 1,
+          partial: false,
+          role: 'model',
+          author: 'agent',
+          status: 'completed',
+          actions: { endInvocation: true },
+        },
+      ],
+    }));
+
+    const prompt = compactPrompt(model) as Array<{ role: string; content: unknown }>;
+    const historicalUser = prompt[0];
+    const parts = historicalUser.content as Array<{ type: string; mediaType?: string }>;
+    const imageLike = parts.find((p) => p.type !== 'text' && p.mediaType === 'image/png');
+    assert.ok(imageLike, `expected a historical image/png part in stored-message fallback, got: ${JSON.stringify(parts)}`);
+  });
+
+  test('current-turn image attachment becomes a provider image part', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const model = completionModel();
+    const backend = new AiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      permissionEngine: new PermissionEngine({ newId: () => 'permission-id', now: () => 1 }),
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      readAttachmentBytes: async () => ({ ok: true, bytes: pngBytes }),
+    } as never);
+
+    await drain(backend.send({
+      turnId: 'turn-current',
+      text: 'describe this chart',
+      attachments: [
+        {
+          kind: 'image',
+          name: 'chart.png',
+          mimeType: 'image/png',
+          bytes: pngBytes.length,
+          ref: { kind: 'session_file', sessionId: 'session-1', relativePath: 'fake/chart.png' },
+        },
+      ],
+      context: [],
+      runtimeContext: [],
+    }));
+
+    const prompt = compactPrompt(model) as Array<{ role: string; content: unknown }>;
+    const currentUser = prompt[prompt.length - 1];
+    const parts = currentUser.content as Array<{ type: string; image?: unknown; mediaType?: string; text?: string; data?: unknown }>;
+    // ai-sdk LanguageModelV3 normalizes CoreMessage image parts into generic
+    // file parts at the provider boundary (mediaType carries image/png); the
+    // image bytes must reach the provider as a non-text image/png part.
+    const imageLike = parts.find((p) => p.type !== 'text' && p.mediaType === 'image/png');
+    assert.ok(imageLike, `expected an image/png part in current user content, got: ${JSON.stringify(parts)}`);
+  });
+
+  test('RuntimeEvent replay renders historical image attachments as image parts', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7]);
+    const model = completionModel();
+    const backend = new AiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      permissionEngine: new PermissionEngine({ newId: () => 'permission-id', now: () => 1 }),
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      readAttachmentBytes: async () => ({ ok: true, bytes: pngBytes }),
+    } as never);
+
+    await drain(backend.send({
+      turnId: 'turn-current',
+      text: 'follow-up question',
+      context: [],
+      runtimeContext: [
+        runtimeEvent({
+          id: 'rt-img',
+          turnId: 'turn-prev',
+          role: 'user',
+          author: 'user',
+          content: {
+            kind: 'text',
+            text: 'look at this chart',
+            attachments: [
+              {
+                kind: 'image',
+                name: 'pic.png',
+                mimeType: 'image/png',
+                bytes: 11,
+                ref: { kind: 'session_file', sessionId: 'session-1', relativePath: 'fake/pic.png' },
+              },
+            ],
+          },
+        }),
+        runtimeTextEvent({ id: 'rt-a', turnId: 'turn-prev', role: 'model', author: 'agent', text: 'noted' }),
+      ],
+    }));
+
+    const prompt = compactPrompt(model) as Array<{ role: string; content: unknown }>;
+    const historicalUser = prompt[0];
+    const parts = historicalUser.content as Array<{ type: string; mediaType?: string }>;
+    const imageLike = parts.find((p) => p.type !== 'text' && p.mediaType === 'image/png');
+    assert.ok(imageLike, `expected a historical image/png part in replay, got: ${JSON.stringify(parts)}`);
+  });
+
   test('preserves RuntimeEvent tool calls and results as structured AI SDK parts', async () => {
     const model = completionModel();
     const backend = new AiSdkBackend({
