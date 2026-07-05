@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { createConnectionStore } from '@maka/storage';
+import { createConnectionStore, createShellRunStore } from '@maka/storage';
 import {
   createMakaCliRuntimeContext,
   getOrCreateCliClaudeDeviceId,
@@ -64,6 +64,57 @@ describe('Maka CLI runtime bootstrap', () => {
         'Edit must be registered (regression: it was once filtered out of the TUI runtime)',
       );
       assert.equal(edit?.permissionRequired, true);
+    });
+  });
+
+  test('enables background ShellRuns for the TUI runtime and cleans them up on close', async () => {
+    await withWorkspace(async (workspaceRoot) => {
+      const connectionStore = createConnectionStore(workspaceRoot);
+      await connectionStore.create({
+        slug: 'local',
+        name: 'Local Ollama',
+        providerType: 'ollama',
+        defaultModel: 'llama3.2',
+      });
+
+      const context = await createMakaCliRuntimeContext({
+        workspaceRoot,
+        cwd: workspaceRoot,
+      });
+      try {
+        const names = context.tools.map((tool) => tool.name);
+        assert.ok(names.includes('ShellStatus'));
+        assert.ok(names.includes('ShellWait'));
+        assert.ok(names.includes('ShellCancel'));
+
+        const bash = context.tools.find((tool) => tool.name === 'Bash');
+        assert.ok(bash);
+        const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('start'); setTimeout(() => {}, 5000)"`;
+        const result = await bash.impl(
+          { command, yield_time_ms: 250 },
+          {
+            sessionId: 'session-1',
+            runId: 'run-1',
+            turnId: 'turn-1',
+            cwd: workspaceRoot,
+            toolCallId: 'tool-1',
+            abortSignal: new AbortController().signal,
+            emitOutput: () => {},
+          },
+        ) as { kind: string; shellRunId?: string; status?: string; stdout?: string };
+
+        assert.equal(result.kind, 'shell_run');
+        assert.equal(result.status, 'running');
+        assert.equal(result.stdout, 'start');
+        assert.ok(result.shellRunId);
+
+        await context.close();
+        const record = await createShellRunStore(workspaceRoot).readShellRun('session-1', result.shellRunId);
+        assert.equal(record.status, 'cancelled');
+        assert.equal(record.exitCode, 130);
+      } finally {
+        await context.close();
+      }
     });
   });
 

@@ -6,6 +6,7 @@ import {
   BackendRegistry,
   PermissionEngine,
   SessionManager,
+  ShellRunProcessManager,
   buildBuiltinTools,
   buildProviderOptions,
   buildSubscriptionModelFetch,
@@ -18,6 +19,7 @@ import {
   createRuntimeEventStore,
   createSessionStore,
   createSettingsStore,
+  createShellRunStore,
 } from '@maka/storage';
 import type { ReadySessionTarget } from './connection-target.js';
 import { resolveDefaultSessionTarget } from './connection-target.js';
@@ -29,6 +31,7 @@ export interface MakaCliRuntimeContext {
   runtime: SessionManager;
   target: ReadySessionTarget;
   tools: ReturnType<typeof buildBuiltinTools>;
+  close(): Promise<void>;
 }
 
 export interface CreateMakaCliRuntimeContextInput {
@@ -53,6 +56,7 @@ export async function createMakaCliRuntimeContext(
   const store = createSessionStore(input.workspaceRoot);
   const runStore = createAgentRunStore(input.workspaceRoot);
   const runtimeEventStore = createRuntimeEventStore(input.workspaceRoot);
+  const shellRunStore = createShellRunStore(input.workspaceRoot);
   const connectionStore = createConnectionStore(input.workspaceRoot);
   const credentialStore = createFileCredentialStore(input.workspaceRoot);
   const settingsStore = createSettingsStore(input.workspaceRoot);
@@ -63,7 +67,12 @@ export async function createMakaCliRuntimeContext(
   });
   const permissionEngine = new PermissionEngine({ newId: randomUUID, now: Date.now });
   const backends = new BackendRegistry();
-  const tools = buildBuiltinTools();
+  const shellRuns = new ShellRunProcessManager({
+    store: shellRunStore,
+    newId: randomUUID,
+    now: Date.now,
+  });
+  const tools = buildBuiltinTools({ shellRuns });
 
   backends.register('ai-sdk', async (ctx) => {
     const ready = await resolveDefaultSessionTarget({
@@ -99,6 +108,7 @@ export async function createMakaCliRuntimeContext(
         return buildCliSystemPrompt({ settings, cwd });
       },
       turnTailPrompt: ({ cwd }) => buildCliTurnTailPrompt({ cwd }),
+      shellRunContextSummary: ctx.shellRunContextSummary,
       newId: randomUUID,
       now: Date.now,
     });
@@ -108,10 +118,12 @@ export async function createMakaCliRuntimeContext(
     store,
     runStore,
     runtimeEventStore,
+    shellRuns,
     backends,
     newId: randomUUID,
     now: Date.now,
   });
+  await runtime.recoverInterruptedSessions();
 
   return {
     workspaceRoot: input.workspaceRoot,
@@ -119,6 +131,7 @@ export async function createMakaCliRuntimeContext(
     runtime,
     target,
     tools,
+    close: () => shellRuns.terminateAll(),
   };
 }
 
