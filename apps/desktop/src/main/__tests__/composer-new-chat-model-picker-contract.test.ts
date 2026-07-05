@@ -56,11 +56,18 @@ describe('home composer new-chat model picker', () => {
     // on value change.
     assert.match(picker, /<ModelPicker/, 'NewChatModelPicker must be a real ModelPicker dropdown');
     assert.match(picker, /props\.onPick\(next\)/, 'NewChatModelPicker must call onPick with the chosen model');
-    // No hand-added chevron — ModelPicker's ComboboxTrigger renders its own icon.
+    // No hand-added chevron or status dot — ModelPicker's trigger renders the
+    // dropdown affordance, and the active-session picker has no red dot. Keep
+    // the new-chat trigger visually aligned with it.
     assert.doesNotMatch(
       picker,
       /<ChevronDown/,
       'NewChatModelPicker must not hand-add a chevron (ModelPicker\'s trigger already renders one) — guards the double-chevron regression',
+    );
+    assert.doesNotMatch(
+      picker,
+      /maka-composer-model-status/,
+      'NewChatModelPicker must not render the red status dot; the active-session model picker has no equivalent marker',
     );
   });
 
@@ -109,6 +116,29 @@ describe('home composer new-chat model picker', () => {
       renderer,
       /\.\.\.\(validPendingNewChatModel\s*\?\s*\{ llmConnectionSlug: validPendingNewChatModel\.llmConnectionSlug, model: validPendingNewChatModel\.model \}/,
       'send() must forward the validated picked model to sessions.create when one was chosen',
+    );
+  });
+
+  it('filters the pending new-chat thinking level against the currently picked model', async () => {
+    const renderer = await readRendererShellSources([
+      'app-shell.tsx',
+      'app-shell-chat-actions.ts',
+    ]);
+
+    assert.match(
+      renderer,
+      /const newChatThinkingLevel\s*=\s*pendingNewChatThinkingLevel && newChatThinkingLevels\.includes\(pendingNewChatThinkingLevel\)\s*\? pendingNewChatThinkingLevel\s*: undefined;/,
+      'AppShell must only surface a pending new-chat thinking level when the current new-chat model supports it',
+    );
+    assert.match(
+      renderer,
+      /pendingNewChatThinkingLevel:\s*newChatThinkingLevel \?\? null/,
+      'send() dependencies must receive the filtered newChatThinkingLevel, not the raw pending state',
+    );
+    assert.match(
+      renderer,
+      /\.{3}\(pendingNewChatThinkingLevel \? \{ thinkingLevel: pendingNewChatThinkingLevel \} : \{\}\)/,
+      'sessions.create still forwards the dependency field, which must already be filtered by AppShell',
     );
   });
 

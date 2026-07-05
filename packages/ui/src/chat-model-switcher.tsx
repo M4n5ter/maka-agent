@@ -4,13 +4,12 @@
  * `ChatModelSwitcher` (in-session) and `NewChatModelPicker` (home / empty
  * state) were ~200 lines of Select JSX living next to the Composer in the
  * 8k-line `components.tsx`. They are consumed only by the Composer and share
- * the `ModelChoiceOptions` list body plus the pure codecs in
- * `chat-model-helpers.ts`, so they form a clean seam. Behavior is unchanged
- * by the move; `index.ts` does not re-export them (they are internal to the
- * `@maka/ui` Composer surface).
+ * the grouped model-choice helpers, so they form a clean seam. `index.ts` does
+ * not re-export them (they are internal to the `@maka/ui` Composer surface).
  */
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from './primitives/menu.js';
 import { Button as UiButton } from './ui.js';
 import { ModelPicker } from './model-picker.js';
 import { Settings } from './icons.js';
@@ -20,7 +19,105 @@ import {
   modelChoiceValue,
   parseModelChoiceValue,
 } from './chat-model-helpers.js';
-import { type ProviderType, type SessionSummary } from '@maka/core';
+import { type ProviderType, type SessionSummary, type ThinkingLevel } from '@maka/core';
+
+const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
+  off: '关',
+  minimal: '最小',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '超高',
+  max: '最高',
+};
+
+function thinkingLevelLabel(level: ThinkingLevel | undefined): string {
+  return level ? THINKING_LEVEL_LABELS[level] : '默认';
+}
+
+/**
+ * Static footer row for per-model thinking levels. The flyout uses the shared
+ * Base UI Menu primitive; ModelPicker keeps the host popup open while pointer
+ * events land inside the portaled flyout via `data-model-picker-nested-popup`.
+ */
+function ThinkingLevelSection(props: {
+  levels: readonly ThinkingLevel[];
+  current?: ThinkingLevel;
+  parentOpen: boolean;
+  onCommit?(): void;
+  onChange?(level: ThinkingLevel | undefined): void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasVariants = props.levels.length > 0 && Boolean(props.onChange);
+  const currentLabel = thinkingLevelLabel(props.current);
+
+  useEffect(() => {
+    if (!props.parentOpen) setOpen(false);
+  }, [props.parentOpen]);
+
+  const choose = (level: ThinkingLevel | undefined) => {
+    props.onCommit?.();
+    void props.onChange?.(level);
+  };
+
+  return (
+    <div className="maka-thinking-section">
+      <Menu open={open} onOpenChange={setOpen}>
+        <MenuTrigger
+          nativeButton={false}
+          disabled={!hasVariants}
+          render={(triggerProps) => (
+            <div
+              {...triggerProps}
+              role="button"
+              tabIndex={hasVariants ? 0 : -1}
+              aria-disabled={!hasVariants || undefined}
+              aria-haspopup={hasVariants ? 'menu' : undefined}
+              className="maka-thinking-section-row"
+              data-disabled={!hasVariants || undefined}
+              title={hasVariants ? '切换当前模型的思考级别' : '当前模型不支持思考级别切换'}
+            >
+              <span className="maka-thinking-section-label">思考级别</span>
+              <span className="maka-thinking-section-value">
+                {currentLabel}
+                {hasVariants && <span className="maka-thinking-section-chev" aria-hidden="true">▸</span>}
+              </span>
+            </div>
+          )}
+        />
+        {hasVariants && (
+          <MenuPopup
+            className="maka-thinking-flyout"
+            align="start"
+            side="inline-end"
+            sideOffset={8}
+            data-model-picker-nested-popup=""
+          >
+            <MenuItem
+              onClick={() => choose(undefined)}
+              className="maka-thinking-flyout-item"
+              data-selected={!props.current || undefined}
+            >
+              <span>默认</span>
+              {!props.current && <span className="maka-thinking-flyout-check" aria-hidden="true">✓</span>}
+            </MenuItem>
+            {props.levels.map((level) => (
+              <MenuItem
+                key={level}
+                onClick={() => choose(level)}
+                className="maka-thinking-flyout-item"
+                data-selected={props.current === level || undefined}
+              >
+                <span>{THINKING_LEVEL_LABELS[level]}</span>
+                {props.current === level && <span className="maka-thinking-flyout-check" aria-hidden="true">✓</span>}
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        )}
+      </Menu>
+    </div>
+  );
+}
 
 export function ChatModelSwitcher(props: {
   activeSession: SessionSummary;
@@ -32,6 +129,9 @@ export function ChatModelSwitcher(props: {
   disabledReason?: string;
   renderProviderMark?(type: ProviderType): ReactNode;
   onChange?(input: { llmConnectionSlug: string; model: string }): void | Promise<void>;
+  thinkingLevels?: readonly ThinkingLevel[];
+  thinkingLevel?: ThinkingLevel;
+  onThinkingLevelChange?(level: ThinkingLevel | undefined): void | Promise<void>;
 }) {
   const [localPending, setLocalPending] = useState(false);
   const pendingRef = useRef(false);
@@ -44,13 +144,7 @@ export function ChatModelSwitcher(props: {
   const disabled = pending || Boolean(props.disabledReason) || !props.onChange || props.choices.length === 0;
   const grouped = modelMenuGroups(props.choices);
   const currentKnownChoice = props.choices.some((choice) => modelChoiceValue(choice.connectionSlug, choice.model) === currentValue);
-  // Render the catalog display label when the current model is a known
-  // choice; account / connection names still stay out of the trigger to
-  // avoid OAuth email leaks.
-  const currentLabel = useMemo(
-    () => props.choices.find((choice) => modelChoiceValue(choice.connectionSlug, choice.model) === currentValue)?.label ?? currentModel,
-    [currentModel, currentValue, props.choices],
-  );
+  const displayLabel = props.activeModelLabel ?? currentModel;
   const currentSessionModelTitle = props.activeConnectionLabel && props.activeModelLabel
     ? `本会话固定模型：${props.activeConnectionLabel} · ${props.activeModelLabel}`
     : '切换当前会话使用的模型';
@@ -92,9 +186,6 @@ export function ChatModelSwitcher(props: {
         ariaLabel="切换当前会话模型"
         title={title}
         triggerClassName="maka-model-switcher-trigger"
-        // PR-CHAT-CHROME-FIX-0 (WAWQAQ msg `ccce4a31`): menu rows show only
-        // the raw model name, never the connection/account name (which
-        // embeds the OAuth email).
         pinnedItem={!currentKnownChoice ? { value: currentValue, label: currentModel } : undefined}
         onValueChange={(value) => {
           if (pendingRef.current || props.pending) return;
@@ -127,9 +218,21 @@ export function ChatModelSwitcher(props: {
             }
           })();
         }}
+        footer={({ open, close }) => (
+          <ThinkingLevelSection
+            levels={props.thinkingLevels ?? []}
+            current={props.thinkingLevel}
+            parentOpen={open}
+            onCommit={close}
+            onChange={props.onThinkingLevelChange}
+          />
+        )}
       >
         <span className="maka-model-switcher-label">{pending ? '切换中' : '模型'}</span>
-        <span className="maka-model-switcher-value">{currentLabel}</span>
+        <span className="maka-model-switcher-value">
+          {displayLabel}
+          {props.thinkingLevel && <span className="maka-thinking-level-tag">{thinkingLevelLabel(props.thinkingLevel)}</span>}
+        </span>
       </ModelPicker>
     </div>
   );
@@ -140,7 +243,10 @@ export function ChatModelSwitcher(props: {
  * `ChatModelSwitcher` — which is bound to a live session and switches THAT
  * session's model — this one just records which model the next new chat should
  * start with. Reuses the model chip's look so the only visible change is that
- * the chevron now actually opens a menu.
+ * the chevron now actually opens a menu. The thinking level chosen here is
+ * passed to `createSession` on the first message (so reasoning models start at
+ * the right depth without a mid-session change that would invalidate the
+ * provider prompt cache).
  */
 export function NewChatModelPicker(props: {
   label: string;
@@ -148,6 +254,9 @@ export function NewChatModelPicker(props: {
   currentValue?: string;
   renderProviderMark?(type: ProviderType): ReactNode;
   onPick(input: { llmConnectionSlug: string; model: string }): void | Promise<void>;
+  thinkingLevels?: readonly ThinkingLevel[];
+  thinkingLevel?: ThinkingLevel;
+  onThinkingLevelChange?(level: ThinkingLevel | undefined): void | Promise<void>;
 }) {
   const grouped = modelMenuGroups(props.choices);
   return (
@@ -162,9 +271,18 @@ export function NewChatModelPicker(props: {
         const next = parseModelChoiceValue(value);
         if (next) void props.onPick(next);
       }}
+      footer={({ open, close }) => (
+        <ThinkingLevelSection
+          levels={props.thinkingLevels ?? []}
+          current={props.thinkingLevel}
+          parentOpen={open}
+          onCommit={close}
+          onChange={props.onThinkingLevelChange}
+        />
+      )}
     >
       <span className="maka-composer-model-chip-text">{props.label}</span>
-      <span className="maka-composer-model-status" aria-hidden="true" />
+      {props.thinkingLevel && <span className="maka-thinking-level-tag">{thinkingLevelLabel(props.thinkingLevel)}</span>}
       {/* ModelPicker's trigger already renders a chevron — no manual one. */}
     </ModelPicker>
   );
