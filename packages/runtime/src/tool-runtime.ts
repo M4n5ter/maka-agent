@@ -841,11 +841,9 @@ function deriveToolResultStatus(content: ToolResultContent): ToolInvocationRecor
     if (content.status === 'cancelled') return 'aborted';
     return 'error';
   }
-  if (content.kind === 'shell_run') {
-    if (content.status === 'running' || content.status === 'completed') return 'success';
-    if (content.status === 'cancelled') return 'aborted';
-    return 'error';
-  }
+  // All other structured results are successful tool executions. That includes
+  // ShellRun observations: their embedded process status stays model-visible,
+  // but reading or returning the observation itself succeeded.
   return 'success';
 }
 
