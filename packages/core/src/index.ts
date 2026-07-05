@@ -622,6 +622,7 @@ export {
   effectiveBaseUrl,
   migrateConnectionV1ToV2,
   normalizeConnectionBaseUrl,
+  persistedBaseUrl,
   validateConnectionBaseUrl,
   validateSlug,
 } from './llm-connections.js';

@@ -2,6 +2,7 @@ import React, { forwardRef } from 'react';
 import { Button as BaseButton } from '@base-ui/react/button';
 import { Checkbox as BaseCheckbox } from '@base-ui/react/checkbox';
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
+import { AlertDialog as BaseAlertDialog } from '@base-ui/react/alert-dialog';
 import { Field as BaseField } from '@base-ui/react/field';
 import { Progress as BaseProgress } from '@base-ui/react/progress';
 import { Radio as BaseRadio } from '@base-ui/react/radio';
@@ -187,70 +188,74 @@ export const Checkbox = forwardRef<
 
 export const DialogRoot = BaseDialog.Root;
 export const DialogClose = BaseDialog.Close;
-const DialogPortal = BaseDialog.Portal;
+export const AlertDialogRoot = BaseAlertDialog.Root;
 
-const DialogBackdrop = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<typeof BaseDialog.Backdrop>>(function DialogBackdrop(
-  { className, ...props },
-  ref,
-) {
-  return (
-    <BaseDialog.Backdrop
-      ref={ref}
-      // `maka-dialog-backdrop` is a stable, style-free hook so tests and the
-      // real-window smoke diagnostic can select the dialog backdrop; Base UI
-      // renders only utility classes otherwise, which drift and aren't
-      // reliably selectable.
-      className={cn('maka-dialog-backdrop fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm', className)}
-      {...props}
-    />
-  );
+// Shared modal shell. Dialog and AlertDialog differ only in their Base UI
+// primitive family (Root/Portal/Backdrop/Popup/Close); the layout (backdrop
+// class, popup class, Portal+Backdrop+Popup+optional Close structure) is
+// identical. PR6 review P3.1: kills the AlertDialogBackdrop/Popup/Content
+// triple that copied Dialog's, and lets ui-tsx-design-contract's
+// the bare z-index/blur utility counts return to 1.
+//
+// `maka-dialog-backdrop` is a stable, style-free hook so tests and the
+// real-window smoke diagnostic can select the dialog backdrop; Base UI
+// renders only utility classes otherwise, which drift and aren't reliably
+// selectable.
+const MODAL_BACKDROP_CLASS = 'maka-dialog-backdrop fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm';
+const MODAL_POPUP_CLASS =
+  'fixed left-1/2 top-1/2 z-50 grid max-h-[85dvh] w-[min(92vw,640px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-maka-panel';
+
+type ModalContentProps = React.ComponentPropsWithoutRef<typeof BaseDialog.Popup> & { showClose?: boolean };
+
+function createModalContent(primitives: {
+  Portal: React.ComponentType<{ children?: React.ReactNode }>;
+  Backdrop: React.ComponentType<{ className?: string }>;
+  Popup: React.ForwardRefExoticComponent<React.ComponentPropsWithoutRef<typeof BaseDialog.Popup> & React.RefAttributes<HTMLDivElement>>;
+  Close: React.ComponentType<{ className?: string; 'aria-label'?: string; children?: React.ReactNode }>;
+  defaultShowClose: boolean;
+}) {
+  return forwardRef<HTMLDivElement, ModalContentProps>(function ModalContent(
+    { className, children, showClose = primitives.defaultShowClose, ...props },
+    ref,
+  ) {
+    const { Portal, Backdrop, Popup, Close } = primitives;
+    return (
+      <Portal>
+        <Backdrop className={MODAL_BACKDROP_CLASS} />
+        <Popup ref={ref} className={cn(MODAL_POPUP_CLASS, className)} {...props}>
+          {showClose && (
+            <Close
+              className={cn(buttonVariants({ variant: 'quiet', size: 'icon-sm' }), 'absolute right-3 top-3')}
+              aria-label="关闭"
+            >
+              <X aria-hidden="true" />
+            </Close>
+          )}
+          {children}
+        </Popup>
+      </Portal>
+    );
+  });
+}
+
+export const DialogContent = createModalContent({
+  Portal: BaseDialog.Portal,
+  Backdrop: BaseDialog.Backdrop,
+  Popup: BaseDialog.Popup,
+  Close: BaseDialog.Close,
+  defaultShowClose: true,
 });
 
-const DialogPopup = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<typeof BaseDialog.Popup>>(function DialogPopup(
-  { className, children, ...props },
-  ref,
-) {
-  return (
-    <BaseDialog.Popup
-      ref={ref}
-      className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid max-h-[85dvh] w-[min(92vw,640px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-maka-panel',
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </BaseDialog.Popup>
-  );
-});
-
-export const DialogContent = forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof DialogPopup> & { showClose?: boolean }
->(function DialogContent({
-    className,
-    children,
-    showClose = true,
-    ...props
-  },
-  ref,
-) {
-  return (
-    <DialogPortal>
-      <DialogBackdrop />
-      <DialogPopup ref={ref} className={className} {...props}>
-        {showClose && (
-          <DialogClose
-            className={cn(buttonVariants({ variant: 'quiet', size: 'icon-sm' }), 'absolute right-3 top-3')}
-            aria-label="关闭"
-          >
-            <X aria-hidden="true" />
-          </DialogClose>
-        )}
-        {children}
-      </DialogPopup>
-    </DialogPortal>
-  );
+// AlertDialog — the alert variant locks modal + disables pointer dismissal,
+// so confirm/permission dialogs require an explicit decision. Escape is NOT
+// auto-disabled (Base UI alert-dialog still closes on Esc); callers that must
+// not be Esc-dismissed intercept onOpenChange and cancel. PR6 (#520).
+export const AlertDialogContent = createModalContent({
+  Portal: BaseAlertDialog.Portal,
+  Backdrop: BaseAlertDialog.Backdrop,
+  Popup: BaseAlertDialog.Popup,
+  Close: BaseAlertDialog.Close,
+  defaultShowClose: false,
 });
 
 // Tabs: re-export the shared tab spec primitive (#499 P0-3). The tab spec
@@ -284,12 +289,6 @@ export const SelectTrigger = forwardRef<HTMLButtonElement, React.ComponentPropsW
 export const SelectValue = BaseSelect.Value;
 export const SelectPortal = BaseSelect.Portal;
 export const SelectPositioner = BaseSelect.Positioner;
-export const SelectList = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<typeof BaseSelect.List>>(function SelectList(
-  { className, ...props },
-  ref,
-) {
-  return <BaseSelect.List ref={ref} className={cn('max-h-[var(--available-height)] overflow-y-auto py-1', className)} {...props} />;
-});
 export const SelectPopup = forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<typeof BaseSelect.Popup>>(function SelectPopup(
   { className, ...props },
   ref,
@@ -478,8 +477,8 @@ export const Progress = forwardRef<
   );
 });
 
-// Toast — left to the existing `packages/ui/src/toast.tsx` for now.
-// That module already wraps Base UI Toast with the project's
-// `useToast()` / `toast.confirm()` API. Rewriting it to expose the
-// raw Base UI primitives here would compete with the existing
-// caller surface; the modernization is tracked separately.
+// Toast — migrated to Base UI Toast in `packages/ui/src/toast.tsx`, exposed
+// via the project's `useToast()` / `toast.confirm()` API (PR6 #520). The toast
+// surface (Provider + manager + Viewport/Root/Title/Description/Action/Close)
+// is Base UI; the confirm dialog + its queue stay hand-written (Base UI Toast
+// has no confirm concept) and live in toast.tsx.

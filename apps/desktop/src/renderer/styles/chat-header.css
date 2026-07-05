@@ -476,7 +476,7 @@
   100% { opacity: 0; transform: translateY(6px) scale(0.98); }
 }
 
-.maka-toast[data-exiting="true"] {
+.maka-toast[data-ending-style] {
   animation: maka-toast-exit var(--duration-emphasized) var(--ease-in-out-strong) forwards;
   pointer-events: none;
 }
@@ -596,12 +596,6 @@
 
 .maka-confirm-modal {
   width: min(420px, calc(100vw - 48px));
-}
-
-.maka-confirm-backdrop {
-  /* Slightly opaque so destructive confirms feel weightier than regular
-     toast notifications. */
-  background: oklch(from var(--background) l c h / 0.7);
 }
 
 .maka-help-modal {
