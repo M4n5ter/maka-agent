@@ -21,6 +21,7 @@ import {
 import { truncateToolOutput } from './tool-output.js';
 
 export const DEFAULT_BASH_YIELD_TIME_MS = 10_000;
+export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 export const MIN_BASH_YIELD_TIME_MS = 250;
 export const MAX_BASH_YIELD_TIME_MS = 30_000;
 export const DEFAULT_SHELL_WAIT_YIELD_TIME_MS = 5_000;
@@ -120,7 +121,7 @@ export class ShellRunProcessManager {
       MIN_BASH_YIELD_TIME_MS,
       MAX_BASH_YIELD_TIME_MS,
     );
-    const timeoutMs = normalizeTimeoutMs(input.timeoutMs);
+    const timeoutMs = normalizeTimeoutMs(input.timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
     const live = await this.start(input, timeoutMs);
     const initial = await Promise.race([
       live.finished.then(() => 'finished' as const),
