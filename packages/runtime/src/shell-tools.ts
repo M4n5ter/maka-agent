@@ -6,7 +6,6 @@ import type { MakaTool, MakaToolContext } from './tool-runtime.js';
 import { runShellWithBoundedTail, type BoundedShellResult } from './shell-exec.js';
 import { truncateToolOutput } from './tool-output.js';
 import {
-  DEFAULT_SHELL_WAIT_YIELD_TIME_MS,
   MAX_SHELL_RUN_TIMEOUT_MS,
   type ShellRunBashInput,
 } from './shell-run-manager.js';
@@ -44,13 +43,14 @@ export interface BuildForegroundBashToolOptions {
 
 type TerminalToolResult = Extract<ToolResultContent, { kind: 'terminal' }>;
 type ShellRunToolResult = Extract<ToolResultContent, { kind: 'shell_run' }>;
-type ShellRunListToolResult = Extract<ToolResultContent, { kind: 'shell_run_list' }>;
 
 export interface ShellRunToolController {
   runBash(input: ShellRunBashInput): Promise<TerminalToolResult | ShellRunToolResult>;
-  status(sessionId: string, shellRunId?: string): Promise<ShellRunToolResult | ShellRunListToolResult>;
-  wait(sessionId: string, shellRunId: string, yieldTimeMs?: number): Promise<ShellRunToolResult>;
-  cancel(sessionId: string, shellRunId: string): Promise<ShellRunToolResult>;
+  readResource(
+    sessionId: string,
+    ref: string,
+  ): Promise<{ content: string }>;
+  stopResource(sessionId: string, ref: string): Promise<ShellRunToolResult>;
 }
 
 export function buildForegroundBashTool(options: BuildForegroundBashToolOptions): MakaTool {
@@ -102,7 +102,7 @@ export function buildBackgroundBashTool(
   return {
     name: 'Bash',
     description:
-      'Run a shell command in the session cwd. Commands that outlive yield_time_ms continue as observable ShellRuns. Subject to permission policy.',
+      'Run a shell command in the session cwd. Commands that outlive yield_time_ms continue as runtime background tasks; use the returned ref with Read to inspect them. Subject to permission policy.',
     parameters: z.object({
       command: z.string().describe('The shell command to execute'),
       timeout_ms: z.number().int().positive().max(MAX_SHELL_RUN_TIMEOUT_MS).optional(),
@@ -125,43 +125,20 @@ export function buildBackgroundBashTool(
   };
 }
 
-export function buildShellRunControlTools(shellRuns: ShellRunToolController): MakaTool[] {
-  return [
-    {
-      name: 'ShellStatus',
-      description:
-        'List actionable background shell runs for this session, or read one ShellRun detail by shell_run_id.',
-      parameters: z.object({
-        shell_run_id: z.string().optional(),
-      }),
-      permissionRequired: false,
-      impl: ({ shell_run_id }, ctx) => shellRuns.status(ctx.sessionId, shell_run_id),
-    },
-    {
-      name: 'ShellWait',
-      description: 'Wait for an existing ShellRun to finish, or return its current running snapshot after yield_time_ms.',
-      parameters: z.object({
-        shell_run_id: z.string(),
-        yield_time_ms: z.number().int().positive().optional(),
-      }),
-      permissionRequired: false,
-      impl: ({ shell_run_id, yield_time_ms }, ctx) =>
-        shellRuns.wait(ctx.sessionId, shell_run_id, yield_time_ms ?? DEFAULT_SHELL_WAIT_YIELD_TIME_MS),
-    },
-    {
-      name: 'ShellCancel',
-      description: 'Cancel a running ShellRun owned by this session. Known terminal ShellRuns are returned idempotently.',
-      parameters: z.object({
-        shell_run_id: z.string(),
-      }),
-      permissionRequired: false,
-      impl: ({ shell_run_id }, ctx) => shellRuns.cancel(ctx.sessionId, shell_run_id),
-    },
-  ];
+export function buildStopBackgroundTaskTool(shellRuns: ShellRunToolController): MakaTool {
+  return {
+    name: 'StopBackgroundTask',
+    description:
+      'Stop a background task by runtime ref. Currently supports background shell run refs returned by Bash and shown in the turn tail.',
+    parameters: z.object({
+      ref: z.string().describe('The runtime background task ref, for example maka://runtime/background-tasks/<id>'),
+    }),
+    permissionRequired: false,
+    impl: ({ ref }, ctx) => shellRuns.stopResource(ctx.sessionId, ref),
+  };
 }
 
 export function shapeTerminalResult(input: {
-  shellRunId?: string;
   cwd: string;
   command: string;
   result: ForegroundBashResult | BoundedShellResult;
@@ -172,7 +149,6 @@ export function shapeTerminalResult(input: {
   const stderrView = truncateToolOutput(stderr, { direction: 'tail' });
   return {
     kind: 'terminal',
-    ...(input.shellRunId ? { shellRunId: input.shellRunId } : {}),
     cwd: input.cwd,
     cmd: redactSecrets(input.command),
     status: terminalStatus(input.result),

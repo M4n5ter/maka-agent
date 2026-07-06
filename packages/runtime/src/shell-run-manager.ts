@@ -24,14 +24,12 @@ export const DEFAULT_BASH_YIELD_TIME_MS = 10_000;
 export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 export const MIN_BASH_YIELD_TIME_MS = 250;
 export const MAX_BASH_YIELD_TIME_MS = 30_000;
-export const DEFAULT_SHELL_WAIT_YIELD_TIME_MS = 5_000;
-export const MIN_SHELL_WAIT_YIELD_TIME_MS = 5_000;
-export const MAX_SHELL_WAIT_YIELD_TIME_MS = 300_000;
 export const MAX_SHELL_RUN_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_MAX_LIVE_SHELL_RUNS = 64;
 export const DEFAULT_SHELL_RUN_FLUSH_INTERVAL_MS = 1_000;
 export const DEFAULT_SHELL_RUN_FLUSH_BYTES = 64 * 1024;
 export const SHELL_RUN_CONTEXT_SUMMARY_LIMIT = 8;
+export const SHELL_RUN_RESOURCE_PREFIX = 'maka://runtime/background-tasks';
 
 export interface ShellRunProcessManagerInput {
   store: ShellRunStore;
@@ -60,8 +58,8 @@ export interface ShellRunBashInput {
 
 type TerminalToolResult = Extract<ToolResultContent, { kind: 'terminal' }>;
 type ShellRunToolResult = Extract<ToolResultContent, { kind: 'shell_run' }>;
-type ShellRunListToolResult = Extract<ToolResultContent, { kind: 'shell_run_list' }>;
 type ShellRunChildProcess = ChildProcessByStdio<null, Readable, Readable>;
+type ShellRunResourceTarget = { shellRunId: string };
 
 interface LiveShellRun {
   shellRunId: string;
@@ -141,53 +139,10 @@ export class ShellRunProcessManager {
     live.forwardLive = false;
     await this.flushLive(live);
     const record = await this.input.store.readShellRun(input.sessionId, live.shellRunId);
-    return shellRunContent(record);
+    return shellRunRefContent(record);
   }
 
-  async status(sessionId: string, shellRunId?: string): Promise<ShellRunToolResult | ShellRunListToolResult> {
-    if (shellRunId) return this.detail(sessionId, shellRunId, { markObserved: true });
-    const records = await this.actionableRecords(sessionId);
-    const visible = records.slice(0, SHELL_RUN_CONTEXT_SUMMARY_LIMIT);
-    return {
-      kind: 'shell_run_list',
-      shellRuns: visible.map((record) => ({
-        shellRunId: record.shellRunId,
-        status: record.status,
-        cwd: record.cwd,
-        cmd: record.command,
-        startedAt: record.startedAt,
-        updatedAt: record.updatedAt,
-        ...(record.completedAt !== undefined ? { completedAt: record.completedAt } : {}),
-        observed: record.observedAt !== undefined,
-      })),
-      overflow: Math.max(0, records.length - visible.length),
-    };
-  }
-
-  async wait(sessionId: string, shellRunId: string, yieldTimeMs?: number): Promise<ShellRunToolResult> {
-    const waitMs = clampInt(
-      yieldTimeMs ?? DEFAULT_SHELL_WAIT_YIELD_TIME_MS,
-      MIN_SHELL_WAIT_YIELD_TIME_MS,
-      MAX_SHELL_WAIT_YIELD_TIME_MS,
-    );
-    const record = await this.input.store.readShellRun(sessionId, shellRunId);
-    if (record.status !== 'running') return this.detail(sessionId, shellRunId, { markObserved: true });
-
-    const live = this.live.get(shellRunId);
-    if (!live || live.sessionId !== sessionId) {
-      await this.markOrphaned(record, 'missing live shell process handle');
-      return this.detail(sessionId, shellRunId, { markObserved: true });
-    }
-    const outcome = await Promise.race([
-      live.finished.then(() => 'finished' as const),
-      sleep(waitMs).then(() => 'yield' as const),
-    ]);
-    if (outcome === 'finished') return this.detail(sessionId, shellRunId, { markObserved: true });
-    await this.flushLive(live);
-    return shellRunContent(await this.input.store.readShellRun(sessionId, shellRunId));
-  }
-
-  async cancel(sessionId: string, shellRunId: string): Promise<ShellRunToolResult> {
+  private async cancelShellRun(sessionId: string, shellRunId: string): Promise<ShellRunToolResult> {
     const record = await this.input.store.readShellRun(sessionId, shellRunId);
     if (record.status !== 'running') {
       return this.detail(sessionId, shellRunId, { markObserved: true, cancelled: false });
@@ -195,6 +150,10 @@ export class ShellRunProcessManager {
     const live = this.live.get(shellRunId);
     if (!live || live.sessionId !== sessionId) {
       await this.markOrphaned(record, 'missing live shell process handle during cancel');
+      return this.detail(sessionId, shellRunId, { markObserved: true, cancelled: false });
+    }
+    if (live.settled) {
+      await live.finished;
       return this.detail(sessionId, shellRunId, { markObserved: true, cancelled: false });
     }
     this.beginTermination(live, { kind: 'cancel' });
@@ -207,16 +166,29 @@ export class ShellRunProcessManager {
     if (records.length === 0) return undefined;
     const visible = records.slice(0, SHELL_RUN_CONTEXT_SUMMARY_LIMIT);
     const lines = [
-      'Background shell runs for this session:',
+      'Background tasks for this session:',
       ...visible.map((record) => {
         const completed = record.completedAt !== undefined ? ` completedAt=${record.completedAt}` : '';
-        return `- shellRunId=${record.shellRunId} status=${record.status} cwd=${record.cwd} updatedAt=${record.updatedAt}${completed} command=${JSON.stringify(record.command)}`;
+        return `- ref=${shellRunResourceRef(record.shellRunId)} status=${record.status} cwd=${record.cwd} updatedAt=${record.updatedAt}${completed} command=${JSON.stringify(record.command)}`;
       }),
     ];
     const overflow = records.length - visible.length;
-    if (overflow > 0) lines.push(`- ${overflow} more shell run(s) not shown. Use ShellStatus to list them.`);
-    lines.push('Use ShellStatus with shell_run_id to read output; this summary intentionally omits stdout and stderr.');
+    if (overflow > 0) lines.push(`- ${overflow} more background task(s) not shown in this turn tail.`);
+    lines.push('Use Read on a ref to inspect stdout/stderr; this summary intentionally omits output.');
     return lines.join('\n');
+  }
+
+  async readResource(sessionId: string, ref: string): Promise<{ content: string }> {
+    const target = parseShellRunResourceRef(ref);
+    if (!target) throw new Error(`Unsupported runtime resource ref: ${ref}`);
+    const content = await this.renderResourceDetail(sessionId, target.shellRunId);
+    return { content };
+  }
+
+  async stopResource(sessionId: string, ref: string): Promise<ShellRunToolResult> {
+    const target = parseShellRunResourceRef(ref);
+    if (!target) throw new Error(`Unsupported runtime background task ref: ${ref}`);
+    return this.cancelShellRun(sessionId, target.shellRunId);
   }
 
   async recoverOrphanedSession(sessionId: string): Promise<number> {
@@ -246,7 +218,7 @@ export class ShellRunProcessManager {
 
   private async start(input: ShellRunBashInput, timeoutMs: number | undefined): Promise<LiveShellRun> {
     if (this.live.size >= this.maxLiveShellRuns) {
-      throw new Error(`Too many live shell runs (${this.maxLiveShellRuns}); wait for or cancel an existing ShellRun first`);
+      throw new Error(`Too many live background tasks (${this.maxLiveShellRuns}); read or stop an existing task first`);
     }
 
     const shellRunId = this.input.newId();
@@ -396,7 +368,6 @@ export class ShellRunProcessManager {
   ): Promise<void> {
     if (live.settled) return;
     live.settled = true;
-    this.live.delete(live.shellRunId);
     if (live.timeoutTimer) clearTimeout(live.timeoutTimer);
     if (live.killTimer) clearTimeout(live.killTimer);
     if (live.flushTimer) clearTimeout(live.flushTimer);
@@ -421,6 +392,8 @@ export class ShellRunProcessManager {
       await live.flushChain;
     } catch (error) {
       live.fail(error);
+    } finally {
+      this.live.delete(live.shellRunId);
     }
   }
 
@@ -491,6 +464,27 @@ export class ShellRunProcessManager {
       .filter((record) => record.status === 'running' || (record.observedAt === undefined && isTerminalShellRunStatus(record.status)))
       .sort(compareActionableShellRuns);
   }
+
+  private async renderResourceDetail(sessionId: string, shellRunId: string): Promise<string> {
+    let record = await this.input.store.readShellRun(sessionId, shellRunId);
+    if (record.status === 'running') {
+      const live = this.live.get(shellRunId);
+      if (live && live.sessionId === sessionId) {
+        if (live.settled) {
+          record = await live.finished;
+        } else {
+          await this.flushLive(live);
+          record = await this.input.store.readShellRun(sessionId, shellRunId);
+        }
+      } else {
+        record = await this.markOrphaned(record, 'missing live shell process handle during resource read');
+      }
+    }
+    if (isTerminalShellRunStatus(record.status)) {
+      record = await this.markObserved(record);
+    }
+    return renderShellRunResource(record);
+  }
 }
 
 function terminalContent(record: ShellRunRecord): TerminalToolResult {
@@ -502,7 +496,6 @@ function terminalContent(record: ShellRunRecord): TerminalToolResult {
   const status = terminalResultStatus(record.status);
   return {
     kind: 'terminal',
-    shellRunId: record.shellRunId,
     cwd: record.cwd,
     cmd: record.command,
     status,
@@ -532,7 +525,7 @@ function shellRunContent(record: ShellRunRecord, cancelled?: boolean): ShellRunT
   const stderr = truncateToolOutput(record.stderrTail, { direction: 'tail' });
   return {
     kind: 'shell_run',
-    shellRunId: record.shellRunId,
+    ref: shellRunResourceRef(record.shellRunId),
     status: record.status,
     cwd: record.cwd,
     cmd: record.command,
@@ -549,6 +542,24 @@ function shellRunContent(record: ShellRunRecord, cancelled?: boolean): ShellRunT
     ...(record.observedAt !== undefined ? { observedAt: record.observedAt } : {}),
     ...(record.orphanedReason !== undefined ? { orphanedReason: record.orphanedReason } : {}),
     ...(cancelled !== undefined ? { cancelled } : {}),
+  };
+}
+
+function shellRunRefContent(record: ShellRunRecord): ShellRunToolResult {
+  return {
+    kind: 'shell_run',
+    ref: shellRunResourceRef(record.shellRunId),
+    status: record.status,
+    cwd: record.cwd,
+    cmd: record.command,
+    startedAt: record.startedAt,
+    updatedAt: record.updatedAt,
+    ...(record.completedAt !== undefined ? { completedAt: record.completedAt } : {}),
+    ...(record.timeoutMs !== undefined ? { timeoutMs: record.timeoutMs } : {}),
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
   };
 }
 
@@ -593,6 +604,69 @@ function failureMessageFor(status: ShellRunStatus, timeoutMs: number | undefined
 function normalizeTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined) return undefined;
   return clampInt(value, 1, MAX_SHELL_RUN_TIMEOUT_MS);
+}
+
+export function shellRunResourceRef(shellRunId: string): string {
+  return `${SHELL_RUN_RESOURCE_PREFIX}/${encodeURIComponent(shellRunId)}`;
+}
+
+export function isShellRunResourceRef(ref: string): boolean {
+  return parseShellRunResourceRef(ref) !== null;
+}
+
+function parseShellRunResourceRef(ref: string): ShellRunResourceTarget | null {
+  let url: URL;
+  try {
+    url = new URL(ref);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== 'maka:'
+    || url.hostname !== 'runtime'
+    || url.username
+    || url.password
+    || url.port
+    || url.search
+    || url.hash
+  ) {
+    return null;
+  }
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length === 2 && parts[0] === 'background-tasks' && parts[1]) {
+    try {
+      return { shellRunId: decodeURIComponent(parts[1]) };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function renderShellRunResource(record: ShellRunRecord): string {
+  const stdout = truncateToolOutput(record.stdoutTail, { direction: 'tail' });
+  const stderr = truncateToolOutput(record.stderrTail, { direction: 'tail' });
+  const lines = [
+    'Background task',
+    `ref: ${shellRunResourceRef(record.shellRunId)}`,
+    `status: ${record.status}`,
+    `cwd: ${record.cwd}`,
+    `command: ${record.command}`,
+    `startedAt: ${record.startedAt}`,
+    `updatedAt: ${record.updatedAt}`,
+    record.completedAt !== undefined ? `completedAt: ${record.completedAt}` : '',
+    record.exitCode !== undefined ? `exitCode: ${record.exitCode}` : '',
+    record.timeoutMs !== undefined ? `timeoutMs: ${record.timeoutMs}` : '',
+    record.failureMessage ? `failureMessage: ${record.failureMessage}` : '',
+    record.orphanedReason ? `orphanedReason: ${record.orphanedReason}` : '',
+    '',
+    `stdout${record.stdoutTruncated || stdout.truncated ? ' (truncated)' : ''}:`,
+    stdout.content,
+    '',
+    `stderr${record.stderrTruncated || stderr.truncated ? ' (truncated)' : ''}:`,
+    stderr.content,
+  ];
+  return lines.filter((line, index) => line.length > 0 || index > 0).join('\n');
 }
 
 function clampInt(value: number, min: number, max: number): number {

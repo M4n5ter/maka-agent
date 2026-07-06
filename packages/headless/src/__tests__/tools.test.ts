@@ -200,9 +200,6 @@ describe('isolated headless tools', () => {
     assert.ok(!names.includes('todo_update'));
     assert.ok(!names.includes('self_check_plan_submit'));
     assert.ok(!names.includes('self_check_submit'));
-    assert.ok(!names.includes('ShellStatus'));
-    assert.ok(!names.includes('ShellWait'));
-    assert.ok(!names.includes('ShellCancel'));
     assert.ok(!names.some((name) => name.startsWith('task_')));
     assert.equal(names.filter((name) => name === 'Bash').length, 1);
     assert.deepEqual(buildChildAgentTools(tools).map((tool) => tool.name), ['Read', 'Glob', 'Grep']);

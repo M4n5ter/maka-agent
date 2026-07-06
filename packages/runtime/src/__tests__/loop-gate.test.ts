@@ -157,7 +157,7 @@ function makeShellRunTool(name: string, impl: string[], status: ObservedShellRun
       impl.push(`${name}:${JSON.stringify(args)}`);
       return {
         kind: 'shell_run',
-        shellRunId: 'shell-run-1',
+        ref: 'maka://runtime/background-tasks/shell-run-1',
         status,
         cwd: '/tmp/maka',
         cmd: 'cmd',
@@ -367,8 +367,8 @@ describe('loop-gate for repeated identical FAILING tool calls', () => {
   test('returned shell_run terminal states are observations, not tool failures', async () => {
     for (const status of observedShellRunStatuses) {
       const h = makeHarness();
-      const t = makeShellRunTool('ShellStatus', h.impl, status);
-      const args = { shell_run_id: 'shell-run-1' };
+      const t = makeShellRunTool('StopBackgroundTask', h.impl, status);
+      const args = { ref: 'maka://runtime/background-tasks/shell-run-1' };
 
       const result = await call(h, t, args);
       assert.equal((result as { kind?: string }).kind, 'shell_run', status);
@@ -380,13 +380,13 @@ describe('loop-gate for repeated identical FAILING tool calls', () => {
 
   test('repeated shell_run observations are not loop-gated by process status', async () => {
     const h = makeHarness();
-    const t = makeShellRunTool('ShellStatus', h.impl, 'timed_out');
-    const args = { shell_run_id: 'shell-run-1' };
+    const t = makeShellRunTool('StopBackgroundTask', h.impl, 'timed_out');
+    const args = { ref: 'maka://runtime/background-tasks/shell-run-1' };
 
     const runs = LOOP_GATE_IDENTICAL_THRESHOLD + 2;
     for (let i = 0; i < runs; i++) await call(h, t, args);
 
-    assert.equal(h.impl.length, runs, 'every ShellStatus poll ran');
+    assert.equal(h.impl.length, runs, 'every background-task observation ran');
     assert.equal(
       h.pushed.every((event) => event.type !== 'tool_result' || event.isError === false),
       true,

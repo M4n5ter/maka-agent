@@ -30,14 +30,14 @@ describe('builtin tool executor facts', () => {
 });
 
 describe('builtin Bash streaming output', () => {
-  test('background-capable Bash registers ShellRun controls and forwards yield_time_ms', async () => {
+  test('background-capable Bash returns runtime refs and forwards yield_time_ms', async () => {
     const calls: unknown[] = [];
     const shellRuns = {
       async runBash(input: unknown) {
         calls.push(input);
         return {
           kind: 'shell_run',
-          shellRunId: 'shell-run-1',
+          ref: 'maka://runtime/background-tasks/shell-run-1',
           status: 'running',
           cwd: '/workspace',
           cmd: 'sleep 60',
@@ -49,24 +49,18 @@ describe('builtin Bash streaming output', () => {
           stderrTruncated: false,
         };
       },
-      async status() {
-        return { kind: 'shell_run_list', shellRuns: [], overflow: 0 };
+      async readResource(sessionId: string, ref: string) {
+        return { content: `session=${sessionId} ref=${ref}` };
       },
-      async wait() {
-        throw new Error('not used');
-      },
-      async cancel() {
+      async stopResource() {
         throw new Error('not used');
       },
     } satisfies ShellRunToolController;
     const tools = buildBuiltinTools({ shellRuns });
     const names = tools.map((tool) => tool.name);
 
-    expect(names.includes('ShellStatus')).toBe(true);
-    expect(names.includes('ShellWait')).toBe(true);
-    expect(names.includes('ShellCancel')).toBe(true);
-    expect(tools.find((tool) => tool.name === 'ShellStatus')?.permissionRequired).toBe(false);
-
+    expect(names.filter((name) => name === 'Bash')).toHaveLength(1);
+    expect(names.includes('StopBackgroundTask')).toBe(true);
     const bash = tools.find((tool) => tool.name === 'Bash');
     if (!bash) throw new Error('Bash tool missing');
     const result = await bash.impl(
@@ -83,16 +77,100 @@ describe('builtin Bash streaming output', () => {
     );
 
     expect((result as { kind: string }).kind).toBe('shell_run');
+    expect((result as { ref?: string }).ref).toBe('maka://runtime/background-tasks/shell-run-1');
     expect((calls[0] as { yieldTimeMs?: number }).yieldTimeMs).toBe(1_234);
     expect((calls[0] as { timeoutMs?: number }).timeoutMs).toBe(2_000);
     expect((calls[0] as { sourceRunId?: string }).sourceRunId).toBe('run-1');
   });
 
-  test('foreground-only Bash does not register ShellRun controls', () => {
-    const names = buildBuiltinTools().map((tool) => tool.name);
-    expect(names.includes('ShellStatus')).toBe(false);
-    expect(names.includes('ShellWait')).toBe(false);
-    expect(names.includes('ShellCancel')).toBe(false);
+  test('Read treats runtime background task refs as whole resources', async () => {
+    const calls: unknown[] = [];
+    const shellRuns = {
+      async runBash() {
+        throw new Error('not used');
+      },
+      async readResource(sessionId: string, ref: string) {
+        calls.push({ sessionId, ref });
+        return { content: 'background task detail' };
+      },
+      async stopResource() {
+        throw new Error('not used');
+      },
+    } satisfies ShellRunToolController;
+    const read = buildBuiltinTools({ shellRuns }).find((tool) => tool.name === 'Read');
+    if (!read) throw new Error('Read tool missing');
+
+    const result = await read.impl(
+      { path: 'maka://runtime/background-tasks/shell-run-1', offset: 2, limit: 4 },
+      {
+        sessionId: 'session-1',
+        runId: 'run-1',
+        turnId: 'turn-1',
+        cwd: '/workspace',
+        toolCallId: 'tool-1',
+        abortSignal: new AbortController().signal,
+        emitOutput: () => {},
+      },
+    );
+
+    expect(result).toEqual({ content: 'background task detail' });
+    expect(calls).toEqual([{
+      sessionId: 'session-1',
+      ref: 'maka://runtime/background-tasks/shell-run-1',
+    }]);
+  });
+
+  test('StopBackgroundTask stops a runtime ref in the current session', async () => {
+    const calls: unknown[] = [];
+    const shellRuns = {
+      async runBash() {
+        throw new Error('not used');
+      },
+      async readResource() {
+        throw new Error('not used');
+      },
+      async stopResource(sessionId: string, ref: string) {
+        calls.push({ sessionId, ref });
+        return {
+          kind: 'shell_run',
+          ref,
+          status: 'cancelled',
+          cwd: '/workspace',
+          cmd: 'sleep 60',
+          startedAt: 1,
+          updatedAt: 2,
+          completedAt: 2,
+          exitCode: 130,
+          failureMessage: 'Command cancelled',
+          stdout: '',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          cancelled: true,
+        };
+      },
+    } satisfies ShellRunToolController;
+    const stop = buildBuiltinTools({ shellRuns }).find((tool) => tool.name === 'StopBackgroundTask');
+    if (!stop) throw new Error('StopBackgroundTask tool missing');
+
+    const result = await stop.impl(
+      { ref: 'maka://runtime/background-tasks/shell-run-1' },
+      {
+        sessionId: 'session-1',
+        runId: 'run-1',
+        turnId: 'turn-1',
+        cwd: '/workspace',
+        toolCallId: 'tool-1',
+        abortSignal: new AbortController().signal,
+        emitOutput: () => {},
+      },
+    );
+
+    expect(result).toMatchObject({ kind: 'shell_run', status: 'cancelled', cancelled: true });
+    expect(calls).toEqual([{
+      sessionId: 'session-1',
+      ref: 'maka://runtime/background-tasks/shell-run-1',
+    }]);
   });
 
   test('delegates Bash execution to an injected workspace executor', async () => {

@@ -772,7 +772,6 @@ function isToolResultContent(value: unknown): value is ToolResultContent {
     || kind === 'file_write'
     || kind === 'terminal'
     || kind === 'shell_run'
-    || kind === 'shell_run_list'
     || kind === 'image'
     || kind === 'archived_tool_result'
     || kind === 'summary'

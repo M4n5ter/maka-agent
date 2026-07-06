@@ -84,12 +84,12 @@ describe('Maka CLI runtime bootstrap', () => {
       });
       try {
         const names = context.tools.map((tool) => tool.name);
-        assert.ok(names.includes('ShellStatus'));
-        assert.ok(names.includes('ShellWait'));
-        assert.ok(names.includes('ShellCancel'));
+        assert.ok(names.includes('StopBackgroundTask'));
 
         const bash = context.tools.find((tool) => tool.name === 'Bash');
         assert.ok(bash);
+        const read = context.tools.find((tool) => tool.name === 'Read');
+        assert.ok(read);
         const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('start'); setTimeout(() => {}, 5000)"`;
         const result = await bash.impl(
           { command, yield_time_ms: 250 },
@@ -102,15 +102,30 @@ describe('Maka CLI runtime bootstrap', () => {
             abortSignal: new AbortController().signal,
             emitOutput: () => {},
           },
-        ) as { kind: string; shellRunId?: string; status?: string; stdout?: string };
+        ) as { kind: string; ref?: string; status?: string; stdout?: string };
 
         assert.equal(result.kind, 'shell_run');
         assert.equal(result.status, 'running');
-        assert.equal(result.stdout, 'start');
-        assert.ok(result.shellRunId);
+        assert.equal(result.stdout, '');
+        assert.ok(result.ref);
+        if (!result.ref) throw new Error('expected background task resource ref');
+
+        const detail = await read.impl(
+          { path: result.ref },
+          {
+            sessionId: 'session-1',
+            runId: 'run-1',
+            turnId: 'turn-1',
+            cwd: workspaceRoot,
+            toolCallId: 'tool-2',
+            abortSignal: new AbortController().signal,
+            emitOutput: () => {},
+          },
+        ) as { content?: string };
+        assert.match(detail.content ?? '', /stdout:\nstart/);
 
         await context.close();
-        const record = await createShellRunStore(workspaceRoot).readShellRun('session-1', result.shellRunId);
+        const record = await createShellRunStore(workspaceRoot).readShellRun('session-1', backgroundTaskId(result.ref));
         assert.equal(record.status, 'cancelled');
         assert.equal(record.exitCode, 130);
       } finally {
@@ -244,6 +259,12 @@ async function withWorkspace(fn: (workspaceRoot: string) => Promise<void>): Prom
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
+}
+
+function backgroundTaskId(ref: string): string {
+  const id = new URL(ref).pathname.split('/').pop();
+  if (!id) throw new Error(`Invalid background task ref: ${ref}`);
+  return decodeURIComponent(id);
 }
 
 async function withCleanContextBudgetEnv(fn: () => Promise<void>): Promise<void> {

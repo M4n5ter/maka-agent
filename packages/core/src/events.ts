@@ -161,7 +161,6 @@ export type ToolResultContent =
     }
   | {
       kind: 'terminal';
-      shellRunId?: string;
       cwd: string;
       cmd: string;
       status: TerminalToolResultStatus;
@@ -173,7 +172,7 @@ export type ToolResultContent =
     }
   | {
       kind: 'shell_run';
-      shellRunId: string;
+      ref: string;
       status: ShellRunStatus;
       cwd: string;
       cmd: string;
@@ -190,20 +189,6 @@ export type ToolResultContent =
       observedAt?: number;
       orphanedReason?: string;
       cancelled?: boolean;
-    }
-  | {
-      kind: 'shell_run_list';
-      shellRuns: ReadonlyArray<{
-        shellRunId: string;
-        status: ShellRunStatus;
-        cwd: string;
-        cmd: string;
-        startedAt: number;
-        updatedAt: number;
-        completedAt?: number;
-        observed: boolean;
-      }>;
-      overflow: number;
     }
   | { kind: 'image'; mimeType: string; ref: StorageRef }
   | { kind: 'summary'; original: string; summarized: string; reason: 'too_large' }

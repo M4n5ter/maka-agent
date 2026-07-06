@@ -22,7 +22,6 @@ describe('ShellRunProcessManager', () => {
     assert.equal(result.status, 'completed');
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout, 'hello');
-    assert.equal(result.shellRunId, 'shell-run-1');
 
     const record = await store.readShellRun('session-1', 'shell-run-1');
     assert.equal(record.status, 'completed');
@@ -47,7 +46,7 @@ describe('ShellRunProcessManager', () => {
     assert.equal(manager.liveCount(), 0);
   });
 
-  test('yields long commands as running ShellRuns and observes them on wait', async () => {
+  test('yields long commands as running ShellRuns and observes them through resource reads', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'maka-shell-run-'));
     const store = new MemoryShellRunStore();
     const manager = createManager(store);
@@ -60,26 +59,28 @@ describe('ShellRunProcessManager', () => {
 
     assert.equal(initial.kind, 'shell_run');
     assert.equal(initial.status, 'running');
-    assert.equal(initial.shellRunId, 'shell-run-1');
-    assert.equal(initial.stdout, 'start');
+    assert.equal(initial.ref, 'maka://runtime/background-tasks/shell-run-1');
+    assert.equal(initial.stdout, '');
     assert.equal(manager.liveCount(), 1);
+    if (!initial.ref) throw new Error('expected ShellRun resource ref');
 
-    const listed = await manager.status('session-1');
-    assert.equal(listed.kind, 'shell_run_list');
-    assert.deepEqual(listed.shellRuns.map((run) => [run.shellRunId, run.status]), [['shell-run-1', 'running']]);
+    const detail = await manager.readResource('session-1', initial.ref);
+    assert.match(detail.content, /status: running/);
+    assert.match(detail.content, /stdout:\nstart/);
 
-    const waited = await manager.wait('session-1', 'shell-run-1', 5_000);
-    assert.equal(waited.status, 'completed');
-    assert.equal(waited.stdout, 'startdone');
-    assert.ok(waited.observedAt !== undefined);
+    const summary = await manager.buildContextSummary('session-1');
+    assert.match(summary ?? '', /ref=maka:\/\/runtime\/background-tasks\/shell-run-1/);
+
+    await sleep(600);
+    const completed = await manager.readResource('session-1', initial.ref);
+    assert.match(completed.content, /status: completed/);
+    assert.match(completed.content, /stdout:\nstartdone/);
     assert.equal(manager.liveCount(), 0);
 
-    const afterObserve = await manager.status('session-1');
-    assert.equal(afterObserve.kind, 'shell_run_list');
-    assert.deepEqual(afterObserve.shellRuns, []);
+    assert.equal(await manager.buildContextSummary('session-1'), undefined);
   });
 
-  test('cancels running ShellRuns only after the process has exited', async () => {
+  test('stops running ShellRuns by runtime ref only after the process has exited', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'maka-shell-run-'));
     const store = new MemoryShellRunStore();
     const manager = createManager(store);
@@ -90,13 +91,76 @@ describe('ShellRunProcessManager', () => {
       yieldTimeMs: 250,
     }));
     assert.equal(initial.kind, 'shell_run');
+    if (!initial.ref) throw new Error('expected ShellRun resource ref');
 
-    const cancelled = await manager.cancel('session-1', initial.shellRunId);
+    const cancelled = await manager.stopResource('session-1', initial.ref);
     assert.equal(cancelled.status, 'cancelled');
     assert.equal(cancelled.cancelled, true);
     assert.equal(cancelled.exitCode, 130);
     assert.ok(cancelled.completedAt !== undefined);
     assert.equal(manager.liveCount(), 0);
+  });
+
+  test('reads a just-finished ShellRun without orphaning its durable record', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'maka-shell-run-'));
+    const store = new MemoryShellRunStore({ updateDelayMs: 300 });
+    const manager = createManager(store);
+
+    const initial = await manager.runBash(shellInput({
+      cwd,
+      command: 'printf "start"; sleep 0.2; printf "done"',
+      yieldTimeMs: 50,
+    }));
+    assert.equal(initial.kind, 'shell_run');
+    assert.equal(initial.ref, 'maka://runtime/background-tasks/shell-run-1');
+
+    const detail = await manager.readResource('session-1', initial.ref);
+    assert.match(detail.content, /status: completed/);
+    assert.match(detail.content, /stdout:\nstartdone/);
+
+    const stored = await store.readShellRun('session-1', 'shell-run-1');
+    assert.equal(stored.status, 'completed');
+    assert.equal(stored.orphanedReason, undefined);
+  });
+
+  test('stopping a just-finished ShellRun observes completion instead of orphaning it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'maka-shell-run-'));
+    const store = new MemoryShellRunStore({ updateDelayMs: 300 });
+    const manager = createManager(store);
+
+    const initial = await manager.runBash(shellInput({
+      cwd,
+      command: 'sleep 0.2',
+      yieldTimeMs: 50,
+    }));
+    assert.equal(initial.kind, 'shell_run');
+    assert.equal(initial.ref, 'maka://runtime/background-tasks/shell-run-1');
+
+    const stopped = await manager.stopResource('session-1', initial.ref);
+    assert.equal(stopped.status, 'completed');
+    assert.equal(stopped.cancelled, false);
+
+    const stored = await store.readShellRun('session-1', 'shell-run-1');
+    assert.equal(stored.status, 'completed');
+    assert.equal(stored.orphanedReason, undefined);
+  });
+
+  test('rejects list and malformed runtime resource refs', async () => {
+    const store = new MemoryShellRunStore();
+    const manager = createManager(store);
+
+    await assert.rejects(
+      manager.readResource('session-1', 'maka://runtime/background-tasks'),
+      /Unsupported runtime resource ref/,
+    );
+    await assert.rejects(
+      manager.readResource('session-1', 'maka://runtime/background-tasks/shell-run-1?view=tail'),
+      /Unsupported runtime resource ref/,
+    );
+    await assert.rejects(
+      manager.readResource('session-1', 'maka://runtime/background-tasks/shell-run-1#tail'),
+      /Unsupported runtime resource ref/,
+    );
   });
 
   test('aborting before the initial yield cancels instead of backgrounding', async () => {
@@ -119,9 +183,7 @@ describe('ShellRunProcessManager', () => {
     assert.equal(result.stdout, 'start');
     assert.equal(manager.liveCount(), 0);
 
-    const listed = await manager.status('session-1');
-    assert.equal(listed.kind, 'shell_run_list');
-    assert.deepEqual(listed.shellRuns, []);
+    assert.equal(await manager.buildContextSummary('session-1'), undefined);
   });
 
   test('marks durable running records without live handles as orphaned', async () => {
@@ -136,11 +198,9 @@ describe('ShellRunProcessManager', () => {
     const recovered = await manager.recoverOrphanedSession('session-1');
     assert.equal(recovered, 1);
 
-    const detail = await manager.status('session-1', 'orphan-1');
-    assert.equal(detail.kind, 'shell_run');
-    assert.equal(detail.status, 'orphaned');
-    assert.match(detail.orphanedReason ?? '', /runtime restarted/);
-    assert.ok(detail.observedAt !== undefined);
+    const detail = await manager.readResource('session-1', 'maka://runtime/background-tasks/orphan-1');
+    assert.match(detail.content, /status: orphaned/);
+    assert.match(detail.content, /orphanedReason: runtime restarted/);
   });
 
   test('context summary lists metadata without stdout or stderr tails', async () => {
@@ -155,11 +215,11 @@ describe('ShellRunProcessManager', () => {
     }));
 
     const summary = await manager.buildContextSummary('session-1');
-    assert.ok(summary?.includes('shellRunId=running-1'));
+    assert.ok(summary?.includes('ref=maka://runtime/background-tasks/running-1'));
     assert.ok(summary?.includes('visible-command'));
     assert.ok(!summary?.includes('stdout-secret'));
     assert.ok(!summary?.includes('stderr-secret'));
-    assert.ok(summary?.includes('Use ShellStatus'));
+    assert.ok(summary?.includes('Use Read'));
   });
 
   test('observing terminal ShellRuns does not compact the durable output tail', async () => {
@@ -175,10 +235,9 @@ describe('ShellRunProcessManager', () => {
       stdoutTail: largeStdout,
     }));
 
-    const detail = await manager.status('session-1', 'done-1');
-    assert.equal(detail.kind, 'shell_run');
-    assert.equal(detail.status, 'completed');
-    assert.ok(detail.stdout.length < largeStdout.length);
+    const detail = await manager.readResource('session-1', 'maka://runtime/background-tasks/done-1');
+    assert.match(detail.content, /status: completed/);
+    assert.ok(detail.content.length < largeStdout.length);
 
     const stored = await store.readShellRun('session-1', 'done-1');
     assert.equal(stored.stdoutTail, largeStdout);
@@ -189,7 +248,7 @@ describe('ShellRunProcessManager', () => {
 class MemoryShellRunStore implements ShellRunStore {
   private readonly records = new Map<string, Map<string, ShellRunRecord>>();
 
-  constructor(private readonly options: { createDelayMs?: number } = {}) {}
+  constructor(private readonly options: { createDelayMs?: number; updateDelayMs?: number } = {}) {}
 
   async createShellRun(record: ShellRunRecord): Promise<ShellRunRecord> {
     if (this.options.createDelayMs) await sleep(this.options.createDelayMs);
@@ -204,6 +263,7 @@ class MemoryShellRunStore implements ShellRunStore {
     shellRunId: string,
     patch: Partial<ShellRunRecord>,
   ): Promise<ShellRunRecord> {
+    if (this.options.updateDelayMs) await sleep(this.options.updateDelayMs);
     const session = this.session(sessionId);
     const current = session.get(shellRunId);
     if (!current) throw new Error(`ShellRun not found: ${shellRunId}`);

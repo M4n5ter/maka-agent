@@ -10,10 +10,11 @@ import { isAbsolute } from 'node:path';
 import { computeEditedSource } from './edit-replace.js';
 import {
   buildBackgroundBashTool,
-  buildShellRunControlTools,
+  buildStopBackgroundTaskTool,
   shapeTerminalResult,
 } from './shell-tools.js';
 import type { ShellRunToolController } from './shell-tools.js';
+import { isShellRunResourceRef } from './shell-run-manager.js';
 import {
   createLocalWorkspaceExecutor,
   type WorkspaceExecResult,
@@ -40,17 +41,20 @@ export interface BuildBuiltinToolsOptions {
 export function buildBuiltinTools(options: BuildBuiltinToolsOptions = {}): MakaTool[] {
   const executor = options.executor ?? createLocalWorkspaceExecutor();
   const executionFacts = executor.facts;
+  const readDescription = options.shellRuns
+    ? 'Read a file from disk by path relative to session cwd, or read a runtime background task ref.'
+    : 'Read a file from disk by path relative to session cwd.';
   const bashTools = options.shellRuns
     ? [
       buildBackgroundBashTool(options.shellRuns, { executionFacts }),
-      ...buildShellRunControlTools(options.shellRuns),
+      buildStopBackgroundTaskTool(options.shellRuns),
     ]
     : [buildExecutorBashTool(executor)];
   return [
     ...bashTools,
     {
       name: 'Read',
-      description: 'Read a file from disk by path relative to session cwd.',
+      description: readDescription,
       parameters: z.object({
         path: z.string(),
         offset: z.number().int().nonnegative().optional(),
@@ -58,7 +62,12 @@ export function buildBuiltinTools(options: BuildBuiltinToolsOptions = {}): MakaT
       }),
       permissionRequired: false,
       executionFacts,
-      impl: async ({ path, offset, limit }, { cwd }) => {
+      impl: async ({ path, offset, limit }, { cwd, sessionId }) => {
+        if (path.startsWith('maka://runtime/')) {
+          if (!isShellRunResourceRef(path)) throw new Error(`Unsupported runtime resource ref: ${path}`);
+          if (!options.shellRuns) throw new Error('Runtime background task resources are not available in this toolset');
+          return await options.shellRuns.readResource(sessionId, path);
+        }
         const { path: resolvedPath } = await executor.resolveExistingPath({ cwd, path, label: 'Read' });
         return await executor.readFile({
           cwd,

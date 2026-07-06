@@ -404,6 +404,10 @@ const toolAvailability: ToolAvailabilityConfig = {
     buildSubagentToolGroup(),
   ],
 };
+const webSearchTool = buildWebSearchAgentTool({
+  settingsStore,
+  getPrivacyContext: getWorkspacePrivacyContext,
+});
 const builtinTools: MakaTool[] = [
   ...buildBuiltinTools({ shellRuns }).filter((tool: MakaTool) => tool.name !== 'Edit'),
   // External reference lazy-skill pattern: the prompt lists available skills,
@@ -418,10 +422,7 @@ const builtinTools: MakaTool[] = [
   // over settingsStore so the renderer never sees the API key; the
   // permission engine routes it through the `web_read` policy which
   // prompts the user in explore / ask modes.
-  buildWebSearchAgentTool({
-    settingsStore,
-    getPrivacyContext: getWorkspacePrivacyContext,
-  }),
+  webSearchTool,
   // Session task ledger: model manages a flat task list; the current list is
   // re-injected each turn tail. Pure local state, so no permission gate.
   ...taskLedgerWiring.tools,
@@ -429,7 +430,12 @@ const builtinTools: MakaTool[] = [
   // group tools just need to be present so they are dispatchable once loaded.
   ...deferredTools,
 ];
-const childAgentTools = buildChildAgentTools(builtinTools);
+// Child agents stay file-only for local reads; parent runtime refs such as
+// maka://runtime/background-tasks/<id> are not part of their tool surface.
+const childAgentTools = buildChildAgentTools([
+  ...buildBuiltinTools().filter((tool: MakaTool) => tool.name !== 'Edit'),
+  webSearchTool,
+]);
 let lookupPricing = buildPricingLookup();
 // PR-BOT-LASTERROR-FROM-SEND-0: per-platform last-observed readiness so
 // we only persist `lastError` on transitions, not on every status emit
