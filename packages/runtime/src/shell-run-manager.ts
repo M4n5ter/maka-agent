@@ -126,11 +126,16 @@ export class ShellRunProcessManager {
     const initial = await Promise.race([
       live.finished.then(() => 'finished' as const),
       sleep(yieldTimeMs).then(() => 'yield' as const),
-      waitForAbort(input.abortSignal).then(() => 'yield' as const),
+      waitForAbort(input.abortSignal).then(() => 'abort' as const),
     ]);
     if (initial === 'finished') {
       const finished = await live.finished;
       return this.markObservedAndReturnTerminal(finished);
+    }
+    if (initial === 'abort') {
+      this.beginTermination(live, { kind: 'cancel' });
+      const cancelled = await live.finished;
+      return this.markObservedAndReturnTerminal(cancelled);
     }
 
     live.forwardLive = false;

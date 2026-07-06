@@ -99,6 +99,31 @@ describe('ShellRunProcessManager', () => {
     assert.equal(manager.liveCount(), 0);
   });
 
+  test('aborting before the initial yield cancels instead of backgrounding', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'maka-shell-run-'));
+    const store = new MemoryShellRunStore();
+    const manager = createManager(store);
+    const abort = new AbortController();
+
+    const result = await manager.runBash(shellInput({
+      cwd,
+      command: 'printf "start"; sleep 5',
+      yieldTimeMs: 30_000,
+      abortSignal: abort.signal,
+      emitOutput: () => abort.abort(),
+    }));
+
+    assert.equal(result.kind, 'terminal');
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.exitCode, 130);
+    assert.equal(result.stdout, 'start');
+    assert.equal(manager.liveCount(), 0);
+
+    const listed = await manager.status('session-1');
+    assert.equal(listed.kind, 'shell_run_list');
+    assert.deepEqual(listed.shellRuns, []);
+  });
+
   test('marks durable running records without live handles as orphaned', async () => {
     const store = new MemoryShellRunStore();
     const manager = createManager(store);
@@ -228,6 +253,8 @@ function shellInput(input: {
   cwd: string;
   command: string;
   yieldTimeMs?: number;
+  abortSignal?: AbortSignal;
+  emitOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void;
 }) {
   return {
     sessionId: 'session-1',
@@ -237,7 +264,8 @@ function shellInput(input: {
     cwd: input.cwd,
     command: input.command,
     ...(input.yieldTimeMs !== undefined ? { yieldTimeMs: input.yieldTimeMs } : {}),
-    emitOutput: () => {},
+    ...(input.abortSignal !== undefined ? { abortSignal: input.abortSignal } : {}),
+    emitOutput: input.emitOutput ?? (() => {}),
   };
 }
 
