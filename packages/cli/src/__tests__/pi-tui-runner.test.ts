@@ -205,6 +205,110 @@ describe('Maka Pi TUI runner', () => {
     ]);
   });
 
+  test('inspects exact WriteStdin input and allows it without turn memory', async () => {
+    const terminal = new FakeTerminal();
+    const hiddenSuffix = '\u001b[31mrm -rf /tmp/hidden-suffix\r';
+    const driver = new PermissionPromptDriver({
+      toolName: 'WriteStdin',
+      args: {
+        ref: 'maka://runtime/background-tasks/pty-1',
+        input: `password=super-secret ${'x'.repeat(200)}${hiddenSuffix}`,
+        size: { cols: 120, rows: 40 },
+      },
+      canRememberForTurn: false,
+    });
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'claude-sonnet-4-5',
+      connectionSlug: 'claude-subscription',
+      permissionMode: 'ask',
+      terminal,
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await waitFor(() => driver.permissionRequests === 1);
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('Ctrl+O show full parameters'));
+    const collapsed = plainTerminalOutput(terminal.screenOutput());
+    assert.doesNotMatch(collapsed, /super-secret/);
+    assert.doesNotMatch(collapsed, /hidden-suffix/);
+
+    terminal.input('\x0f');
+    await waitFor(() => plainTerminalOutput(terminal.output()).includes('hidden-suffix\\r'));
+    const expanded = plainTerminalOutput(terminal.output());
+    assert.match(expanded, /super-secret/);
+    assert.match(expanded, /\\u\{001B\}\[31mrm -rf/);
+    assert.match(expanded, /\/tmp\/hidden-suffix\\r/);
+    assert.doesNotMatch(terminal.output(), /\u001b\[31mrm -rf/);
+
+    terminal.input('y');
+    await waitFor(() => driver.permissionResponses.length === 1);
+    assert.deepEqual(driver.permissionResponses, [{
+      requestId: 'permission-1',
+      decision: 'allow',
+    }]);
+
+    exitMaka(terminal);
+    await Promise.race([
+      run,
+      delay(50).then(() => {
+        throw new Error('TUI did not close during test cleanup');
+      }),
+    ]);
+  });
+
+  test('answers parallel WriteStdin permission requests in FIFO order', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new PermissionPromptDriver([
+      {
+        toolName: 'WriteStdin',
+        args: { ref: 'maka://runtime/background-tasks/pty-1', input: 'first\r' },
+        canRememberForTurn: false,
+      },
+      {
+        toolName: 'WriteStdin',
+        args: { ref: 'maka://runtime/background-tasks/pty-2', input: 'second\r' },
+        canRememberForTurn: false,
+      },
+    ]);
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'claude-sonnet-4-5',
+      connectionSlug: 'claude-subscription',
+      permissionMode: 'ask',
+      terminal,
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await waitFor(() => driver.permissionRequests === 2);
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('pty-1'));
+    assert.doesNotMatch(plainTerminalOutput(terminal.screenOutput()), /pty-2/);
+
+    terminal.input('y');
+    await waitFor(() => driver.permissionResponses.length === 1);
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('pty-2'));
+
+    terminal.input('n');
+    await waitFor(() => driver.permissionResponses.length === 2);
+    assert.deepEqual(driver.permissionResponses, [
+      { requestId: 'permission-1', decision: 'allow' },
+      { requestId: 'permission-2', decision: 'deny' },
+    ]);
+
+    exitMaka(terminal);
+    await Promise.race([
+      run,
+      delay(50).then(() => {
+        throw new Error('TUI did not close during test cleanup');
+      }),
+    ]);
+  });
+
   test('denies a pending permission request from the terminal', async () => {
     const terminal = new FakeTerminal();
     const driver = new PermissionPromptDriver();
@@ -2867,11 +2971,26 @@ class RejectingStopDriver implements MakaSessionDriver {
   }
 }
 
+interface PermissionPromptRequest {
+  toolName: string;
+  args: unknown;
+  canRememberForTurn: boolean;
+}
+
 class PermissionPromptDriver implements MakaSessionDriver {
   readonly permissionResponses: PermissionResponse[] = [];
   permissionRequests = 0;
   stopCalls = 0;
   private continueAfterPermission: (() => void) | null = null;
+  private readonly requests: readonly PermissionPromptRequest[];
+
+  constructor(request: PermissionPromptRequest | readonly PermissionPromptRequest[] = {
+    toolName: 'Bash',
+    args: { command: 'npm test' },
+    canRememberForTurn: true,
+  }) {
+    this.requests = Array.isArray(request) ? request : [request];
+  }
 
   async listSessions(): Promise<SessionSummary[]> {
     return [];
@@ -2880,37 +2999,46 @@ class PermissionPromptDriver implements MakaSessionDriver {
   async *compactSession(): AsyncIterable<never> {}
 
   async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
-    this.permissionRequests += 1;
-    yield {
-      type: 'permission_request',
-      id: 'event-permission',
-      turnId: 'turn-1',
-      ts: 1,
-      requestId: 'permission-1',
-      toolUseId: 'tool-1',
-      toolName: 'Bash',
-      category: 'shell_unsafe',
-      reason: 'shell_dangerous',
-      args: { command: 'npm test' },
-    };
-    await new Promise<void>((resolve) => {
-      this.continueAfterPermission = resolve;
-    });
-    yield {
-      type: 'permission_decision_ack',
-      id: 'event-decision',
-      turnId: 'turn-1',
-      ts: 2,
-      requestId: 'permission-1',
-      toolUseId: 'tool-1',
-      decision: 'allow',
-      rememberForTurn: true,
-    };
+    for (const [index, request] of this.requests.entries()) {
+      this.permissionRequests += 1;
+      yield {
+        type: 'permission_request',
+        id: `event-permission-${index + 1}`,
+        turnId: 'turn-1',
+        ts: index + 1,
+        requestId: `permission-${index + 1}`,
+        toolUseId: `tool-${index + 1}`,
+        toolName: request.toolName,
+        category: 'shell_unsafe',
+        reason: 'shell_dangerous',
+        args: request.args,
+        canRememberForTurn: request.canRememberForTurn,
+      };
+    }
+    if (this.permissionResponses.length < this.requests.length) {
+      await new Promise<void>((resolve) => {
+        this.continueAfterPermission = resolve;
+      });
+    }
+    for (const [index, response] of this.permissionResponses.entries()) {
+      yield {
+        type: 'permission_decision_ack',
+        id: `event-decision-${index + 1}`,
+        turnId: 'turn-1',
+        ts: this.requests.length + index + 1,
+        requestId: response.requestId,
+        toolUseId: `tool-${index + 1}`,
+        decision: response.decision,
+        ...(response.rememberForTurn !== undefined
+          ? { rememberForTurn: response.rememberForTurn }
+          : {}),
+      };
+    }
     yield {
       type: 'complete',
       id: 'event-complete',
       turnId: 'turn-1',
-      ts: 3,
+      ts: this.requests.length * 2 + 1,
       stopReason: 'end_turn',
     };
   }
@@ -2921,7 +3049,9 @@ class PermissionPromptDriver implements MakaSessionDriver {
 
   async respondToPermission(response: PermissionResponse): Promise<void> {
     this.permissionResponses.push(response);
-    this.continueAfterPermission?.();
+    if (this.permissionResponses.length >= this.requests.length) {
+      this.continueAfterPermission?.();
+    }
   }
   async renameSession(): Promise<void> {}
   async setModel(): Promise<void> {}
@@ -3444,6 +3574,7 @@ class RejectingPermissionDriver implements MakaSessionDriver {
       category: 'shell_unsafe',
       reason: 'shell_dangerous',
       args: { command: 'npm test' },
+      canRememberForTurn: true,
     };
     // The turn stays parked while the permission is unresolved.
     await new Promise<void>(() => {});
@@ -3516,6 +3647,7 @@ class PermissionThenErrorDriver implements MakaSessionDriver {
       category: 'shell_unsafe',
       reason: 'shell_dangerous',
       args: { command: 'npm test' },
+      canRememberForTurn: true,
     };
     await new Promise<void>((resolve) => {
       this.resolveContinue = resolve;

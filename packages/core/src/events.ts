@@ -7,7 +7,7 @@
  * Connection-setup events live in ./connections.ts (separate channel).
  */
 
-import type { PermissionMode, PermissionRequest, PermissionResponse, ToolCategory } from './permission.js';
+import type { PermissionMode, PermissionRequest, PermissionResponse } from './permission.js';
 import type {
   PipeShellOutput,
   PtyShellOutput,
@@ -388,23 +388,8 @@ export interface ShellRunUpdate {
   result: ShellRunStateResult;
 }
 
-export interface PermissionRequestEvent extends BaseEvent {
+export interface PermissionRequestEvent extends BaseEvent, PermissionRequest {
   type: 'permission_request';
-  requestId: string;
-  toolUseId: string;
-  toolName: string;
-  category: ToolCategory;
-  reason:
-    | 'shell_dangerous'
-    | 'file_write'
-    | 'fs_destructive'
-    | 'network'
-    | 'git_destructive'
-    | 'privileged'
-    | 'browser'
-    | 'custom';
-  args: unknown;
-  hint?: string;
 }
 
 /**

@@ -5627,6 +5627,96 @@ describe('AiSdkBackend tool permission category hints', () => {
     );
   });
 
+  test('isolates authorized tool args from mutable event consumers', async () => {
+    const initialArgs = {
+      ref: 'maka://runtime/background-tasks/pty-1',
+      input: 'approved\r',
+      size: { cols: 120, rows: 40 },
+    };
+    const providerArgs = structuredClone(initialArgs);
+    const messages: unknown[] = [];
+    const events: SessionEvent[] = [];
+    const permissionEngine = new PermissionEngine({ newId: idGenerator(), now: () => 1 });
+    let implementationArgs: unknown;
+    const mutateArgs = (value: unknown, input: string, cols: number): void => {
+      const mutable = value as typeof initialArgs;
+      mutable.input = input;
+      mutable.size.cols = cols;
+    };
+    const backend = new AiSdkBackend({
+      sessionId: 'session-1',
+      header: header('ask'),
+      appendMessage: async (message) => {
+        messages.push(message);
+        if (message.type === 'tool_call') {
+          mutateArgs(message.args, 'changed-by-storage\r', 81);
+        }
+      },
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'claude-sonnet-4-5-20250929',
+      permissionEngine,
+      modelFactory: () => ({}),
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      permissionTimeoutMs: 1_000,
+    });
+    const tool: MakaTool = {
+      name: 'WriteStdin',
+      description: 'interact with a terminal',
+      parameters: {},
+      permissionRequired: true,
+      impl: async (args) => {
+        implementationArgs = structuredClone(args);
+        return { kind: 'text', text: 'accepted' };
+      },
+    };
+    const execute = (backend as unknown as {
+      wrapToolExecute(
+        tool: MakaTool,
+        turnId: string,
+        queue: { push(event: SessionEvent): void },
+      ): (args: unknown, ctx: { toolCallId: string; abortSignal: AbortSignal }) => Promise<unknown>;
+    }).wrapToolExecute(tool, 'turn-1', {
+      push: (event) => {
+        events.push(event);
+        if (event.type === 'tool_start') {
+          mutateArgs(event.args, 'changed-by-tool-start\r', 82);
+        }
+        if (event.type === 'permission_request') {
+          mutateArgs(event.args, 'changed-by-permission\r', 83);
+        }
+      },
+    });
+
+    const pending = execute(
+      providerArgs,
+      { toolCallId: 'tool-1', abortSignal: new AbortController().signal },
+    );
+    mutateArgs(providerArgs, 'changed-by-provider\r', 84);
+    await waitFor(() => events.some((event) => event.type === 'permission_request'));
+    const request = events.find((event) => event.type === 'permission_request');
+    assert.ok(request?.type === 'permission_request');
+    permissionEngine.recordResponse('turn-1', {
+      requestId: request.requestId,
+      decision: 'allow',
+    });
+    await pending;
+
+    assert.deepEqual(implementationArgs, initialArgs);
+    const storedCall = messages.find((message) => (message as { type?: string }).type === 'tool_call') as
+      | { args: unknown }
+      | undefined;
+    const toolStart = events.find((event) => event.type === 'tool_start');
+    assert.equal((storedCall?.args as typeof initialArgs | undefined)?.input, 'changed-by-storage\r');
+    assert.equal(toolStart?.type === 'tool_start'
+      ? (toolStart.args as typeof initialArgs).input
+      : undefined, 'changed-by-tool-start\r');
+    assert.equal((request.args as typeof initialArgs).input, 'changed-by-permission\r');
+    assert.equal(providerArgs.input, 'changed-by-provider\r');
+  });
+
   test('tool failure telemetry classifies and redacts generic implementation errors', async () => {
     const messages: unknown[] = [];
     const events: SessionEvent[] = [];

@@ -246,7 +246,10 @@ export class ToolRuntime {
   ): Promise<unknown> {
     const toolUseId = ctx.toolCallId;
     const now = this.input.now();
-    const toolIntent = describeToolIntent(tool, args);
+    // Keep the invocation snapshot private; every externally held payload gets
+    // its own copy so an event consumer cannot change what the tool executes.
+    const canonicalArgs = structuredClone(args);
+    const toolIntent = describeToolIntent(tool, canonicalArgs);
     const trace = this.input.getRunTrace?.() ?? null;
 
     const stepId = this.input.getCurrentStepId?.();
@@ -259,7 +262,7 @@ export class ToolRuntime {
       ...(tool.activityKind ? { activityKind: tool.activityKind } : {}),
       ...(tool.displayName ? { displayName: tool.displayName } : {}),
       ...(toolIntent ? { intent: toolIntent } : {}),
-      args,
+      args: structuredClone(canonicalArgs),
       // Persist the same step id the tool_start event carries so the UI
       // timeline and post-restart backfill can pair this call with its step.
       ...(stepId !== undefined ? { stepId } : {}),
@@ -273,7 +276,7 @@ export class ToolRuntime {
       toolUseId,
       toolName: tool.name,
       ...(tool.activityKind ? { activityKind: tool.activityKind } : {}),
-      args,
+      args: structuredClone(canonicalArgs),
       ...(tool.displayName ? { displayName: tool.displayName } : {}),
       ...(toolIntent ? { intent: toolIntent } : {}),
       ...(stepId !== undefined ? { stepId } : {}),
@@ -296,7 +299,7 @@ export class ToolRuntime {
     // so polling and iterate-then-retry are never gated. Recoverable: the model
     // is told to change its approach. The block itself records no outcome, so the
     // streak stays parked and every further identical repeat stays blocked.
-    const callSignature = `${tool.name} ${loopGateArgsKey(args, toolUseId)}`;
+    const callSignature = `${tool.name} ${loopGateArgsKey(canonicalArgs, toolUseId)}`;
     if (
       callSignature === this.lastFailedToolCallSignature
       && this.failedToolCallStreak >= LOOP_GATE_IDENTICAL_THRESHOLD - 1
@@ -338,7 +341,7 @@ export class ToolRuntime {
         turnId,
         toolUseId,
         toolName: tool.name,
-        args,
+        args: structuredClone(canonicalArgs),
         ...(tool.categoryHint !== undefined ? { categoryHint: tool.categoryHint } : {}),
         ...(tool.executionFacts !== undefined ? { executionFacts: tool.executionFacts } : {}),
         permissionRequired: tool.permissionRequired !== false,
@@ -496,7 +499,7 @@ export class ToolRuntime {
       pauseTarget?.pause();
       try {
         const runId = this.input.getCurrentRunId?.();
-        const result = await tool.impl(args as never, {
+        const result = await tool.impl(structuredClone(canonicalArgs) as never, {
           sessionId: this.input.sessionId,
           turnId,
           ...(runId ? { runId } : {}),
@@ -544,8 +547,8 @@ export class ToolRuntime {
           modelId: this.input.modelId,
           durationMs,
           status: toolResultStatus,
-          argsSummary: summarizeArgs(tool.name, args),
-          bytesIn: byteLength(args),
+          argsSummary: summarizeArgs(tool.name, canonicalArgs),
+          bytesIn: byteLength(canonicalArgs),
           bytesOut: byteLength(result),
           startedAt,
         });
@@ -563,7 +566,7 @@ export class ToolRuntime {
             toolUseId,
             toolName: tool.name,
             cwd: this.input.header.cwd,
-            args,
+            args: structuredClone(canonicalArgs),
             result,
           },
           this.input.recordToolArtifacts,
@@ -586,7 +589,7 @@ export class ToolRuntime {
       }
     } catch (err) {
       output.flush();
-      const terminalFailure = coerceTerminalFailure(tool, this.input.header.cwd, args, err);
+      const terminalFailure = coerceTerminalFailure(tool, this.input.header.cwd, canonicalArgs, err);
       if (terminalFailure) {
         const durationMs = Math.max(0, this.input.now() - startedAt);
         const resultMsg: ToolResultMessage = {
@@ -620,8 +623,8 @@ export class ToolRuntime {
           durationMs,
           status: 'error',
           errorClass: classifyError(err),
-          argsSummary: summarizeArgs(tool.name, args),
-          bytesIn: byteLength(args),
+          argsSummary: summarizeArgs(tool.name, canonicalArgs),
+          bytesIn: byteLength(canonicalArgs),
           bytesOut: byteLength(terminalFailure.content),
           startedAt,
         });
@@ -646,8 +649,8 @@ export class ToolRuntime {
         durationMs: Math.max(0, this.input.now() - startedAt),
         status: 'error',
         errorClass: classifyError(err),
-        argsSummary: summarizeArgs(tool.name, args),
-        bytesIn: byteLength(args),
+        argsSummary: summarizeArgs(tool.name, canonicalArgs),
+        bytesIn: byteLength(canonicalArgs),
         bytesOut: 0,
         startedAt,
       });

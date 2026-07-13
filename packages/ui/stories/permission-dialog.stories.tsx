@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { PermissionRequestEvent, ToolCategory } from '@maka/core';
+import { expect, fn, userEvent, within } from 'storybook/test';
+import type { PermissionRequestEvent, PermissionResponse, ToolCategory } from '@maka/core';
 import { PermissionDialog } from '../src/permission-dialog.js';
 
 const meta = {
@@ -23,6 +24,7 @@ function makeRequest(input: {
   args: unknown;
   hint?: string;
   ageMs?: number;
+  canRememberForTurn?: boolean;
 }): PermissionRequestEvent {
   return {
     id: `evt-${input.requestId}`,
@@ -34,6 +36,7 @@ function makeRequest(input: {
     category: input.category,
     reason: input.reason,
     args: input.args,
+    canRememberForTurn: input.canRememberForTurn ?? true,
     ts: NOW - (input.ageMs ?? 0),
     ...(input.hint ? { hint: input.hint } : {}),
   };
@@ -57,6 +60,29 @@ function DialogBackdrop(props: { children: React.ReactNode }) {
 
 const noop = () => undefined;
 
+const writeStdinRequest = makeRequest({
+  requestId: 'req-stdin',
+  toolName: 'WriteStdin',
+  category: 'shell_unsafe',
+  reason: 'shell_dangerous',
+  args: {
+    ref: 'maka://runtime/background-tasks/pty-1',
+    input: `password=super-secret ${'diagnostic '.repeat(24)}\u001b[31mrm -rf /tmp/example\r`,
+    size: { cols: 120, rows: 40 },
+  },
+  canRememberForTurn: false,
+});
+
+function WriteStdinDialog(props: {
+  onRespond(response: PermissionResponse): void | Promise<void>;
+}) {
+  return (
+    <DialogBackdrop>
+      <PermissionDialog request={writeStdinRequest} onRespond={props.onRespond} />
+    </DialogBackdrop>
+  );
+}
+
 export const ShellDangerous: Story = {
   render: () => (
     <DialogBackdrop>
@@ -73,6 +99,43 @@ export const ShellDangerous: Story = {
       />
     </DialogBackdrop>
   ),
+};
+
+export const WriteStdin: Story = {
+  render: () => <WriteStdinDialog onRespond={noop} />,
+};
+
+const writeStdinRespond = fn();
+
+export const WriteStdinInteraction: Story = {
+  render: () => <WriteStdinDialog onRespond={writeStdinRespond} />,
+  play: async ({ canvasElement }) => {
+    writeStdinRespond.mockClear();
+    const document = canvasElement.ownerDocument;
+    const body = within(document.body);
+    const collapsedText = document.body.textContent ?? '';
+
+    await expect(collapsedText).toContain('maka://runtime/background-tasks/pty-1');
+    await expect(collapsedText).toContain('120x40');
+    await expect(collapsedText).not.toContain('super-secret');
+    await expect(collapsedText).not.toContain('/tmp/example');
+    await expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+
+    await userEvent.click(body.getByRole('button', { name: '查看完整参数' }));
+    const inspection = document.querySelector<HTMLElement>('.maka-permission-raw .maka-code');
+    await expect(inspection).not.toBeNull();
+    const inspectionText = inspection?.textContent ?? '';
+    await expect(inspectionText).toContain('super-secret');
+    await expect(inspectionText).toContain(String.raw`\u{001B}[31mrm -rf /tmp/example\r`);
+    await expect(inspectionText).not.toContain('\u001b');
+    await expect(inspectionText).toContain('size: 120x40');
+
+    await userEvent.click(body.getByRole('button', { name: '允许' }));
+    await expect(writeStdinRespond).toHaveBeenCalledWith({
+      requestId: 'req-stdin',
+      decision: 'allow',
+    });
+  },
 };
 
 export const FileWrite: Story = {

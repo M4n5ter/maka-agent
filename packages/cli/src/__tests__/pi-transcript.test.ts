@@ -17,6 +17,7 @@ import {
   submitPromptToTranscript,
   toggleAllThinkingExpansion,
   toggleAllToolExpansion,
+  togglePendingPermissionDetails,
 } from '../pi-transcript.js';
 
 describe('Maka Pi TUI transcript', () => {
@@ -644,6 +645,7 @@ describe('Maka Pi TUI transcript', () => {
       category: 'shell_unsafe',
       reason: 'shell_dangerous',
       args: { command: 'npm test' },
+      canRememberForTurn: true,
       hint: 'Run tests before editing.',
     }));
 
@@ -655,12 +657,97 @@ describe('Maka Pi TUI transcript', () => {
       permissionMode: 'ask',
     }, 100).map(stripAnsi);
 
-    assert.equal(state.pendingPermission?.requestId, 'permission-1');
+    assert.equal(state.pendingPermissions[0]?.requestId, 'permission-1');
     assert.ok(visibleLines.some((line) => line.includes('Permission required')));
     assert.ok(visibleLines.some((line) => line.includes('Bash')));
     assert.ok(visibleLines.some((line) => line.includes('npm test')));
     assert.ok(visibleLines.some((line) => line.includes('y/Enter allow')));
     assert.ok(visibleLines.some((line) => line.includes('n/Esc deny')));
+  });
+
+  test('keeps WriteStdin permission details bounded until explicitly expanded', () => {
+    const state = createMakaPiTranscriptState();
+    const hiddenSuffix = '\u001b[31mrm -rf /tmp/hidden-suffix\r';
+    applyMakaSessionEventToTranscript(state, event({
+      type: 'permission_request',
+      requestId: 'permission-stdin',
+      toolUseId: 'tool-stdin',
+      toolName: 'WriteStdin',
+      category: 'shell_unsafe',
+      reason: 'shell_dangerous',
+      args: {
+        ref: 'maka://runtime/background-tasks/pty-1',
+        input: `password=super-secret ${'x'.repeat(200)}${hiddenSuffix}`,
+        size: { cols: 120, rows: 40 },
+      },
+      canRememberForTurn: false,
+    }));
+
+    const collapsed = renderMakaPiTranscript(state, meta(), 120).map(stripAnsi).join('\n');
+    assert.match(collapsed, /maka:\/\/runtime\/background-tasks\/pty-1/);
+    assert.match(collapsed, /size: 120x40/);
+    assert.doesNotMatch(collapsed, /super-secret/);
+    assert.doesNotMatch(collapsed, /hidden-suffix/);
+
+    assert.equal(togglePendingPermissionDetails(state), true);
+    const rawExpanded = renderMakaPiTranscript(state, meta(), 120).join('\n');
+    const expanded = stripAnsi(rawExpanded);
+    assert.match(expanded, /super-secret/);
+    assert.match(expanded, /\\u\{001B\}\[31mrm -rf/);
+    assert.match(expanded, /\/tmp\/hidden-suffix\\r/);
+    assert.doesNotMatch(rawExpanded, /\u001b\[31mrm -rf/);
+
+    applyMakaSessionEventToTranscript(state, event({
+      type: 'permission_decision_ack',
+      requestId: 'permission-stdin',
+      toolUseId: 'tool-stdin',
+      decision: 'allow',
+    }));
+    assert.equal(state.expandedPermissionRequestId, undefined);
+  });
+
+  test('queues parallel permissions without losing an earlier request', () => {
+    const state = createMakaPiTranscriptState();
+    for (const index of [1, 2]) {
+      applyMakaSessionEventToTranscript(state, event({
+        type: 'permission_request',
+        requestId: `permission-${index}`,
+        toolUseId: `tool-${index}`,
+        toolName: 'WriteStdin',
+        category: 'shell_unsafe',
+        reason: 'shell_dangerous',
+        args: {
+          ref: `maka://runtime/background-tasks/pty-${index}`,
+          input: `${index}\r`,
+        },
+        canRememberForTurn: false,
+      }));
+    }
+
+    assert.deepEqual(state.pendingPermissions.map((request) => request.requestId), [
+      'permission-1',
+      'permission-2',
+    ]);
+    assert.equal(togglePendingPermissionDetails(state), true);
+    assert.equal(state.expandedPermissionRequestId, 'permission-1');
+
+    applyMakaSessionEventToTranscript(state, event({
+      type: 'permission_decision_ack',
+      requestId: 'permission-2',
+      toolUseId: 'tool-2',
+      decision: 'allow',
+    }));
+    assert.deepEqual(state.pendingPermissions.map((request) => request.requestId), ['permission-1']);
+    assert.equal(state.expandedPermissionRequestId, 'permission-1');
+
+    applyMakaSessionEventToTranscript(state, event({
+      type: 'tool_result',
+      toolUseId: 'tool-1',
+      isError: true,
+      content: { kind: 'text', text: 'permission expired' },
+    }));
+    assert.deepEqual(state.pendingPermissions, []);
+    assert.equal(state.expandedPermissionRequestId, undefined);
   });
 
   test('orders thinking entries by arrival, before text and around tools', () => {

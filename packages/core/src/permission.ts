@@ -506,6 +506,7 @@ export function preToolUse(input: PreToolUseInput): PreToolUseResult {
   // (2) Policy lookup + turn-remembered check
   const decision = PERMISSION_POLICY[input.mode][category];
   const scopeKey = permissionScopeKey(input.toolName, input.args, category);
+  const canRememberForTurn = input.toolName !== 'WriteStdin';
   if (decision === 'allow') {
     return { proceed: true, needsPrompt: false, category, scopeKey };
   }
@@ -518,7 +519,7 @@ export function preToolUse(input: PreToolUseInput): PreToolUseResult {
       blockReason: `Tool category "${category}" is blocked in mode "${input.mode}"`,
     };
   }
-  if (input.turnRemembered.has(scopeKey)) {
+  if (canRememberForTurn && input.turnRemembered.has(scopeKey)) {
     return { proceed: true, needsPrompt: false, category, scopeKey };
   }
 
@@ -533,6 +534,7 @@ export function preToolUse(input: PreToolUseInput): PreToolUseResult {
       category,
       reason: categoryToReason(category),
       args: input.args,
+      canRememberForTurn,
     },
   };
 }
@@ -556,8 +558,6 @@ export function permissionScopeKey(toolName: string, args: unknown, category: To
       return `${category}:${toolName}:${stringArg(args, 'path')}:${stringArg(args, 'glob')}:${stringArg(args, 'pattern')}`;
     case 'Bash':
       return `${category}:${toolName}:${normalizeScopeText(stringArg(args, 'command'))}`;
-    case 'WriteStdin':
-      return `${category}:${toolName}:${writeStdinScopeArgs(args)}`;
     case 'WebSearch':
       return `${category}:${toolName}:${stringArg(args, 'query')}`;
     default:
@@ -578,19 +578,6 @@ function normalizeScopeText(value: string): string {
 function stableScopeJson(value: unknown): string {
   const json = JSON.stringify(normalizeForScope(value, new WeakSet<object>()));
   return (json ?? String(value)).slice(0, 1024);
-}
-
-function writeStdinScopeArgs(args: unknown): string {
-  const value = args && typeof args === 'object' && !Array.isArray(args)
-    ? args as Record<string, unknown>
-    : {};
-  const sideEffect: Record<string, unknown> = {
-    ref: typeof value.ref === 'string' ? value.ref : '',
-  };
-  if (typeof value.input === 'string') sideEffect.input = value.input;
-  if (value.size !== undefined) sideEffect.size = value.size;
-  const json = JSON.stringify(normalizeForScope(sideEffect, new WeakSet<object>()));
-  return json ?? String(sideEffect);
 }
 
 function normalizeForScope(value: unknown, seen: WeakSet<object>): unknown {
@@ -645,6 +632,7 @@ export interface PermissionRequest {
     | 'browser'
     | 'custom';
   args: unknown;
+  canRememberForTurn: boolean;
   hint?: string;
 }
 

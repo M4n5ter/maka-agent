@@ -99,6 +99,7 @@ function baseEvents(): RuntimeEvent[] {
           category: 'read',
           reason: 'custom',
           args: { path: '/tmp/a.txt' },
+          canRememberForTurn: true,
           hint: 'needs read access',
         },
       },

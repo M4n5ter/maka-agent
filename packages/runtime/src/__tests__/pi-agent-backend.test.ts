@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { BackendKind, SessionEvent, SessionHeader, StoredMessage } from '@maka/core';
 
+import { mapSessionEventToRuntimeEvent } from '../ai-sdk-flow.js';
+import type { InvocationContext } from '../invocation-context.js';
 import { PermissionEngine } from '../permission-engine.js';
 import {
   PiAgentBackend,
@@ -212,6 +214,120 @@ describe('PiAgentBackend skeleton', () => {
     const third = await iterator.next();
     assert.equal(third.value?.type, 'tool_result');
     assert.equal(third.value?.type === 'tool_result' ? third.value.isError : false, true);
+  });
+
+  test('keeps canonical, permission, and Pi tool-start args exact', async () => {
+    const messages: StoredMessage[] = [];
+    const args = {
+      ref: 'maka://runtime/background-tasks/pty-1',
+      input: `password=super-secret ${'x'.repeat(200)}\u001b[31mhidden-suffix\r`,
+      size: { cols: 120, rows: 40 },
+    };
+    const backend = new PiAgentBackend({
+      sessionId: 'session-1',
+      header: header({ permissionMode: 'ask' }),
+      appendMessage: async (message) => { messages.push(message); },
+      permissionEngine: new PermissionEngine({ newId: nextId('permission'), now: nextNow(4_100) }),
+      transport: frames([
+        {
+          type: 'permission_request',
+          toolUseId: 'tool-stdin',
+          toolName: 'WriteStdin',
+          args,
+          categoryHint: 'shell_unsafe',
+        },
+        { type: 'tool_start', toolUseId: 'tool-stdin', toolName: 'WriteStdin', args },
+        { type: 'tool_result', toolUseId: 'tool-stdin', content: { kind: 'text', text: 'accepted' } },
+        { type: 'complete' },
+      ]),
+      newId: nextId('id'),
+      now: nextNow(4_200),
+    });
+
+    const iterator = backend.send({ turnId: 'turn-1', text: 'interact', context: [] })[Symbol.asyncIterator]();
+    const permission = await iterator.next();
+    assert.equal(permission.value?.type, 'permission_request');
+    if (permission.value?.type !== 'permission_request') return;
+    assert.deepEqual(permission.value.args, args);
+    assert.equal(permission.value.canRememberForTurn, false);
+
+    const storedCall = messages.find((message) => message.type === 'tool_call');
+    assert.deepEqual(storedCall?.type === 'tool_call' ? storedCall.args : undefined, args);
+
+    await backend.respondToPermission({ requestId: permission.value.requestId, decision: 'allow' });
+    assert.equal((await iterator.next()).value?.type, 'permission_decision_ack');
+    const toolStart = await iterator.next();
+    assert.equal(toolStart.value?.type, 'tool_start');
+    if (toolStart.value?.type === 'tool_start') {
+      assert.deepEqual(toolStart.value.args, args);
+      const runtimeEvent = mapSessionEventToRuntimeEvent(toolStart.value, runtimeContext());
+      assert.equal(runtimeEvent.content?.kind, 'function_call');
+      assert.deepEqual(
+        runtimeEvent.content?.kind === 'function_call' ? runtimeEvent.content.args : undefined,
+        args,
+      );
+    }
+
+    while (!(await iterator.next()).done) {
+      // Drain the turn so the backend releases its permission state.
+    }
+  });
+
+  test('fails closed when Pi changes a tool invocation after permission', async () => {
+    const messages: StoredMessage[] = [];
+    const args = {
+      ref: 'maka://runtime/background-tasks/pty-1',
+      input: 'approved\r',
+    };
+    const backend = new PiAgentBackend({
+      sessionId: 'session-1',
+      header: header({ permissionMode: 'ask' }),
+      appendMessage: async (message) => { messages.push(message); },
+      permissionEngine: new PermissionEngine({ newId: nextId('permission'), now: nextNow(4_300) }),
+      transport: frames([
+        {
+          type: 'permission_request',
+          toolUseId: 'tool-stdin',
+          toolName: 'WriteStdin',
+          args,
+          categoryHint: 'shell_unsafe',
+        },
+        { type: 'tool_start', toolUseId: 'tool-stdin', toolName: 'WriteStdin', args },
+        { type: 'tool_result', toolUseId: 'tool-stdin', content: { kind: 'text', text: 'accepted' } },
+        { type: 'complete' },
+      ]),
+      newId: nextId('id'),
+      now: nextNow(4_400),
+    });
+
+    const iterator = backend.send({ turnId: 'turn-1', text: 'interact', context: [] })[Symbol.asyncIterator]();
+    const permission = await iterator.next();
+    assert.equal(permission.value?.type, 'permission_request');
+    if (permission.value?.type !== 'permission_request') return;
+
+    assert.deepEqual(permission.value.args, args);
+    const visibleArgs = permission.value.args as typeof args;
+    visibleArgs.input = 'changed-after-approval\r';
+    args.input = 'changed-after-approval\r';
+    await backend.respondToPermission({ requestId: permission.value.requestId, decision: 'allow' });
+
+    const remaining: SessionEvent[] = [];
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+      remaining.push(next.value);
+    }
+    assert.deepEqual(remaining.map((event) => event.type), [
+      'permission_decision_ack',
+      'error',
+      'complete',
+    ]);
+    assert.equal(remaining.some((event) => event.type === 'tool_start' || event.type === 'tool_result'), false);
+    const storedCall = messages.find((message) => message.type === 'tool_call');
+    assert.deepEqual(storedCall?.type === 'tool_call' ? storedCall.args : undefined, {
+      ref: 'maka://runtime/background-tasks/pty-1',
+      input: 'approved\r',
+    });
   });
 
   test('suppresses later child output for a denied permission request', async () => {
@@ -427,6 +543,25 @@ function header(overrides: Partial<SessionHeader> = {}): SessionHeader {
     permissionMode: 'ask',
     schemaVersion: 1,
     ...overrides,
+  };
+}
+
+function runtimeContext(): InvocationContext {
+  return {
+    sessionId: 'session-1',
+    invocationId: 'invocation-1',
+    runId: 'run-1',
+    turnId: 'turn-1',
+    source: 'test',
+    startedAt: 1,
+    request: {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      text: 'interact',
+      source: 'test',
+    },
+    newId: () => 'runtime-event-1',
+    now: () => 1,
   };
 }
 

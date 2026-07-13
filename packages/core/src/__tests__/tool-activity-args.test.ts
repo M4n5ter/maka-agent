@@ -2,10 +2,54 @@ import assert from 'node:assert/strict';
 import { it } from 'node:test';
 
 import {
+  escapeTerminalTextForInspection,
+  formatWriteStdinPermissionInspection,
   projectToolActivityArgs,
+  projectWriteStdinPermissionSummary,
   projectWriteStdinInput,
   WRITE_STDIN_INPUT_PREVIEW_MAX_CHARS,
 } from '../index.js';
+
+it('renders exact terminal input as inert, unambiguous escaped text', () => {
+  assert.equal(
+    escapeTerminalTextForInspection('a\\r\r"'),
+    String.raw`"a\\r\r\""`,
+  );
+  assert.equal(
+    escapeTerminalTextForInspection('\u001b\u202E中'),
+    String.raw`"\u{001B}\u{202E}中"`,
+  );
+  assert.equal(
+    escapeTerminalTextForInspection('\u0085\u2028\uD800'),
+    String.raw`"\u{0085}\u{2028}\u{D800}"`,
+  );
+  assert.equal(
+    escapeTerminalTextForInspection('\uFE0F\u034F'),
+    String.raw`"\u{FE0F}\u{034F}"`,
+  );
+});
+
+it('derives a bounded summary and a complete inert WriteStdin permission inspection', () => {
+  const suffix = '\u001b[31mrm -rf /tmp/example\r';
+  const args = {
+    ref: `maka://runtime/background-tasks/${'r'.repeat(200)}`,
+    input: `token=secret-value ${'x'.repeat(200)}${suffix}`,
+    size: { cols: 120, rows: 40 },
+  };
+
+  const summary = projectWriteStdinPermissionSummary(args);
+  assert.equal(summary.ref?.truncated, true);
+  assert.equal(summary.input?.truncated, true);
+  assert.equal(summary.input?.text.includes('secret-value'), false);
+  assert.equal(summary.input?.text.includes('rm -rf'), false);
+  assert.deepEqual(summary.size, { cols: 120, rows: 40 });
+
+  const inspection = formatWriteStdinPermissionInspection(args);
+  assert.ok(inspection?.includes(String.raw`\u{001B}[31mrm -rf /tmp/example\r`));
+  assert.ok(inspection?.includes('secret-value'));
+  assert.ok(inspection?.includes('size: 120x40'));
+  assert.equal(inspection?.includes('\u001b'), false);
+});
 
 it('projects WriteStdin activity to a bounded human-readable input preview', () => {
   const projected = projectToolActivityArgs('WriteStdin', {

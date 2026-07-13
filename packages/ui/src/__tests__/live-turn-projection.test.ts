@@ -332,6 +332,7 @@ describe('applyLiveTurnEvent', () => {
       category: 'shell_unsafe',
       reason: 'shell_dangerous',
       args: { command: 'rm file' },
+      canRememberForTurn: true,
       ts: 101,
     });
     const allowed = applyLiveTurnEvent(waiting, {

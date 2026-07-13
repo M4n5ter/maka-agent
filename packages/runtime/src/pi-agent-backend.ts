@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import type {
   BackendKind,
   PermissionDecisionMessage,
@@ -78,7 +80,7 @@ export class PiAgentBackend implements AgentBackend {
   private stopped = false;
   private currentTurnId: string | null = null;
   private outputSeqByTool = new Map<string, number>();
-  private writtenToolCalls = new Set<string>();
+  private toolCallsByUseId = new Map<string, { toolName: string; args: unknown }>();
   private suppressedToolUseIds = new Set<string>();
 
   constructor(input: PiAgentBackendInput) {
@@ -101,7 +103,7 @@ export class PiAgentBackend implements AgentBackend {
     this.stopped = false;
     this.currentTurnId = turnId;
     this.outputSeqByTool = new Map();
-    this.writtenToolCalls = new Set();
+    this.toolCallsByUseId = new Map();
     this.suppressedToolUseIds = new Set();
     this.input.permissionEngine.beginTurn(turnId);
 
@@ -192,7 +194,15 @@ export class PiAgentBackend implements AgentBackend {
             await persistAssistant();
             stepHasTools = true;
             activeToolUseIds.add(frame.toolUseId);
-            await this.ensureToolCall(turnId, frame.toolUseId, frame.toolName, frame.args, frame.displayName, frame.intent, messageId);
+            const args = await this.ensureToolCall(
+              turnId,
+              frame.toolUseId,
+              frame.toolName,
+              frame.args,
+              frame.displayName,
+              frame.intent,
+              messageId,
+            );
             yield {
               type: 'tool_start',
               id: this.newId(),
@@ -200,7 +210,7 @@ export class PiAgentBackend implements AgentBackend {
               ts: this.now(),
               toolUseId: frame.toolUseId,
               toolName: frame.toolName,
-              args: redactUnknown(frame.args),
+              args,
               ...(frame.displayName ? { displayName: frame.displayName } : {}),
               ...(frame.intent ? { intent: redactBoundedText(frame.intent, 240) } : {}),
               stepId: messageId,
@@ -308,7 +318,7 @@ export class PiAgentBackend implements AgentBackend {
       this.input.permissionEngine.endTurn(turnId, this.stopped ? 'aborted' : 'completed');
       this.currentTurnId = null;
       this.outputSeqByTool.clear();
-      this.writtenToolCalls.clear();
+      this.toolCallsByUseId.clear();
       this.suppressedToolUseIds.clear();
       this.stopped = false;
     }
@@ -338,13 +348,13 @@ export class PiAgentBackend implements AgentBackend {
     turnId: string,
     frame: Extract<PiAgentFrame, { type: 'permission_request' }>,
   ): AsyncIterable<SessionEvent> {
-    await this.ensureToolCall(turnId, frame.toolUseId, frame.toolName, frame.args);
+    const args = await this.ensureToolCall(turnId, frame.toolUseId, frame.toolName, frame.args);
     const verdict = this.input.permissionEngine.evaluate({
       sessionId: this.sessionId,
       turnId,
       toolUseId: frame.toolUseId,
       toolName: frame.toolName,
-      args: redactUnknown(frame.args),
+      args,
       ...(frame.categoryHint ? { categoryHint: frame.categoryHint } : {}),
       mode: this.input.header.permissionMode,
       ...(frame.hint ? { hint: redactBoundedText(frame.hint, 240) } : {}),
@@ -412,9 +422,16 @@ export class PiAgentBackend implements AgentBackend {
     displayName?: string,
     intent?: string,
     stepId?: string,
-  ): Promise<void> {
-    if (this.writtenToolCalls.has(toolUseId)) return;
-    this.writtenToolCalls.add(toolUseId);
+  ): Promise<unknown> {
+    const existing = this.toolCallsByUseId.get(toolUseId);
+    if (existing) {
+      if (existing.toolName !== toolName || !isDeepStrictEqual(existing.args, args)) {
+        throw new Error(`Pi tool call ${toolUseId} changed after its first frame`);
+      }
+      return structuredClone(existing.args);
+    }
+    const snapshot = structuredClone(args);
+    this.toolCallsByUseId.set(toolUseId, { toolName, args: snapshot });
     await this.input.appendMessage({
       type: 'tool_call',
       id: toolUseId,
@@ -423,9 +440,10 @@ export class PiAgentBackend implements AgentBackend {
       toolName,
       ...(displayName ? { displayName } : {}),
       ...(intent ? { intent: redactBoundedText(intent, 240) } : {}),
-      args: redactUnknown(args),
+      args: structuredClone(snapshot),
       ...(stepId ? { stepId } : {}),
     } satisfies ToolCallMessage);
+    return structuredClone(snapshot);
   }
 
   private async appendAssistant(turnId: string, messageId: string, text: string): Promise<void> {

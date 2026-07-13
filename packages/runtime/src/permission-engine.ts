@@ -20,7 +20,6 @@
  *   }
  */
 
-import { projectToolActivityArgs } from '@maka/core';
 import {
   classifyToolUse,
   matchToolPermissionRules,
@@ -52,6 +51,7 @@ interface ParkedRequest {
   toolUseId: string;
   category: ToolCategory;
   scopeKey: string;
+  canRememberForTurn: boolean;
   resolve(response: PermissionResponse): void;
   reject(err: Error): void;
 }
@@ -212,7 +212,8 @@ export class PermissionEngine {
       toolName: pre.partialRequest.toolName,
       category: pre.partialRequest.category,
       reason: pre.partialRequest.reason,
-      args: projectToolActivityArgs(pre.partialRequest.toolName, pre.partialRequest.args),
+      args: pre.partialRequest.args,
+      canRememberForTurn: pre.partialRequest.canRememberForTurn,
       ...(input.hint !== undefined ? { hint: input.hint } : {}),
     };
 
@@ -228,6 +229,7 @@ export class PermissionEngine {
       toolUseId: input.toolUseId,
       category: pre.category,
       scopeKey: pre.scopeKey,
+      canRememberForTurn: pre.partialRequest.canRememberForTurn,
       resolve: resolveFn,
       reject: rejectFn,
     });
@@ -260,6 +262,10 @@ export class PermissionEngine {
     const parked = state.parked.get(response.requestId);
     if (!parked) return null;
 
+    if (response.decision === 'allow' && response.rememberForTurn && !parked.canRememberForTurn) {
+      throw new Error('This permission request cannot be remembered for the turn');
+    }
+
     state.parked.delete(response.requestId);
 
     if (response.decision === 'allow' && response.rememberForTurn) {
@@ -271,7 +277,7 @@ export class PermissionEngine {
       // UI queue drains without a second click. The current request was already
       // deleted above, so the snapshot never re-resolves it.
       for (const [otherId, other] of [...state.parked]) {
-        if (other.scopeKey === parked.scopeKey) {
+        if (other.canRememberForTurn && other.scopeKey === parked.scopeKey) {
           state.parked.delete(otherId);
           other.resolve({ requestId: otherId, decision: 'allow', rememberForTurn: true });
         }

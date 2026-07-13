@@ -10,9 +10,10 @@ import { STEP_LIMIT_NOTICE_TEXT, type StoredMessage, type SystemNoteMessage } fr
 import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
 import type { ThinkingLevel } from '@maka/core/model-thinking';
 import {
+  formatWriteStdinPermissionInspection,
   mergeShellRunStateWithDiagnostics,
   projectToolActivityArgs,
-  readWriteStdinInputPreview,
+  projectWriteStdinPermissionSummary,
   type ShellRunUpdate,
 } from '@maka/core';
 import { materializeSession, type ChatItem, type ToolActivityItem } from '@maka/runtime';
@@ -32,7 +33,7 @@ import { renderToolBlock } from './pi-transcript-tools.js';
 export interface MakaPiTranscriptState {
   entries: MakaPiTranscriptEntry[];
   sawTextDeltaMessageIds: Set<string>;
-  pendingPermission?: PermissionRequestEvent;
+  pendingPermissions: PermissionRequestEvent[];
   /**
    * Global expansion toggles: one Ctrl+O press expands every tool card in the
    * transcript, one Ctrl+T press expands every thinking entry; pressing again
@@ -41,6 +42,7 @@ export interface MakaPiTranscriptState {
    */
   expandAllTools: boolean;
   expandAllThinking: boolean;
+  expandedPermissionRequestId?: string;
 }
 
 /** A single live output chunk from a `tool_output_delta` event. */
@@ -93,6 +95,7 @@ export function createMakaPiTranscriptState(): MakaPiTranscriptState {
   return {
     entries: [],
     sawTextDeltaMessageIds: new Set(),
+    pendingPermissions: [],
     expandAllTools: false,
     expandAllThinking: false,
   };
@@ -156,9 +159,10 @@ export function replaceTranscriptWithStoredMessages(
       .filter((entry): entry is Extract<MakaPiTranscriptEntry, { kind: 'assistant' }> => entry.kind === 'assistant')
       .map((entry) => entry.messageId),
   );
-  state.pendingPermission = undefined;
+  state.pendingPermissions = [];
   state.expandAllTools = false;
   state.expandAllThinking = false;
+  state.expandedPermissionRequestId = undefined;
 }
 
 /** Toggle expansion of every tool card at once; false when there is none. */
@@ -177,6 +181,51 @@ export function toggleAllThinkingExpansion(state: MakaPiTranscriptState): boolea
   if (!hasThinking) return false;
   state.expandAllThinking = !state.expandAllThinking;
   return true;
+}
+
+export function togglePendingPermissionDetails(state: MakaPiTranscriptState): boolean {
+  const request = activePendingPermission(state);
+  if (request?.toolName !== 'WriteStdin') return false;
+  state.expandedPermissionRequestId = state.expandedPermissionRequestId === request.requestId
+    ? undefined
+    : request.requestId;
+  return true;
+}
+
+export function activePendingPermission(
+  state: MakaPiTranscriptState,
+): PermissionRequestEvent | undefined {
+  return state.pendingPermissions[0];
+}
+
+export function removePendingPermission(
+  state: MakaPiTranscriptState,
+  requestId: string,
+): PermissionRequestEvent | undefined {
+  const request = state.pendingPermissions.find((candidate) => candidate.requestId === requestId);
+  if (!request) return undefined;
+  state.pendingPermissions = state.pendingPermissions.filter((candidate) => candidate.requestId !== requestId);
+  if (state.expandedPermissionRequestId === requestId) {
+    state.expandedPermissionRequestId = undefined;
+  }
+  return request;
+}
+
+function removePendingPermissionByToolUseId(
+  state: MakaPiTranscriptState,
+  toolUseId: string,
+): void {
+  const removed = state.pendingPermissions.filter((request) => request.toolUseId === toolUseId);
+  if (removed.length === 0) return;
+  state.pendingPermissions = state.pendingPermissions.filter((request) => request.toolUseId !== toolUseId);
+  if (removed.some((request) => request.requestId === state.expandedPermissionRequestId)) {
+    state.expandedPermissionRequestId = undefined;
+  }
+}
+
+function clearPendingPermissions(state: MakaPiTranscriptState): void {
+  state.pendingPermissions = [];
+  state.expandedPermissionRequestId = undefined;
 }
 
 export interface TurnOutcome {
@@ -312,6 +361,7 @@ export function applyMakaSessionEventToTranscript(
       break;
 
     case 'tool_result': {
+      removePendingPermissionByToolUseId(state, event.toolUseId);
       const tool = findToolEntry(state, event.toolUseId);
       const shellRun = event.content.kind === 'shell_run' ? event.content : undefined;
       const parent = shellRun
@@ -385,20 +435,22 @@ export function applyMakaSessionEventToTranscript(
     }
 
     case 'permission_request':
-      state.pendingPermission = event;
+      if (!state.pendingPermissions.some((request) => request.requestId === event.requestId)) {
+        state.pendingPermissions.push(event);
+      }
       break;
 
-    case 'permission_decision_ack':
-      if (state.pendingPermission?.requestId === event.requestId) {
-        const toolName = state.pendingPermission.toolName;
-        state.pendingPermission = undefined;
+    case 'permission_decision_ack': {
+      const request = removePendingPermission(state, event.requestId);
+      if (request) {
         state.entries.push({
           kind: 'notice',
           level: 'info',
-          text: `Permission ${event.decision}ed for ${toolName}`,
+          text: `Permission ${event.decision}ed for ${request.toolName}`,
         });
       }
       break;
+    }
 
     case 'plan_submitted':
       state.entries.push({
@@ -421,7 +473,7 @@ export function applyMakaSessionEventToTranscript(
     }
 
     case 'error':
-      state.pendingPermission = undefined;
+      clearPendingPermissions(state);
       state.entries.push({
         kind: 'notice',
         level: 'error',
@@ -430,7 +482,7 @@ export function applyMakaSessionEventToTranscript(
       break;
 
     case 'abort':
-      state.pendingPermission = undefined;
+      clearPendingPermissions(state);
       state.entries.push({
         kind: 'notice',
         level: 'info',
@@ -440,7 +492,7 @@ export function applyMakaSessionEventToTranscript(
 
     case 'complete':
       // The turn is over; any unresolved permission request is no longer actionable.
-      state.pendingPermission = undefined;
+      clearPendingPermissions(state);
       if (event.stopReason === 'max_tokens') {
         state.entries.push({
           kind: 'notice',
@@ -672,7 +724,7 @@ export function renderMakaPiTranscript(
   // A fresh session (no history, nothing pending) opens on a welcome block so the
   // first screen greets and orients instead of showing an empty pane. Once the
   // first prompt lands, entries take over and it never renders again.
-  if (state.entries.length === 0 && !state.pendingPermission) {
+  if (state.entries.length === 0 && state.pendingPermissions.length === 0) {
     return renderWelcomeBlock(metadata, safeWidth);
   }
 
@@ -682,9 +734,14 @@ export function renderMakaPiTranscript(
     lines.push(...renderTranscriptEntryMemoized(entry, safeWidth, state.expandAllTools, state.expandAllThinking));
   }
 
-  if (state.pendingPermission) {
+  const pendingPermission = activePendingPermission(state);
+  if (pendingPermission) {
     lines.push('');
-    lines.push(...renderPermissionPrompt(state.pendingPermission, safeWidth));
+    lines.push(...renderPermissionPrompt(
+      pendingPermission,
+      state.expandedPermissionRequestId === pendingPermission.requestId,
+      safeWidth,
+    ));
   }
 
   return lines;
@@ -927,14 +984,28 @@ function renderWelcomeBlock(metadata: MakaPiTranscriptMetadata, width: number): 
   return lines;
 }
 
-function renderPermissionPrompt(request: PermissionRequestEvent, width: number): string[] {
+function renderPermissionPrompt(
+  request: PermissionRequestEvent,
+  detailsExpanded: boolean,
+  width: number,
+): string[] {
   const lines = [
     fitLine(`${ansi.yellow('Permission required')} ${ansi.bold(request.toolName)} ${ansi.dim(request.category)}`, width),
   ];
   const summary = permissionRequestSummary(request);
   if (summary) lines.push(...renderIndented(summary, width, 2));
   if (request.hint) lines.push(...renderIndented(request.hint, width, 2).map(ansi.dim));
-  lines.push(fitLine(ansi.dim('y/Enter allow  n/Esc deny'), width));
+  if (detailsExpanded && request.toolName === 'WriteStdin') {
+    const details = formatWriteStdinPermissionInspection(request.args);
+    if (details) {
+      lines.push(fitLine(ansi.dim('Full parameters'), width));
+      lines.push(...renderIndented(details, width, 2));
+    }
+  }
+  const detailHint = request.toolName === 'WriteStdin'
+    ? `  Ctrl+O ${detailsExpanded ? 'hide' : 'show'} full parameters`
+    : '';
+  lines.push(fitLine(ansi.dim(`y/Enter allow  n/Esc deny${detailHint}`), width));
   return lines;
 }
 
@@ -945,8 +1016,17 @@ function permissionRequestSummary(request: PermissionRequestEvent): string {
     if (typeof command === 'string' && command.trim()) return `$ ${command}`;
   }
   if (request.toolName === 'WriteStdin') {
-    const input = readWriteStdinInputPreview(args);
-    if (input) return input.truncated ? `${input.text}… · ${input.bytes} bytes total` : input.text;
+    const summary = projectWriteStdinPermissionSummary(args);
+    const lines: string[] = [];
+    if (summary.ref) {
+      lines.push(`ref: ${summary.ref.text}${summary.ref.truncated ? '…' : ''}`);
+    }
+    if (summary.input) {
+      const suffix = summary.input.truncated ? `… · ${summary.input.bytes} bytes total` : '';
+      lines.push(`input: ${summary.input.text}${suffix}`);
+    }
+    if (summary.size) lines.push(`size: ${summary.size.cols}x${summary.size.rows}`);
+    return lines.join('\n');
   }
   if ((request.toolName === 'Write' || request.toolName === 'Edit') && args !== null && typeof args === 'object') {
     const path = (args as { path?: unknown }).path;

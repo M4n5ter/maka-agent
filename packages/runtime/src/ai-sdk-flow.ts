@@ -256,6 +256,7 @@ export function mapSessionEventToRuntimeEvent(
             category: event.category,
             reason: event.reason,
             args: event.args,
+            canRememberForTurn: event.canRememberForTurn,
             ...(event.hint !== undefined ? { hint: event.hint } : {}),
           },
         },

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PermissionRequestEvent, PermissionResponse } from '@maka/core';
-import { derivePermissionRequestHealth, formatPermissionRequestWait, readWriteStdinInputPreview } from '@maka/core';
+import {
+  derivePermissionRequestHealth,
+  formatPermissionRequestWait,
+  formatWriteStdinPermissionInspection,
+  projectWriteStdinPermissionSummary,
+} from '@maka/core';
 import { AlertOctagon, AlertTriangle, FileEdit, GitMerge, Globe, HelpCircle, ShieldAlert, Terminal, Wifi } from './icons.js';
 import { Alert, AlertDescription } from './primitives/alert.js';
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from './primitives/collapsible.js';
@@ -41,6 +46,7 @@ export function PermissionDialog(props: {
   onRespond(response: PermissionResponse): void | Promise<void>;
 }) {
   const [rememberForTurn, setRememberForTurn] = useState(false);
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [responsePending, setResponsePending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const responsePendingRef = useRef(false);
@@ -57,10 +63,13 @@ export function PermissionDialog(props: {
   useEffect(() => {
     activePermissionRequestIdRef.current = props.request.requestId;
     setRememberForTurn(false);
+    setExpandedRequestId(null);
     setResponsePending(false);
     responsePendingRef.current = false;
     setNow(Date.now());
   }, [props.request.requestId]);
+
+  const fullArgsOpen = expandedRequestId === props.request.requestId;
 
   useEffect(() => {
     const tick = () => setNow(Date.now());
@@ -84,7 +93,9 @@ export function PermissionDialog(props: {
       await props.onRespond({
         requestId,
         decision,
-        rememberForTurn: decision === 'allow' ? rememberForTurn : false,
+        ...(decision === 'allow' && props.request.canRememberForTurn && rememberForTurn
+          ? { rememberForTurn: true }
+          : {}),
       });
     } finally {
       if (activePermissionRequestIdRef.current === requestId) {
@@ -130,20 +141,28 @@ export function PermissionDialog(props: {
           {props.request.hint && (
             <div className="maka-permission-hint" role="note">{props.request.hint}</div>
           )}
-          <Collapsible className="maka-permission-raw">
+          <Collapsible
+            className="maka-permission-raw"
+            open={fullArgsOpen}
+            onOpenChange={(open) => setExpandedRequestId(open ? props.request.requestId : null)}
+          >
             <CollapsibleTrigger>查看完整参数</CollapsibleTrigger>
             <CollapsiblePanel>
-              <pre className="maka-code">{formatRedactedJson(props.request.args)}</pre>
+              <pre className="maka-code">
+                {renderPermissionInspection(props.request, fullArgsOpen)}
+              </pre>
             </CollapsiblePanel>
           </Collapsible>
-          <label className="permissionRemember">
-            <Checkbox
-              checked={rememberForTurn}
-              disabled={responsePending}
-              onCheckedChange={(checked) => setRememberForTurn(checked === true)}
-            />
-            本轮对话内记住选择（同类型工具不再询问，关闭/切换对话后失效）
-          </label>
+          {props.request.canRememberForTurn && (
+            <label className="permissionRemember">
+              <Checkbox
+                checked={rememberForTurn}
+                disabled={responsePending}
+                onCheckedChange={(checked) => setRememberForTurn(checked === true)}
+              />
+              本轮对话内记住选择（同类型工具不再询问，关闭/切换对话后失效）
+            </label>
+          )}
           {props.request.reason === 'browser' && rememberForTurn && (
             <p className="maka-permission-hint" role="note">
               勾选后，本轮接下来的浏览、读取页面、导航、点击、输入都不再逐次询问。你会全程看到它操作的页面，随时可以停止；本轮结束后授权失效。
@@ -260,28 +279,30 @@ function renderPermissionSummary(request: PermissionRequestEvent): ReactNode | u
       );
     }
     case 'WriteStdin': {
-      const input = readWriteStdinInputPreview(args);
-      const size = args.size && typeof args.size === 'object' && !Array.isArray(args.size)
-        ? args.size as Record<string, unknown>
-        : undefined;
-      const cols = typeof size?.cols === 'number' ? size.cols : undefined;
-      const rows = typeof size?.rows === 'number' ? size.rows : undefined;
-      if (!input && (cols === undefined || rows === undefined)) return undefined;
+      const summary = projectWriteStdinPermissionSummary(args);
+      if (!summary.ref && !summary.input && !summary.size) return undefined;
       return (
         <>
           <p className="maka-permission-line">即将与后台终端交互：</p>
-          {input && (
+          {summary.ref && (
+            <p className="maka-permission-path">
+              <code>{summary.ref.text}{summary.ref.truncated ? '…' : ''}</code>
+            </p>
+          )}
+          {summary.input && (
             <>
               <pre className="maka-code maka-permission-preview">
-                {input.text}{input.truncated ? '…' : ''}
+                {summary.input.text}{summary.input.truncated ? '…' : ''}
               </pre>
-              {input.truncated && (
-                <p className="maka-permission-meta">完整输入共 <strong>{input.bytes}</strong> 字节</p>
+              {summary.input.truncated && (
+                <p className="maka-permission-meta">完整输入共 <strong>{summary.input.bytes}</strong> 字节</p>
               )}
             </>
           )}
-          {cols !== undefined && rows !== undefined && (
-            <p className="maka-permission-meta">目标尺寸 <strong>{cols}x{rows}</strong></p>
+          {summary.size && (
+            <p className="maka-permission-meta">
+              目标尺寸 <strong>{summary.size.cols}x{summary.size.rows}</strong>
+            </p>
           )}
         </>
       );
@@ -360,6 +381,14 @@ function renderPermissionSummary(request: PermissionRequestEvent): ReactNode | u
     default:
       return undefined;
   }
+}
+
+function renderPermissionInspection(request: PermissionRequestEvent, expanded: boolean): string {
+  if (request.toolName === 'WriteStdin') {
+    if (!expanded) return '';
+    return formatWriteStdinPermissionInspection(request.args) ?? '';
+  }
+  return formatRedactedJson(request.args);
 }
 
 function permissionTextPreview(value: string, maxChars: number): string {

@@ -24,13 +24,16 @@ import {
 import type { ModelChoice } from './connection-target.js';
 import type { MakaSessionDriver, MakaSessionSwitchResult } from './session-driver.js';
 import {
+  activePendingPermission,
   createMakaPiTranscriptState,
   applyShellRunViewUpdateToTranscript,
+  removePendingPermission,
   replaceTranscriptWithStoredMessages,
   submitCompactToTranscript,
   submitPromptToTranscript,
   toggleAllThinkingExpansion,
   toggleAllToolExpansion,
+  togglePendingPermissionDetails,
   type MakaPiTranscriptMetadata,
 } from './pi-transcript.js';
 import { editorTheme, selectListTheme } from './tui-ansi.js';
@@ -341,7 +344,7 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
   process.once('unhandledRejection', handleUnhandledRejection);
 
   const respondToPendingPermission = (decision: 'allow' | 'deny'): boolean => {
-    const request = state.pendingPermission;
+    const request = activePendingPermission(state);
     if (!request || permissionInFlight) return false;
     permissionInFlight = true;
     // Keep the prompt visible until the driver accepts the response. If it
@@ -349,15 +352,17 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
     void input.driver.respondToPermission({
       requestId: request.requestId,
       decision,
-      ...(decision === 'allow' ? { rememberForTurn: true } : {}),
+      ...(decision === 'allow' && request.canRememberForTurn
+        ? { rememberForTurn: true }
+        : {}),
     })
       .then(() => {
         permissionInFlight = false;
         // The turn may have ended (error/abort/complete) and cleared the pending
         // prompt while this response was in flight; only record success if the
         // request is still the active one.
-        if (state.pendingPermission?.requestId !== request.requestId) return;
-        state.pendingPermission = undefined;
+        if (activePendingPermission(state)?.requestId !== request.requestId) return;
+        removePendingPermission(state, request.requestId);
         state.entries.push({
           kind: 'notice',
           level: 'info',
@@ -416,7 +421,7 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
         // A pending decision blocks the turn; ring an unfocused terminal once when
         // the prompt first appears (not on every render) so the user is not left
         // waiting on a prompt they cannot see.
-        if (state.pendingPermission) {
+        if (activePendingPermission(state)) {
           if (!permissionAlerted) {
             permissionAlerted = true;
             attention.attentionNeeded();
@@ -984,6 +989,10 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
     // one (e.g. `Esc`, type, `Esc`).
     if (!matchesKey(data, Key.escape)) lastIdleEscapeAt = 0;
     if (matchesKey(data, Key.ctrl('o')) && !isKeyRepeat(data)) {
+      if (togglePendingPermissionDetails(state)) {
+        requestRender();
+        return { consume: true };
+      }
       if (toggleAllToolExpansion(state)) {
         requestRender();
         return { consume: true };
@@ -995,7 +1004,7 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
         return { consume: true };
       }
     }
-    if (state.pendingPermission) {
+    if (activePendingPermission(state)) {
       if (matchesKey(data, 'y') || matchesKey(data, Key.enter) || matchesKey(data, Key.return)) {
         respondToPendingPermission('allow');
         return { consume: true };
