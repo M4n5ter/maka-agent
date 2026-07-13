@@ -45,6 +45,37 @@ test('adds MiniMax Coding Plan under its independent provider id with an exact s
   await expect(page.getByText('MiniMax-M3', { exact: true }).first()).toBeVisible();
 });
 
+test('adds xAI with its exact snapshot model and API-key credential field', async ({ window: page }) => {
+  await page.getByRole('button', { name: '展开侧边栏' }).click();
+  await page.getByRole('button', { name: '设置' }).click();
+  await page.locator('[aria-label="设置分组"]').getByText('模型', { exact: true }).click();
+  await page.getByRole('button', { name: '添加服务商' }).click();
+
+  await page.getByRole('tab', { name: 'API', exact: true }).click();
+  await page.getByPlaceholder('搜索服务商').fill('xAI');
+  const catalogMark = page.locator('.providerCatalogRow[data-provider="xai"] .providerLogo .xaiProviderMark');
+  await expect(catalogMark).toBeVisible();
+  expect(await catalogMark.evaluate(maskRenderContract)).toEqual({ usesAssetMask: true, followsForeground: true });
+  await page.getByRole('button', { name: /添加模型供应商：xAI/ }).click();
+  await expect(page.getByLabel('模型供应商默认模型')).toHaveValue('grok-4.5');
+  await page.getByRole('button', { name: '保存供应商' }).click();
+
+  await expect(page.getByRole('heading', { name: 'xAI', exact: true }).first()).toBeVisible();
+  const detailMark = page.locator('.providerSubpageHeader .providerLogo[data-provider="xai"] .xaiProviderMark');
+  await expect(detailMark).toBeVisible();
+  expect(await detailMark.evaluate(maskRenderContract)).toEqual({ usesAssetMask: true, followsForeground: true });
+  await expect(page.getByText('grok-4.5', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '模型密钥' })).toBeVisible();
+});
+
+function maskRenderContract(element: Element): { usesAssetMask: boolean; followsForeground: boolean } {
+  const style = getComputedStyle(element);
+  return {
+    usesAssetMask: style.maskImage.includes('data:image/svg+xml'),
+    followsForeground: style.backgroundColor === style.color,
+  };
+}
+
 test('restores keyboard focus across provider child pages', async ({ window: page }) => {
   await page.getByRole('button', { name: '展开侧边栏' }).click();
   await page.getByRole('button', { name: '设置' }).click();
