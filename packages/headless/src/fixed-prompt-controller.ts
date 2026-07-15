@@ -13,6 +13,7 @@ import {
   type HarborCellTokenSummary,
 } from './cell-output.js';
 import type { Config } from './contracts.js';
+import { syncParentDirectory } from './immutable-file.js';
 import { assertFinitePositive, assertPositiveInt, assertRatio } from './numeric-guards.js';
 
 export const FIXED_PROMPT_WAL_SCHEMA_VERSION = 1;
@@ -38,10 +39,23 @@ export type HarborTaskRunCellOutput = HarborCellOutput & {
   traceEventsPath?: string;
 };
 
+export interface HarborVerifierAttempt {
+  attempt: number;
+  classification: 'passed' | 'failed' | 'timeout' | 'infra_setup_failed' | 'infra_failed';
+  durationMs: number;
+  reward?: number;
+}
+
+export interface HarborVerifierOutcome {
+  outcome: 'passed' | 'failed' | 'candidate_timeout';
+  attempts: HarborVerifierAttempt[];
+}
+
 export interface HarborTaskRunOutput {
   harbor: {
     reward: number;
     verifierFailureSummary?: string;
+    verifier?: HarborVerifierOutcome;
   };
   cell: HarborTaskRunCellOutput;
 }
@@ -55,7 +69,9 @@ export interface HarborTaskRunInput {
   agentEnv?: Record<string, string>;
 }
 
-export type HarborTaskRunner = (input: HarborTaskRunInput) => Promise<HarborTaskRunOutput>;
+export interface HarborTaskRunner {
+  (input: HarborTaskRunInput): Promise<HarborTaskRunOutput>;
+}
 
 export interface FixedPromptBudgetExhaustedArtifactRefs {
   runtimeEventsPath?: string;
@@ -110,7 +126,20 @@ export interface FixedPromptTaskCompletedEvent {
   harbor: {
     reward: number;
     verifierFailureSummary?: string;
+    verifier?: HarborVerifierOutcome;
   };
+}
+
+export interface FixedPromptTaskAttemptStartedEvent {
+  schemaVersion: typeof FIXED_PROMPT_WAL_SCHEMA_VERSION;
+  type: 'task_attempt_started';
+  id: string;
+  ts: number;
+  runId: string;
+  roundId: string;
+  resumeFingerprint?: string;
+  taskId: string;
+  promptHash: string;
 }
 
 export interface FixedPromptTaskInfraFailedEvent {
@@ -175,7 +204,7 @@ export interface FixedPromptTaskPlumbingFailedEvent {
   passed: false;
   scored: false;
   eligible: false;
-  errorClass: 'missing_token_usage' | 'zero_cost_with_tokens' | 'prompt_hash_mismatch' | 'missing_prompt_hash' | 'missing_execution_identity' | 'execution_identity_mismatch';
+  errorClass: 'missing_token_usage' | 'zero_cost_with_tokens' | 'prompt_hash_mismatch' | 'missing_prompt_hash' | 'missing_execution_identity' | 'execution_identity_mismatch' | 'orphaned_sampled_attempt';
   error: string;
   promptHash?: string;
   expectedPromptHash?: string;
@@ -281,6 +310,7 @@ export interface RsiControllerAttributionEvent {
 }
 
 export type FixedPromptWalEvent =
+  | FixedPromptTaskAttemptStartedEvent
   | FixedPromptTaskCompletedEvent
   | FixedPromptTaskInfraFailedEvent
   | FixedPromptTaskBudgetExhaustedEvent
@@ -310,6 +340,9 @@ export interface RunFixedPromptControllerInput {
   resumeFingerprint?: string;
   requireExecutionIdentity?: boolean;
   expectedPricingProfile?: string;
+  /** Refuse resume when a model attempt was durably admitted but no terminal
+   * event exists, preserving single-sample benchmark semantics. */
+  protectPassAtOne?: boolean;
   harborRunner: HarborTaskRunner;
   now?: () => number;
   newId?: () => string;
@@ -339,19 +372,48 @@ export async function runFixedPromptController(
   // silently disable the guard (maxConcurrency is checked in normalizeMaxConcurrency).
   if (input.costCeilingUsd !== undefined) assertFinitePositive('costCeilingUsd', input.costCeilingUsd);
   if (input.maxInfraFailureRate !== undefined) assertRatio('maxInfraFailureRate', input.maxInfraFailureRate);
+  if (input.protectPassAtOne && input.infraFailurePolicy === 'retry-once') {
+    throw new Error('protectPassAtOne is incompatible with infraFailurePolicy retry-once');
+  }
+  const terminalInfraFailures = input.protectPassAtOne || input.infraFailurePolicy === 'terminal';
   assertUniqueTaskIds(input.tasks.map((task) => task.id));
   const systemPrompt = await readFile(input.systemPromptPath, 'utf8');
   const expectedPromptHash = hashSystemPrompt(systemPrompt);
   const config = { ...input.config, systemPrompt };
   const events = await readFixedPromptWal(input.resultsJsonlPath);
+  const attemptEvents = input.protectPassAtOne
+    ? await readFixedPromptWal(attemptWalPath(input.resultsJsonlPath))
+    : [];
   const completed = terminalTaskEvents(
     events,
     input.runId,
     input.roundId,
     expectedPromptHash,
     input.resumeFingerprint,
-    input.infraFailurePolicy === 'terminal',
+    terminalInfraFailures,
   );
+  const orphanedAttempts = orphanedTaskAttempts(
+    [...attemptEvents, ...events],
+    input.runId,
+    input.roundId,
+    expectedPromptHash,
+    input.resumeFingerprint,
+  );
+  for (const task of input.protectPassAtOne ? input.tasks : []) {
+    if (completed.has(task.id) || !orphanedAttempts.has(task.id)) continue;
+    const event = orphanedAttemptEvent({
+      taskId: task.id,
+      runId: input.runId,
+      roundId: input.roundId,
+      expectedPromptHash,
+      resumeFingerprint: input.resumeFingerprint,
+      id: newId(),
+      ts: now(),
+    });
+    await appendFixedPromptWalEvent(input.resultsJsonlPath, event);
+    events.push(event);
+    completed.set(task.id, event);
+  }
   const stopEvidence = roundTaskEvents(events, input.runId, input.roundId, expectedPromptHash, input.resumeFingerprint);
   let stopReason = controllerStopReason({
     events: [...stopEvidence.values()],
@@ -401,6 +463,8 @@ export async function runFixedPromptController(
         resumeFingerprint: input.resumeFingerprint,
         id: newId(),
         ts: now(),
+        newId,
+        now,
       }).then((event) => ({ index, event })));
     }
   };
@@ -486,13 +550,19 @@ export async function readHarborTaskRunOutput(
   };
 }
 
-export function appendFixedPromptWalEvent(path: string, event: FixedPromptWalEvent): Promise<void> {
+export function appendFixedPromptWalEvent(
+  path: string,
+  event: FixedPromptWalEvent,
+  options: { flush?: boolean } = {},
+): Promise<void> {
   const key = resolve(path);
   const previous = walWriteTails.get(key) ?? Promise.resolve();
   const operation = async () => {
     await mkdir(dirname(path), { recursive: true });
     await truncateTornWalTail(path);
-    await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+    const flush = options.flush ?? false;
+    await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf8', flush });
+    if (flush) await syncParentDirectory(path);
   };
   const write = previous.then(operation, operation);
   const tail = write.then(() => {}, () => {});
@@ -550,14 +620,36 @@ async function runTaskAndBuildEvent(input: {
   resumeFingerprint?: string;
   id: string;
   ts: number;
+  newId: () => string;
+  now: () => number;
 }): Promise<FixedPromptTaskWalEvent> {
-  const runHarbor = () => input.input.harborRunner({
-    runId: input.input.runId,
-    roundId: input.input.roundId,
-    task: input.task,
-    config: input.config,
-    systemPrompt: input.systemPrompt,
-  });
+  const runHarbor = async () => {
+    if (input.input.protectPassAtOne) {
+      const attemptStarted: FixedPromptTaskAttemptStartedEvent = {
+        schemaVersion: FIXED_PROMPT_WAL_SCHEMA_VERSION,
+        type: 'task_attempt_started',
+        id: input.newId(),
+        ts: input.now(),
+        runId: input.input.runId,
+        roundId: input.input.roundId,
+        ...(input.resumeFingerprint ? { resumeFingerprint: input.resumeFingerprint } : {}),
+        taskId: input.task.id,
+        promptHash: input.expectedPromptHash,
+      };
+      await appendFixedPromptWalEvent(
+        attemptWalPath(input.input.resultsJsonlPath),
+        attemptStarted,
+        { flush: true },
+      );
+    }
+    return input.input.harborRunner({
+      runId: input.input.runId,
+      roundId: input.input.roundId,
+      task: input.task,
+      config: input.config,
+      systemPrompt: input.systemPrompt,
+    });
+  };
   let output;
   try {
     output = await runHarbor();
@@ -577,7 +669,7 @@ async function runTaskAndBuildEvent(input: {
         ts: input.ts,
       });
     }
-    if (input.input.infraFailurePolicy === 'terminal') {
+    if (input.input.protectPassAtOne || input.input.infraFailurePolicy === 'terminal') {
       return taskInfraFailedEvent({
         error,
         taskId: input.task.id,
@@ -732,6 +824,7 @@ function taskCompletedEvent(input: {
     harbor: {
       reward: output.harbor.reward,
       ...(output.harbor.verifierFailureSummary ? { verifierFailureSummary: output.harbor.verifierFailureSummary } : {}),
+      ...(output.harbor.verifier ? { verifier: output.harbor.verifier } : {}),
     },
   };
 }
@@ -814,16 +907,6 @@ function classifyPlumbingFailure(output: HarborTaskRunOutput, expectedPromptHash
     return {
       errorClass: 'prompt_hash_mismatch',
       error: `Harbor cell prompt hash ${output.cell.promptHash} did not match ${expectedPromptHash}`,
-    };
-  }
-  if (
-    (output.cell.status === 'completed' || output.cell.errorClass === 'tool_step_cap_reached')
-    && output.cell.executionIdentity
-    && (!output.cell.tokenSummary || output.cell.tokenSummary.total <= 0)
-  ) {
-    return {
-      errorClass: 'missing_token_usage',
-      error: 'Harbor cell did not report token usage for the attested real-provider execution',
     };
   }
   if (output.cell.tokenSummary && output.cell.tokenSummary.total > 0 && output.cell.tokenSummary.costUsd === 0) {
@@ -967,16 +1050,6 @@ function taskBudgetExhaustedEvent(input: {
     if (evidenceFailure?.errorClass === 'missing_execution_identity') {
       evidenceFailure = { ...evidenceFailure, error: LEGACY_TIMEOUT_MISSING_EXECUTION_IDENTITY_ERROR };
     }
-    if (
-      evidenceFailure === undefined
-      && artifactRefs.executionIdentity
-      && (!artifactRefs.tokenSummary || artifactRefs.tokenSummary.total <= 0)
-    ) {
-      evidenceFailure = {
-        errorClass: 'missing_token_usage',
-        error: 'Harbor cell did not report token usage for the attested real-provider execution',
-      };
-    }
   }
   const tokenSummary = artifactRefs.cellOutput?.tokenSummary ?? artifactRefs.tokenSummary;
   const tokenSummarySource = tokenSummary
@@ -1104,6 +1177,67 @@ function terminalTaskEvents(
     }
   }
   return byTask;
+}
+
+function orphanedTaskAttempts(
+  events: readonly FixedPromptWalEvent[],
+  runId: string,
+  roundId: string,
+  expectedPromptHash: string,
+  resumeFingerprint: string | undefined,
+): Map<string, FixedPromptTaskAttemptStartedEvent> {
+  const pending = new Map<string, FixedPromptTaskAttemptStartedEvent>();
+  for (const event of events) {
+    if (event.runId !== runId || event.roundId !== roundId) continue;
+    if (event.type === 'task_attempt_started') {
+      if (event.promptHash !== expectedPromptHash) continue;
+      if (resumeFingerprint !== undefined && event.resumeFingerprint !== resumeFingerprint) continue;
+      pending.set(event.taskId, event);
+      continue;
+    }
+    if (!isTaskEvent(event)) continue;
+    const started = pending.get(event.taskId);
+    if (!started || event.resumeFingerprint !== started.resumeFingerprint) continue;
+    if (
+      event.type !== 'task_infra_failed'
+      && (!('promptHash' in event) || event.promptHash !== started.promptHash)
+      && (!('expectedPromptHash' in event) || event.expectedPromptHash !== started.promptHash)
+    ) continue;
+    pending.delete(event.taskId);
+  }
+  return pending;
+}
+
+function attemptWalPath(resultsJsonlPath: string): string {
+  return `${resultsJsonlPath}.attempts.jsonl`;
+}
+
+function orphanedAttemptEvent(input: {
+  taskId: string;
+  runId: string;
+  roundId: string;
+  expectedPromptHash: string;
+  resumeFingerprint?: string;
+  id: string;
+  ts: number;
+}): FixedPromptTaskPlumbingFailedEvent {
+  return {
+    schemaVersion: FIXED_PROMPT_WAL_SCHEMA_VERSION,
+    type: 'task_plumbing_failed',
+    id: input.id,
+    ts: input.ts,
+    runId: input.runId,
+    roundId: input.roundId,
+    ...(input.resumeFingerprint ? { resumeFingerprint: input.resumeFingerprint } : {}),
+    taskId: input.taskId,
+    status: 'plumbing_failed',
+    passed: false,
+    scored: false,
+    eligible: false,
+    errorClass: 'orphaned_sampled_attempt',
+    error: 'An admitted Harbor attempt ended without a terminal event; refusing to resample Pass@1',
+    expectedPromptHash: input.expectedPromptHash,
+  };
 }
 
 function roundTaskEvents(

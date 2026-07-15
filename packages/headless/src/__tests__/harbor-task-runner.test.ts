@@ -7,8 +7,11 @@ import { tokenSummary } from './helpers/cell-output-fixtures.js';
 import type { HarborCellExecutionIdentity, HarborCellOutput } from '../cell-output.js';
 import { FixedPromptBudgetExhaustedError, type HarborTaskRunInput } from '../fixed-prompt-controller.js';
 import {
+  buildHarborVerifierPolicyFingerprint,
   buildHarborJobConfig,
+  createHarborOracleQualifier,
   createHarborTaskRunner,
+  HARBOR_VERIFIER_MAX_ATTEMPTS,
   HarborInfraError,
   type HarborProcessRunner,
   type HarborRunResult,
@@ -70,6 +73,7 @@ interface FakeOptions {
   exitCode?: number;
   events?: string;
   verifierStdout?: string;
+  verifierOutcome?: Record<string, unknown> | null;
   trialResult?: Record<string, unknown>;
   captured?: { config?: Record<string, unknown> };
 }
@@ -91,6 +95,26 @@ function fakeRunner(opts: FakeOptions): HarborProcessRunner {
     }
     if (opts.verifierStdout !== undefined) {
       await writeFile(join(trialDir, 'verifier', 'test-stdout.txt'), opts.verifierStdout, 'utf8');
+    }
+    const verifierOutcome = opts.verifierOutcome === undefined && opts.reward !== undefined
+      ? Number(opts.reward.trim()) > 0
+        ? {
+            schemaVersion: 1,
+            outcome: 'passed',
+            attempts: [{ attempt: 1, classification: 'passed', durationMs: 1, reward: Number(opts.reward.trim()) }],
+          }
+        : {
+            schemaVersion: 1,
+            outcome: 'failed',
+            attempts: [{ attempt: 1, classification: 'failed', durationMs: 1, reward: 0 }],
+          }
+      : opts.verifierOutcome;
+    if (verifierOutcome !== undefined && verifierOutcome !== null) {
+      await writeFile(
+        join(trialDir, 'verifier', 'maka-verifier-outcome.json'),
+        JSON.stringify(verifierOutcome),
+        'utf8',
+      );
     }
     if (opts.cell !== null) {
       await writeFile(join(trialDir, 'agent', 'maka-cell-output.json'), JSON.stringify(opts.cell ?? cellOutput()), 'utf8');
@@ -173,6 +197,11 @@ describe('createHarborTaskRunner', () => {
           await mkdir(join(realDir, 'verifier'), { recursive: true });
           await mkdir(join(realDir, 'agent'), { recursive: true });
           await writeFile(join(realDir, 'verifier', 'reward.txt'), '1\n', 'utf8');
+          await writeFile(join(realDir, 'verifier', 'maka-verifier-outcome.json'), JSON.stringify({
+            schemaVersion: 1,
+            outcome: 'passed',
+            attempts: [{ attempt: 1, classification: 'passed', durationMs: 1, reward: 1 }],
+          }), 'utf8');
           await writeFile(join(realDir, 'agent', 'maka-cell-output.json'), JSON.stringify(cellOutput({ promptHash: 'sha256:real' })), 'utf8');
           await writeFile(join(realDir, 'agent', 'runtime-events.jsonl'), '{"type":"x"}\n', 'utf8');
           await mkdir(join(realDir, 'agent', 'maka-storage', 'sessions', 'sess', 'runs', 'run'), { recursive: true });
@@ -766,7 +795,7 @@ describe('createHarborTaskRunner', () => {
     });
   });
 
-  test('marks verifier dependency setup failures as infra on the cell output', async () => {
+  test('rejects a custom-verifier trial that omits its structured outcome', async () => {
     await withRun(async ({ jobsDir, repo }) => {
       const runner = createHarborTaskRunner({
         makaRepoPath: repo,
@@ -775,6 +804,7 @@ describe('createHarborTaskRunner', () => {
         runHarbor: fakeRunner({
           reward: '0\n',
           cell: cellOutput(),
+          verifierOutcome: null,
           verifierStdout: [
             'Err:1 http://archive.ubuntu.com/ubuntu noble InRelease',
             '  502  Bad Gateway',
@@ -785,11 +815,93 @@ describe('createHarborTaskRunner', () => {
         }),
       });
 
+      await assert.rejects(runner(runInput()), (error: unknown) => {
+        assert.ok(error instanceof HarborInfraError);
+        assert.match(error.message, /structured verifier outcome/);
+        return true;
+      });
+    });
+  });
+
+  test('uses structured verifier timeout outcome instead of stdout infrastructure heuristics', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const runner = createHarborTaskRunner({
+        makaRepoPath: repo,
+        jobsDir,
+        model: 'deepseek/deepseek-v4-flash',
+        runHarbor: fakeRunner({
+          reward: '0\n',
+          verifierStdout: 'APT 502 Failed to fetch archive',
+          verifierOutcome: {
+            schemaVersion: 1,
+            outcome: 'candidate_timeout',
+            attempts: [
+              { attempt: 1, classification: 'timeout', durationMs: 600_000 },
+            ],
+          },
+        }),
+      });
+
       const output = await runner(runInput());
 
-      assert.equal(output.harbor.reward, 0);
-      assert.equal(output.cell.status, 'completed');
-      assert.equal(output.cell.errorClass, 'infra_failed');
+      assert.equal(output.harbor.verifierFailureSummary, 'candidate_timeout');
+      assert.equal(output.harbor.verifier?.outcome, 'candidate_timeout');
+      assert.equal(output.harbor.verifier?.attempts.length, 1);
+      assert.notEqual(output.cell.errorClass, 'infra_failed');
+    });
+  });
+
+  test('accepts a passing verifier outcome recovered after an infrastructure attempt', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const runner = createHarborTaskRunner({
+        makaRepoPath: repo,
+        jobsDir,
+        model: 'deepseek/deepseek-v4-flash',
+        runHarbor: fakeRunner({
+          reward: '1\n',
+          verifierOutcome: {
+            schemaVersion: 1,
+            outcome: 'passed',
+            attempts: [
+              { attempt: 1, classification: 'infra_setup_failed', durationMs: 15, reward: 0 },
+              { attempt: 2, classification: 'passed', durationMs: 12, reward: 1 },
+            ],
+          },
+        }),
+      });
+
+      const output = await runner(runInput());
+
+      assert.equal(output.harbor.reward, 1);
+      assert.equal(output.harbor.verifier?.outcome, 'passed');
+      assert.deepEqual(
+        output.harbor.verifier?.attempts.map((attempt) => attempt.classification),
+        ['infra_setup_failed', 'passed'],
+      );
+    });
+  });
+
+  test('rejects a Harbor reward that disagrees with the structured verifier outcome', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const runner = createHarborTaskRunner({
+        makaRepoPath: repo,
+        jobsDir,
+        model: 'deepseek/deepseek-v4-flash',
+        runHarbor: fakeRunner({
+          reward: '1\n',
+          verifierOutcome: {
+            schemaVersion: 1,
+            outcome: 'failed',
+            attempts: [{ attempt: 1, classification: 'failed', durationMs: 12, reward: 0 }],
+          },
+        }),
+      });
+
+      await assert.rejects(runner(runInput()), (error: unknown) => {
+        assert.ok(error instanceof HarborInfraError);
+        assert.match(error.message, /reward disagrees with verifier outcome/);
+        return true;
+      });
     });
   });
 
@@ -866,6 +978,56 @@ describe('createHarborTaskRunner', () => {
   });
 });
 
+describe('createHarborOracleQualifier', () => {
+  test('runs the built-in Oracle with the same structured verifier policy', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const captured: FakeOptions['captured'] = {};
+      const qualify = createHarborOracleQualifier({
+        makaRepoPath: repo,
+        jobsDir,
+        dockerPlatform: 'linux/amd64',
+        runHarbor: fakeRunner({
+          captured,
+          reward: '1\n',
+          cell: null,
+          verifierOutcome: {
+            schemaVersion: 1,
+            outcome: 'passed',
+            attempts: [{ attempt: 1, classification: 'passed', durationMs: 12, reward: 1 }],
+          },
+        }),
+      });
+
+      const result = await qualify({ id: 'task-1', path: '/tasks/cobol-modernization' });
+      const config = captured.config!;
+      const verifier = config.verifier as Record<string, unknown>;
+      assert.deepEqual(result, { outcome: 'passed', reward: 1, attempts: 1 });
+      assert.deepEqual(config.agents, [{ name: 'oracle' }]);
+      assert.equal(verifier.import_path, 'maka_verifier:MakaVerifier');
+      const fingerprint = buildHarborVerifierPolicyFingerprint({
+        implementationSource: 'verifier source v1',
+        toolchainFingerprint: 'sha256:toolchain-v1',
+      });
+      assert.match(fingerprint, /^sha256:[a-f0-9]{64}$/);
+      assert.notEqual(
+        fingerprint,
+        buildHarborVerifierPolicyFingerprint({
+          implementationSource: 'verifier source v2',
+          toolchainFingerprint: 'sha256:toolchain-v1',
+        }),
+      );
+      assert.notEqual(
+        fingerprint,
+        buildHarborVerifierPolicyFingerprint({
+          implementationSource: 'verifier source v1',
+          toolchainFingerprint: 'sha256:toolchain-v2',
+        }),
+      );
+      assert.equal(HARBOR_VERIFIER_MAX_ATTEMPTS, 2);
+    });
+  });
+});
+
 describe('buildHarborJobConfig', () => {
   test('pins the OpenCode adapter and max model variant without serializing credentials', () => {
     const toolchain = {
@@ -888,6 +1050,7 @@ describe('buildHarborJobConfig', () => {
     const env = agent.env as Record<string, string>;
     const mounts = (config.environment as { mounts: Array<Record<string, unknown>> }).mounts;
     const extraDockerCompose = (config.environment as { extra_docker_compose?: string[] }).extra_docker_compose;
+    const verifier = config.verifier as Record<string, unknown>;
 
     // Harbor resolves built-in names before import_path, so setting both would
     // silently bypass MakaOpenCodeAgent and its host-side auth proxy.
@@ -905,6 +1068,9 @@ describe('buildHarborJobConfig', () => {
       && mount.read_only === true
     )));
     assert.deepEqual(extraDockerCompose, ['/repo/packages/headless/harbor/docker-compose-linux-amd64.yaml']);
+    assert.equal(verifier.import_path, 'maka_verifier:MakaVerifier');
+    assert.deepEqual(verifier.kwargs, { attempt_timeout_sec: 600, max_attempts: 2 });
+    assert.equal(verifier.override_timeout_sec, 1_320);
     assert.equal(env.ZAI_API_KEY, undefined);
     assert.equal(env.ZAI_API_KEY_FILE, undefined);
   });
@@ -1086,7 +1252,7 @@ describe('createHarborTaskRunner timeout', () => {
           metadata: { agentTimeoutSec: 7_200, verifierTimeoutSec: 600 },
         },
       }));
-      assert.equal(seenTimeout, (7_200 + 600 + 15 * 60) * 1_000);
+      assert.equal(seenTimeout, (7_200 + 1_320 + 15 * 60) * 1_000);
     });
   });
 
