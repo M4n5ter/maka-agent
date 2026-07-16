@@ -647,7 +647,7 @@ describe('Maka Pi TUI runner', () => {
     terminal.input('n');
     terminal.input('\r');
 
-    await waitFor(() => terminal.output().includes('›'));
+    await waitFor(() => terminal.output().includes('(31 lines)'));
     assert.equal(terminal.output().includes('expanded-tail'), false);
 
     terminal.input('\x0f');
@@ -695,7 +695,7 @@ describe('Maka Pi TUI runner', () => {
         output: pipeOutput('done\n'),
       },
     });
-    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('·  4s'));
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('(4s · 1 line)'));
 
     exitMaka(terminal);
     await run;
@@ -717,7 +717,7 @@ describe('Maka Pi TUI runner', () => {
 
     terminal.input('run');
     terminal.input('\r');
-    await waitFor(() => terminal.output().includes('›'));
+    await waitFor(() => terminal.output().includes('(31 lines)'));
 
     // Kitty keyboard protocol terminals (Ghostty/Kitty) send one event for the
     // key press and another for the release. The release must not undo the
@@ -725,11 +725,11 @@ describe('Maka Pi TUI runner', () => {
     terminal.input('\x1b[111;5u');
     terminal.input('\x1b[111;5:3u');
 
-    // The compact-only › hint leaving the screen proves the card is
+    // The compact-only annotation leaving the screen proves the card is
     // still expanded after the release event.
-    await waitFor(() => !plainTerminalOutput(terminal.screenOutput()).includes('›'));
+    await waitFor(() => !plainTerminalOutput(terminal.screenOutput()).includes('(31 lines)'));
     await delay(20);
-    assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('›'), false);
+    assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('(31 lines)'), false);
 
     exitMaka(terminal);
     await Promise.race([
@@ -2149,7 +2149,7 @@ describe('Maka Pi TUI runner', () => {
     terminal.input('/session session-2');
     terminal.input('\r');
 
-    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('·  4s'));
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('(4s · 2 lines)'));
     assert.deepEqual(reads, ['session-2']);
 
     exitMaka(terminal);
@@ -2749,7 +2749,10 @@ describe('Maka Pi TUI runner', () => {
     }]);
 
     await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('detached'));
-    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('buffered owner revision'));
+    // The stale one-line hydration must not clobber the newer two-line local
+    // output: the compact row reports the merged output's line count.
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('2 lines'));
+    assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('1 line'), false);
     assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('Ask Maka to stop this task'), false);
 
     assert.ok(listener);
@@ -2765,7 +2768,7 @@ describe('Maka Pi TUI runner', () => {
         output: pipeOutput('still running\nbuffered owner revision\ndone\n'),
       },
     });
-    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('done'));
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('3 lines'));
     assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('detached'), false);
 
     exitMaka(terminal);
@@ -2883,7 +2886,9 @@ describe('Maka Pi TUI runner', () => {
       },
     }]);
 
-    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('authoritative terminal state'));
+    // The authoritative settled card is the one that shows its 4s elapsed
+    // time; the intermediate detached snapshot only carries a line count.
+    await waitFor(() => plainTerminalOutput(terminal.screenOutput()).includes('(4s · 1 line)'));
     assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('detached'), false);
     assert.equal(hydrationAttempts, 2);
 
