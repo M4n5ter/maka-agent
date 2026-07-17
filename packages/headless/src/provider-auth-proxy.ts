@@ -6,13 +6,26 @@ import type { Socket } from 'node:net';
 export interface ProviderAuthProxy {
   baseUrl: string;
   token: string;
+  usage(): ProviderTokenUsage | null;
   close(): Promise<void>;
 }
+
+export interface ProviderTokenUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}
+
+export type ProviderAuthProxyMode = 'bearer' | 'x-api-key';
+export type ProviderUsageProtocol = 'anthropic-sse' | 'openai-chat-sse';
 
 export async function startProviderAuthProxy(input: {
   upstreamBaseUrl: string;
   apiKeyFile: string;
   advertisedHost?: string;
+  authMode?: ProviderAuthProxyMode;
+  usageProtocol?: ProviderUsageProtocol;
 }): Promise<ProviderAuthProxy> {
   const upstreamBaseUrl = new URL(input.upstreamBaseUrl);
   if (upstreamBaseUrl.protocol !== 'https:' && upstreamBaseUrl.protocol !== 'http:') {
@@ -20,7 +33,9 @@ export async function startProviderAuthProxy(input: {
   }
   const providerKey = (await readFile(input.apiKeyFile, 'utf8')).trim();
   if (providerKey.length === 0) throw new Error('provider API key file is empty');
+  const authMode = input.authMode ?? 'bearer';
   const token = randomBytes(32).toString('hex');
+  const usage = new ProviderUsageAccumulator();
   const activeRequests = new Set<AbortController>();
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
@@ -32,6 +47,9 @@ export async function startProviderAuthProxy(input: {
       upstreamBaseUrl,
       providerKey,
       token,
+      authMode,
+      usageProtocol: input.usageProtocol,
+      usage,
       signal: controller.signal,
     }).finally(() => activeRequests.delete(controller));
   });
@@ -55,6 +73,7 @@ export async function startProviderAuthProxy(input: {
   return {
     baseUrl: `http://${advertisedHost}:${address.port}`,
     token,
+    usage: () => usage.snapshot(),
     close: async () => {
       const closed = new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
@@ -72,10 +91,16 @@ async function forwardProviderRequest(input: {
   upstreamBaseUrl: URL;
   providerKey: string;
   token: string;
+  authMode: ProviderAuthProxyMode;
+  usageProtocol?: ProviderUsageProtocol;
+  usage: ProviderUsageAccumulator;
   signal: AbortSignal;
 }): Promise<void> {
   try {
-    if (!authorized(input.request.headers.authorization, input.token)) {
+    const presentedCredential = input.authMode === 'x-api-key'
+      ? input.request.headers['x-api-key']
+      : input.request.headers.authorization;
+    if (!authorized(presentedCredential, input.token, input.authMode)) {
       input.response.writeHead(401).end('unauthorized');
       return;
     }
@@ -85,11 +110,12 @@ async function forwardProviderRequest(input: {
     upstreamUrl.search = incomingUrl.search;
     const headers = new Headers();
     for (const [name, value] of Object.entries(input.request.headers)) {
-      if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue;
+      if (value === undefined || REQUEST_HEADER_DENYLIST.has(name.toLowerCase())) continue;
       if (Array.isArray(value)) value.forEach((item) => headers.append(name, item));
       else headers.set(name, value);
     }
-    headers.set('authorization', `Bearer ${input.providerKey}`);
+    if (input.authMode === 'x-api-key') headers.set('x-api-key', input.providerKey);
+    else headers.set('authorization', `Bearer ${input.providerKey}`);
     const body = input.request.method === 'GET' || input.request.method === 'HEAD'
       ? undefined
       : await readRequestBody(input.request);
@@ -104,9 +130,17 @@ async function forwardProviderRequest(input: {
       if (!HOP_BY_HOP_HEADERS.has(name.toLowerCase())) responseHeaders[name] = value;
     });
     input.response.writeHead(upstreamResponse.status, responseHeaders);
+    const responseUsage = input.usageProtocol
+      && upstreamResponse.headers.get('content-type')?.includes('text/event-stream')
+      ? new SseUsageParser(input.usageProtocol)
+      : null;
     if (upstreamResponse.body) {
-      for await (const chunk of upstreamResponse.body) input.response.write(chunk);
+      for await (const chunk of upstreamResponse.body) {
+        responseUsage?.push(chunk);
+        input.response.write(chunk);
+      }
     }
+    if (upstreamResponse.ok && responseUsage) input.usage.add(responseUsage.finish());
     input.response.end();
   } catch {
     if (input.response.destroyed) return;
@@ -115,9 +149,132 @@ async function forwardProviderRequest(input: {
   }
 }
 
-function authorized(header: string | undefined, token: string): boolean {
-  if (!header?.startsWith('Bearer ')) return false;
-  const presented = Buffer.from(header.slice('Bearer '.length));
+class ProviderUsageAccumulator {
+  private readonly total: ProviderTokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  private sawUsage = false;
+
+  add(usage: ProviderTokenUsage | null): void {
+    if (!usage) return;
+    this.sawUsage = true;
+    this.total.input += usage.input;
+    this.total.cacheRead += usage.cacheRead;
+    this.total.cacheWrite += usage.cacheWrite;
+    this.total.output += usage.output;
+  }
+
+  snapshot(): ProviderTokenUsage | null {
+    return this.sawUsage ? { ...this.total } : null;
+  }
+}
+
+class SseUsageParser {
+  private readonly decoder = new TextDecoder();
+  private buffer = '';
+  private readonly usage: ProviderTokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  private sawUsage = false;
+
+  constructor(private readonly protocol: ProviderUsageProtocol) {}
+
+  push(chunk: Uint8Array): void {
+    this.buffer += this.decoder.decode(chunk, { stream: true });
+    this.consumeCompleteLines();
+  }
+
+  finish(): ProviderTokenUsage | null {
+    this.buffer += this.decoder.decode();
+    this.consumeCompleteLines(true);
+    return this.sawUsage ? { ...this.usage } : null;
+  }
+
+  private consumeCompleteLines(flush = false): void {
+    const lines = this.buffer.split(/\r?\n/);
+    this.buffer = flush ? '' : lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const raw = line.slice('data:'.length).trim();
+      if (!raw || raw === '[DONE]') continue;
+      let event: unknown;
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (!isRecord(event)) continue;
+      const usage = this.protocol === 'anthropic-sse'
+        ? anthropicUsage(event)
+        : openAiChatUsage(event);
+      if (!usage) continue;
+      this.sawUsage = true;
+      this.usage.input = Math.max(this.usage.input, usage.input);
+      this.usage.cacheRead = Math.max(this.usage.cacheRead, usage.cacheRead);
+      this.usage.cacheWrite = Math.max(this.usage.cacheWrite, usage.cacheWrite);
+      this.usage.output = Math.max(this.usage.output, usage.output);
+    }
+  }
+}
+
+function anthropicUsage(event: Record<string, unknown>): ProviderTokenUsage | null {
+  const usage = isRecord(event.usage)
+    ? event.usage
+    : isRecord(event.message) && isRecord(event.message.usage)
+      ? event.message.usage
+      : null;
+  if (!usage || !hasAnyNumber(usage, [
+    'input_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+    'output_tokens',
+  ])) return null;
+  const cacheRead = nonNegativeNumber(usage.cache_read_input_tokens);
+  const cacheWrite = nonNegativeNumber(usage.cache_creation_input_tokens);
+  return {
+    input: nonNegativeNumber(usage.input_tokens) + cacheRead + cacheWrite,
+    cacheRead,
+    cacheWrite,
+    output: nonNegativeNumber(usage.output_tokens),
+  };
+}
+
+function openAiChatUsage(event: Record<string, unknown>): ProviderTokenUsage | null {
+  if (!isRecord(event.usage) || !hasAnyNumber(event.usage, ['prompt_tokens', 'completion_tokens'])) return null;
+  const details = isRecord(event.usage.prompt_tokens_details) ? event.usage.prompt_tokens_details : null;
+  return {
+    input: nonNegativeNumber(event.usage.prompt_tokens),
+    cacheRead: nonNegativeNumber(details?.cached_tokens),
+    cacheWrite: 0,
+    output: nonNegativeNumber(event.usage.completion_tokens),
+  };
+}
+
+function hasAnyNumber(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => (
+    typeof record[key] === 'number'
+    && Number.isFinite(record[key])
+    && (record[key] as number) >= 0
+  ));
+}
+
+function nonNegativeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function authorized(
+  header: string | string[] | undefined,
+  token: string,
+  authMode: ProviderAuthProxyMode,
+): boolean {
+  if (typeof header !== 'string') return false;
+  const value = authMode === 'bearer'
+    ? header.startsWith('Bearer ')
+      ? header.slice('Bearer '.length)
+      : undefined
+    : header;
+  if (value === undefined) return false;
+  const presented = Buffer.from(value);
   const expected = Buffer.from(token);
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
@@ -142,4 +299,9 @@ const HOP_BY_HOP_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+]);
+
+const REQUEST_HEADER_DENYLIST = new Set([
+  ...HOP_BY_HOP_HEADERS,
+  'x-api-key',
 ]);
