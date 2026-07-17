@@ -7,7 +7,7 @@ import {
   type HostFrame,
 } from '../protocol/index.js';
 
-const MAX_QUEUED_FRAMES = 32;
+const MAX_QUEUED_FRAMES = 64;
 
 interface ReadWaiter {
   resolve(value: unknown): void;
@@ -82,8 +82,11 @@ export class FramedTransport {
   }
 
   write(frame: ClientFrame | HostFrame): Promise<void> {
+    return this.writeEncoded(encodeProtocolFrame(frame));
+  }
+
+  writeEncoded(encoded: Uint8Array): Promise<void> {
     if (this.#failure) return Promise.reject(this.#failure);
-    const encoded = encodeProtocolFrame(frame);
     return new Promise((resolve, reject) => {
       this.socket.write(encoded, (error) => {
         if (error) reject(error);
