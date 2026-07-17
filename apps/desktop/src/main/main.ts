@@ -14,6 +14,7 @@ import type {
   AppSettings,
   BotProvider,
   ConnectionEvent,
+  CreateSessionInput,
   PermissionMode,
   SessionChangedEvent,
   SessionChangedReason,
@@ -173,6 +174,10 @@ import { registerSettingsIpc } from './settings-ipc-main.js';
 import { registerGatewayIpc } from './gateway-ipc-main.js';
 import { registerSessionsIpc } from './sessions-ipc-main.js';
 import { createProjectRootController } from './project-root-controller.js';
+import {
+  assertSessionWorkspaceAvailable,
+  resolveProjectContextRoot,
+} from './project-context-root.js';
 
 // E2E switches must never fire in a packaged build, and must never run against
 // the real user data: a stray MAKA_E2E on a build/dev machine would otherwise
@@ -340,6 +345,7 @@ const automationWiring = createMainAutomationWiring({
   },
   // Heartbeat: inject into the automation's own session; resolve after the stream.
   async injectTurn(sessionId: string, prompt: string, automationId: string) {
+    await ensureSessionCanSend(sessionId);
     const turnId = randomUUID();
     const iterator = runtime.sendMessage(sessionId, {
       turnId, text: prompt, origin: { kind: 'automation', automationId },
@@ -353,7 +359,7 @@ const automationWiring = createMainAutomationWiring({
     const slug = await connectionStore.getDefault();
     const { connection, model } = await getReadyConnection(slug, undefined);
     const cwd = await resolveCurrentProjectRoot();
-    const session = await runtime.createSession({
+    const session = await createDesktopSession({
       cwd,
       backend: 'ai-sdk',
       llmConnectionSlug: connection.slug,
@@ -363,6 +369,7 @@ const automationWiring = createMainAutomationWiring({
       labels: ['automation', 'cron'],
     });
     emitSessionsChanged('created', session.id);
+    await ensureSessionCanSend(session.id);
     const turnId = randomUUID();
     const iterator = runtime.sendMessage(session.id, {
       turnId, text: prompt, origin: { kind: 'automation', automationId },
@@ -427,7 +434,12 @@ const goalWiring = createMainGoalWiring({
       header.status === 'aborted' ||
       header.status === 'waiting_for_user'
     ) return false;
-    return true;
+    try {
+      await ensureSessionCanSend(sessionId);
+      return true;
+    } catch {
+      return false;
+    }
   },
   // Surface every goal transition to the renderer so an active autonomous loop
   // is visible (badge + clear affordance) — never a silent token burn.
@@ -715,6 +727,11 @@ const projectRootController = createProjectRootController({
   fallbackRoots: () => [process.cwd(), app.getAppPath()],
 });
 const resolveCurrentProjectRoot: () => Promise<string> = () => projectRootController.current();
+const resolveProjectRootForContext = (sessionId: unknown): Promise<string> =>
+  resolveProjectContextRoot(sessionId, {
+    currentProjectRoot: resolveCurrentProjectRoot,
+    readSessionCwd: async (id) => (await store.readHeader(id)).cwd,
+  });
 const botRegistry = new BotRegistry({
   onIncomingMessage: (message: BotIncomingMessage) => {
     // Only log incoming bot messages in dev — production stdout leaking
@@ -984,6 +1001,7 @@ const dailyReview = createDailyReviewMainService({
 });
 botIncoming = createBotIncomingMainService({
   runtime,
+  createSession: createDesktopSession,
   botRegistry,
   getCurrentProjectRoot: () => resolveCurrentProjectRoot(),
   getDefaultConnectionSlug: () => connectionStore.getDefault(),
@@ -1019,6 +1037,8 @@ function registerIpc(): void {
   registerAppIpc({
     mainWindowController,
     projectRoot: projectRootController,
+    getSessionProjectRoot: async (sessionId) => (await store.readHeader(sessionId)).cwd,
+    getProjectRoot: resolveProjectRootForContext,
     workspaceRoot,
     buildInfo,
     visualSmokeFixture,
@@ -1033,8 +1053,8 @@ function registerIpc(): void {
     mainWindowController,
     sendToRenderer: safeSendToRenderer,
   });
-  registerWorkspaceSearchIpc({ getCurrentProjectRoot: currentProjectRoot });
-  registerGitIpc({ getCurrentProjectRoot: currentProjectRoot });
+  registerWorkspaceSearchIpc({ getProjectRoot: resolveProjectRootForContext });
+  registerGitIpc({ getProjectRoot: resolveProjectRootForContext });
   registerPlanReminderIpc({ planReminders, getWorkspacePrivacyContext });
   registerSessionsIpc({
     runtime,
@@ -1052,6 +1072,8 @@ function registerIpc(): void {
     visualSmokeFixture,
     emitSessionsChanged,
     ensureSessionCanSend,
+    ensureSessionWorkspaceAvailable,
+    createSession: createDesktopSession,
     getReadyConnection,
     streamEvents,
     getCurrentProjectRoot: currentProjectRoot,
@@ -1090,6 +1112,7 @@ function registerIpc(): void {
     getOnboardingState: async () => (await onboardingService.getSnapshot()).state,
     emitSessionsChanged,
     ensureSessionCanSend,
+    createSession: createDesktopSession,
     streamEvents,
     quickChatStart: (input) => handleQuickChatStart(input, currentProjectRoot),
   });
@@ -1263,7 +1286,7 @@ function isTurnStatusChangingSessionEvent(event: SessionEvent): boolean {
 }
 
 async function ensureSessionCanSend(sessionId: string): Promise<void> {
-  const header = await store.readHeader(sessionId);
+  const header = await readAvailableSessionHeader(sessionId);
   let result: Awaited<ReturnType<typeof ensureSessionCanSendOrRebind>>;
   try {
     result = await ensureSessionCanSendOrRebind(sessionId, header, {
@@ -1288,6 +1311,21 @@ async function ensureSessionCanSend(sessionId: string): Promise<void> {
       modelId: result.modelId,
     });
   }
+}
+
+async function readAvailableSessionHeader(sessionId: string) {
+  const header = await store.readHeader(sessionId);
+  await assertSessionWorkspaceAvailable(header.cwd);
+  return header;
+}
+
+async function ensureSessionWorkspaceAvailable(sessionId: string): Promise<void> {
+  await readAvailableSessionHeader(sessionId);
+}
+
+async function createDesktopSession(input: CreateSessionInput) {
+  await assertSessionWorkspaceAvailable(input.cwd);
+  return runtime.createSession(input);
 }
 
 const readyConnectionDeps = {
@@ -1326,7 +1364,7 @@ async function handleQuickChatStart(
           ? Promise.resolve<PermissionMode>('explore')
           : resolveDefaultPermissionMode(() => settingsStore.get()),
       ]);
-      return runtime.createSession({
+      return createDesktopSession({
         cwd: await getCurrentProjectRoot(),
         backend: 'ai-sdk',
         llmConnectionSlug: ready.connection.slug,
