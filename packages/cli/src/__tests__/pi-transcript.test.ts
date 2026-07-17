@@ -17,7 +17,6 @@ import {
   refreshRunningShellRunElapsed,
   replaceTranscriptWithStoredMessages,
   submitCompactToTranscript,
-  submitPromptToTranscript,
   toggleAllThinkingExpansion,
   toggleAllToolExpansion,
   togglePendingPermissionDetails,
@@ -92,90 +91,6 @@ describe('Maka Pi TUI transcript', () => {
     );
   });
 
-  test('streams a submitted prompt through the session driver into transcript state', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([
-      event({
-        type: 'text_delta',
-        messageId: 'message-1',
-        text: 'Hello from Maka',
-      }),
-      event({ type: 'complete', stopReason: 'end_turn' }),
-    ]);
-    let changes = 0;
-
-    await submitPromptToTranscript({
-      state,
-      driver,
-      prompt: 'hi',
-      onChange: () => {
-        changes++;
-      },
-    });
-
-    assert.deepEqual(driver.prompts, ['hi']);
-    assert.deepEqual(state.entries.map((entry) => entry.kind), ['user', 'assistant']);
-    assert.equal(state.entries[0]?.kind === 'user' ? state.entries[0].text : '', 'hi');
-    assert.equal(state.entries[1]?.kind === 'assistant' ? state.entries[1].text : '', 'Hello from Maka');
-    assert.ok(changes >= 2);
-  });
-
-  // Goal kill-switch (B1): the turn outcome must distinguish a clean end from a
-  // user-stop / abort / error so the runner can skip goal auto-continuation and
-  // never re-inject after the user interrupts (or after a failing turn).
-  test('reports a clean turn with the terminal event identity', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'complete', stopReason: 'end_turn' })]);
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-    assert.deepEqual(outcome, { kind: 'completed', turnId: 'turn-1' });
-  });
-
-  test('treats EOF without a terminal event as an errored turn', async () => {
-    const state = createMakaPiTranscriptState();
-    const outcome = await submitPromptToTranscript({
-      state,
-      driver: new RecordingDriver([]),
-      prompt: 'hi',
-    });
-
-    assert.deepEqual(outcome, { kind: 'errored' });
-    assert.ok(state.entries.some(
-      (entry) => entry.kind === 'notice'
-        && entry.level === 'error'
-        && entry.text === 'Session turn ended without a completion event',
-    ));
-  });
-
-  test('reports a user_stop completion as aborted (Stop affordance)', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'complete', stopReason: 'user_stop' })]);
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-    assert.deepEqual(outcome, { kind: 'aborted', turnId: 'turn-1' });
-  });
-
-  test('reports an abort event as aborted', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'abort', reason: 'user_stop' })]);
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-    assert.deepEqual(outcome, { kind: 'aborted', turnId: 'turn-1' });
-  });
-
-  test('reports a stream error event as errored', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'error', recoverable: false, message: 'boom' })]);
-    let errorRaised = false;
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi', onError: () => { errorRaised = true; } });
-    assert.deepEqual(outcome, { kind: 'errored', turnId: 'turn-1' });
-    assert.equal(errorRaised, true);
-  });
-
-  test('reports a complete{stopReason:error} finish as errored (non-throwing error, e.g. content-filter)', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'complete', stopReason: 'error' })]);
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-    assert.deepEqual(outcome, { kind: 'errored', turnId: 'turn-1' });
-  });
-
   test('shows a fixed system notice when the configured step limit is reached', () => {
     const state = createMakaPiTranscriptState();
 
@@ -200,32 +115,6 @@ describe('Maka Pi TUI transcript', () => {
       level: 'info',
       text: 'Reached the configured step limit. The task may be incomplete. Send “continue” to resume.',
     }]);
-  });
-
-  test('step_limit prevents automatic goal continuation', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = new RecordingDriver([event({ type: 'complete', stopReason: 'step_limit' })]);
-
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-
-    assert.deepEqual(outcome, { kind: 'errored', turnId: 'turn-1' });
-  });
-
-  test('reports a thrown sendPrompt as errored', async () => {
-    const state = createMakaPiTranscriptState();
-    const driver = {
-      async *sendPrompt(): AsyncIterable<SessionEvent> {
-        yield event({
-          type: 'permission_request', requestId: 'permission-1', toolUseId: 'tool-1',
-          toolName: 'Bash', category: 'shell_unsafe', reason: 'shell_dangerous', args: {},
-        });
-        throw new Error('network down');
-      },
-    };
-    const outcome = await submitPromptToTranscript({ state, driver, prompt: 'hi' });
-    assert.equal(outcome.kind, 'errored');
-    assert.equal(state.pendingInteraction, undefined);
-    assert.deepEqual(state.queuedInteractions, []);
   });
 
   test('reports completed manual compact runs when there was nothing to compact', async () => {
@@ -3605,15 +3494,9 @@ function ptyOutput(overrides: Partial<PtyShellOutput> = {}): PtyShellOutput {
 }
 
 class RecordingDriver {
-  readonly prompts: string[] = [];
   compactCalls = 0;
 
   constructor(private readonly events: SessionEvent[]) {}
-
-  async *sendPrompt(prompt: string, options?: { modelText?: string }): AsyncIterable<SessionEvent> {
-    this.prompts.push(options?.modelText ?? prompt);
-    for (const event of this.events) yield event;
-  }
 
   async *compactSession(): AsyncIterable<SessionEvent> {
     this.compactCalls += 1;

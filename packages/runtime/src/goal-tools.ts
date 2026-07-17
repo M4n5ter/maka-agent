@@ -8,7 +8,8 @@
 
 import { z } from 'zod';
 import type { MakaTool } from './tool-runtime.js';
-import type { GoalManager, GoalState } from './goal-state.js';
+import { TERMINAL_GOAL_STATUSES, type GoalManager, type GoalState } from './goal-state.js';
+import type { GoalContinuationCoordinator } from './goal-continuation.js';
 
 export const GOAL_SET_TOOL_NAME = 'GoalSet';
 export const GOAL_CLEAR_TOOL_NAME = 'GoalClear';
@@ -18,6 +19,8 @@ export const GOAL_RESUME_TOOL_NAME = 'GoalResume';
 
 export interface GoalToolsDeps {
   goalManager: GoalManager;
+  /** Owns atomic turn authorization for every model-triggered Goal mutation. */
+  goalContinuation: Pick<GoalContinuationCoordinator, 'activateGoal' | 'mutateGoal'>;
   /** Current cumulative token count for a session (baseline for budget). */
   getTokenCount?: (sessionId: string) => number;
   now?: () => number;
@@ -59,18 +62,23 @@ function buildGoalSetTool(deps: GoalToolsDeps): MakaTool<{
     }),
     permissionRequired: false,
     impl: (input, ctx) => {
-      const tokensAtStart = deps.getTokenCount?.(ctx.sessionId) ?? 0;
-      const result = deps.goalManager.create(ctx.sessionId, input.condition, {
-        maxIterations: input.max_iterations,
-        blockCap: input.block_cap,
-        tokenBudget: input.token_budget,
-        tokensAtStart,
-      });
-      if (result.kind === 'unfinished') {
-        return `Goal not set: unfinished goal "${result.goal.condition}" is ${result.goal.status}. `
+      const existing = deps.goalManager.get(ctx.sessionId);
+      if (existing && !TERMINAL_GOAL_STATUSES.has(existing.status)) {
+        return `Goal not set: unfinished goal "${existing.condition}" is ${existing.status}. `
           + 'Clear or complete it before setting another goal.';
       }
-      const goal = result.goal;
+      const tokensAtStart = deps.getTokenCount?.(ctx.sessionId) ?? 0;
+      const goal = deps.goalContinuation.activateGoal(ctx.sessionId, ctx.turnId, () => {
+        return deps.goalManager.create(ctx.sessionId, input.condition, {
+          maxIterations: input.max_iterations,
+          blockCap: input.block_cap,
+          tokenBudget: input.token_budget,
+          tokensAtStart,
+        }).goal;
+      });
+      if (!goal) {
+        return 'Goal not set: this turn no longer owns Goal activation.';
+      }
       const limits = [
         `max ${goal.maxIterations} turns`,
         `stall after ${goal.blockCap} no-progress turns`,
@@ -90,8 +98,16 @@ function buildGoalClearTool(deps: GoalToolsDeps): MakaTool<Record<string, never>
     parameters: z.object({}),
     permissionRequired: false,
     impl: (_input, ctx) => {
-      const goal = deps.goalManager.clear(ctx.sessionId);
-      if (!goal) return 'No active goal to clear.';
+      const current = deps.goalManager.get(ctx.sessionId);
+      if (!current || TERMINAL_GOAL_STATUSES.has(current.status)) {
+        return 'No active goal to clear.';
+      }
+      const goal = deps.goalContinuation.mutateGoal(ctx.sessionId, ctx.turnId, () => {
+        return deps.goalManager.clear(ctx.sessionId)!;
+      });
+      if (!goal) {
+        return 'Goal not cleared: this turn no longer owns Goal control.';
+      }
       return `Goal cleared: "${goal.condition}" after ${goal.iterations} turn(s).`;
     },
   };
@@ -105,8 +121,16 @@ function buildGoalPauseTool(deps: GoalToolsDeps): MakaTool<Record<string, never>
     parameters: z.object({}),
     permissionRequired: false,
     impl: (_input, ctx) => {
-      const goal = deps.goalManager.pause(ctx.sessionId);
-      if (!goal) return 'No active goal to pause.';
+      const current = deps.goalManager.get(ctx.sessionId);
+      if (!current || (current.status !== 'active' && current.status !== 'waiting')) {
+        return 'No active goal to pause.';
+      }
+      const goal = deps.goalContinuation.mutateGoal(ctx.sessionId, ctx.turnId, () => {
+        return deps.goalManager.pause(ctx.sessionId)!;
+      });
+      if (!goal) {
+        return 'Goal not paused: this turn no longer owns Goal control.';
+      }
       return `Goal paused: "${goal.condition}" at turn ${goal.iterations}. Use GoalResume to continue.`;
     },
   };
@@ -120,8 +144,15 @@ function buildGoalResumeTool(deps: GoalToolsDeps): MakaTool<Record<string, never
     parameters: z.object({}),
     permissionRequired: false,
     impl: (_input, ctx) => {
-      const goal = deps.goalManager.resume(ctx.sessionId);
-      if (!goal) return 'No paused goal to resume.';
+      if (deps.goalManager.get(ctx.sessionId)?.status !== 'paused') {
+        return 'No paused goal to resume.';
+      }
+      const goal = deps.goalContinuation.activateGoal(ctx.sessionId, ctx.turnId, () => {
+        return deps.goalManager.resume(ctx.sessionId)!;
+      });
+      if (!goal) {
+        return 'Goal not resumed: this turn no longer owns Goal activation.';
+      }
       return `Goal resumed: "${goal.condition}". Autonomous continuation re-enabled.`;
     },
   };
@@ -155,6 +186,6 @@ function formatGoal(goal: GoalState, deps: GoalToolsDeps): string {
   ];
   if (goal.tokenBudget) lines.push(`Tokens: ${spent}/${goal.tokenBudget}`);
   else if (spent > 0) lines.push(`Tokens spent: ${spent}`);
-  if (goal.lastReason) lines.push(`Last evaluation: ${goal.lastReason}`);
+  if (goal.lastReason) lines.push(`Last reason: ${goal.lastReason}`);
   return lines.join('\n');
 }

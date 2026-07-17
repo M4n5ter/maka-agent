@@ -980,7 +980,13 @@ export type { CanFireSessionHeader, EvaluateAutomationCanFireDeps } from './auto
 // Goal execution (Issue #15 Primitive 6).
 // ───────────────────────────────────────────────────────────────────────────
 export { GoalManager, TERMINAL_GOAL_STATUSES, DEFAULT_MAX_ITERATIONS, DEFAULT_BLOCK_CAP } from './goal-state.js';
-export type { GoalState, GoalStatus, GoalManagerDeps } from './goal-state.js';
+export type {
+  GoalCheckpoint,
+  GoalManagerDeps,
+  GoalPauseOptions,
+  GoalState,
+  GoalStatus,
+} from './goal-state.js';
 export {
   evaluateGoal,
   buildGoalEvaluationPrompt,
@@ -997,14 +1003,31 @@ export {
   GOAL_RESUME_TOOL_NAME,
 } from './goal-tools.js';
 export type { GoalToolsDeps } from './goal-tools.js';
-export { handleGoalContinuation } from './goal-continuation.js';
+export {
+  GoalContinuationCoordinator,
+  GOAL_WAIT_BACKOFF_BASE_MS,
+  GOAL_WAIT_BACKOFF_MAX_MS,
+} from './goal-continuation.js';
 export type {
   GoalContinuationDeps,
-  GoalContinuationOutcome,
+  GoalContinuationScheduler,
+  GoalExternalTurnStart,
+  GoalExternalTurnSettler,
+  GoalSessionCloseOperation,
   GoalTaskGateDecision,
   GoalTaskGateDeps,
   GoalTaskGateTrace,
+  GoalTurnAdmission,
+  GoalTurnOutcome,
 } from './goal-continuation.js';
+export {
+  SessionActivityRegistry,
+  drainGoalTurn,
+} from './goal-turn-lifecycle.js';
+export type {
+  DrainGoalTurnInput,
+  SessionActivityLease,
+} from './goal-turn-lifecycle.js';
 
 export {
   MAX_SKILL_BODY_CHARS,

@@ -18,15 +18,27 @@ import {
   type ThinkingLevel,
   type UserQuestionResponse,
 } from '@maka/core';
-import type { ShellRunUpdate } from '@maka/runtime';
+import {
+  GoalManager,
+  SessionActivityRegistry,
+  type GoalTurnOutcome,
+  type ShellRunUpdate,
+} from '@maka/runtime';
 import type {
+  MakaPreparePromptOptions,
+  MakaPreparedSessionTurn,
   MakaSessionDriver,
   MakaSessionRewindResult,
   MakaSessionSwitchResult,
   RewindTarget,
   SessionResumeAvailability,
 } from '../session-driver.js';
-import { runMakaPiTui } from '../pi-tui-runner.js';
+import { CliGoalContinuation, type CliGoalTurnHost } from '../cli-goal-continuation.js';
+import {
+  runMakaPiTui as runMakaPiTuiImpl,
+  type MakaPiTuiGoalLifecycle,
+  type MakaPiTuiInput,
+} from '../pi-tui-runner.js';
 import { _setColorLevelForTesting } from '../tui-ansi.js';
 import { BUSY_SPINNER_FRAMES } from '../tui-attention.js';
 import { arrangeAutocompleteAboveEditor } from '../tui-autocomplete-layout.js';
@@ -43,6 +55,63 @@ import {
 // hermetic. Color level is detected from process.env.TERM/COLORTERM at module
 // load, which varies between local (truecolor) and CI (unset/dumb) terminals.
 before(() => _setColorLevelForTesting(3));
+
+type TestMakaPiTuiInput = Omit<MakaPiTuiInput, 'driver' | 'goalLifecycle'> & {
+  driver: MakaSessionDriver;
+  goalLifecycle?: MakaPiTuiGoalLifecycle;
+};
+
+function runMakaPiTui(input: TestMakaPiTuiInput): Promise<void> {
+  const { driver, goalLifecycle, ...rest } = input;
+  return runMakaPiTuiImpl({
+    ...rest,
+    driver,
+    goalLifecycle: goalLifecycle ?? createTestGoalLifecycle(),
+  });
+}
+
+interface TestPromptDriver {
+  getSessionId(): string | null;
+  promptEvents(prompt: string): AsyncIterable<SessionEvent>;
+}
+
+function prepareTestPrompt(
+  driver: TestPromptDriver,
+  prompt: string,
+  turnId = 'turn-1',
+): Promise<MakaPreparedSessionTurn> {
+  return Promise.resolve({
+    sessionId: driver.getSessionId() ?? 'session-1',
+    turnId,
+    events: driver.promptEvents(prompt),
+  });
+}
+
+function createTestGoalLifecycle(
+  onSettled?: (sessionId: string, turnId: string, outcome: GoalTurnOutcome) => void,
+  activities = new SessionActivityRegistry(),
+  onHostChange?: (host: CliGoalTurnHost | undefined) => void,
+): MakaPiTuiGoalLifecycle {
+  return {
+    activities,
+    beginExternalTurn: (sessionId, turnId) => ({
+      kind: 'registered',
+      settle: async (outcome) => {
+        onSettled?.(sessionId, turnId, outcome);
+      },
+    }),
+    bindHost: (host) => {
+      onHostChange?.(host);
+      return () => { onHostChange?.(undefined); };
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe('Maka Pi TUI runner', () => {
   test('restores the terminal before exiting on SIGTERM', async () => {
@@ -1119,10 +1188,13 @@ describe('Maka Pi TUI runner', () => {
     ]);
   });
 
-  test('passes the runtime terminal turn identity to the completion callback', async () => {
+  test('passes the runtime terminal turn identity to the settlement callback', async () => {
     const terminal = new FakeTerminal();
     const driver = new RuntimeTurnIdentityDriver();
-    const completedTurnIds: string[] = [];
+    const settledTurns: Array<{
+      sessionId: string;
+      outcome: { kind: string; turnId?: string };
+    }> = [];
     const run = runMakaPiTui({
       title: 'Maka',
       driver,
@@ -1131,17 +1203,242 @@ describe('Maka Pi TUI runner', () => {
       connectionSlug: 'deepseek',
       permissionMode: 'ask',
       terminal,
-      onTurnComplete: (turnId) => { completedTurnIds.push(turnId); },
+      goalLifecycle: createTestGoalLifecycle((sessionId, turnId, outcome) => {
+        assert.equal(outcome.turnId, turnId);
+        settledTurns.push({ sessionId, outcome });
+      }),
     });
 
     terminal.input('run');
     terminal.input('\r');
-    await waitFor(() => completedTurnIds.length === 1);
+    await waitFor(() => settledTurns.length === 1);
 
-    assert.deepEqual(completedTurnIds, ['runtime-turn-42']);
+    assert.deepEqual(settledTurns, [{
+      sessionId: 'session-1',
+      outcome: { kind: 'completed', turnId: 'runtime-turn-42' },
+    }]);
 
     exitMaka(terminal);
     await run;
+  });
+
+  test('passes an external turn failure to the settlement callback', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new QuickErrorDriver();
+    const settlements: Array<{ sessionId: string; kind: string; reason?: string }> = [];
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'deepseek-v4-flash',
+      connectionSlug: 'deepseek',
+      permissionMode: 'ask',
+      terminal,
+      goalLifecycle: createTestGoalLifecycle((sessionId, _turnId, outcome) => {
+        settlements.push({
+          sessionId,
+          kind: outcome.kind,
+          ...(outcome.kind === 'errored' ? { reason: outcome.reason } : {}),
+        });
+      }),
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await waitFor(() => settlements.length === 1);
+
+    assert.deepEqual(settlements, [{
+      sessionId: 'session-1',
+      kind: 'errored',
+      reason: 'turn failed',
+    }]);
+
+    exitMaka(terminal);
+    await run;
+  });
+
+  test('uses the real CLI Goal lifecycle for external, owned, and switched turns', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new SlashCommandDriver();
+    let goalId = 0;
+    let evaluations = 0;
+    const manager = new GoalManager({
+      generateId: () => `goal-${++goalId}`,
+      now: () => 1,
+    });
+    const lifecycle = new CliGoalContinuation({
+      goalManager: manager,
+      evaluator: {
+        evaluate: async () => {
+          evaluations++;
+          return JSON.stringify({
+            met: evaluations === 2,
+            impossible: false,
+            progress: true,
+            waiting: false,
+            reason: evaluations === 2 ? 'verified' : 'continue',
+          });
+        },
+      },
+      getRecentContext: async () => 'recent context',
+    });
+    assert.equal(manager.create('session-1', 'ship').kind, 'created');
+
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'deepseek-v4-flash',
+      connectionSlug: 'deepseek',
+      permissionMode: 'ask',
+      terminal,
+      goalLifecycle: lifecycle,
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await waitFor(() => manager.get('session-1')?.status === 'achieved');
+    assert.equal(evaluations, 2);
+    assert.equal(driver.prompts.length, 2);
+    assert.equal(driver.prompts[0], 'run');
+    assert.match(driver.prompts[1] ?? '', /\[Goal continuation\]/);
+    assert.equal(manager.get('session-1')?.iterations, 1);
+    assert.equal(lifecycle.activities.whenIdle('session-1'), undefined);
+
+    assert.equal(manager.create('session-1', 'old session goal').kind, 'created');
+    const switched = lifecycle.beginExternalTurn('session-1', 'turn-after-switch');
+    assert.equal(switched.kind, 'registered');
+    if (switched.kind !== 'registered') throw new Error('expected registered switch-boundary turn');
+    await driver.switchSession('session-2');
+    await switched.settle({
+      kind: 'completed',
+      turnId: 'turn-after-switch',
+    });
+    await waitFor(() => manager.get('session-1')?.status === 'paused');
+    assert.equal(
+      manager.get('session-1')?.lastReason,
+      'TUI is attached to a different session.',
+    );
+
+    manager.clear('session-1');
+    exitMaka(terminal);
+    await run;
+
+    lifecycle.dispose();
+    manager.dispose();
+  });
+
+  test('waits to start a visible turn until shared session activity releases', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new SlashCommandDriver();
+    const activities = new SessionActivityRegistry();
+    const heartbeat = activities.reserve('session-1');
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'deepseek-v4-flash',
+      connectionSlug: 'deepseek',
+      permissionMode: 'ask',
+      terminal,
+      goalLifecycle: createTestGoalLifecycle(undefined, activities),
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await delay(0);
+    assert.deepEqual(driver.prompts, []);
+
+    heartbeat.release();
+    await waitFor(() => driver.prompts.length === 1);
+    assert.deepEqual(driver.prompts, ['run']);
+    assert.equal(activities.whenIdle('session-1'), undefined);
+
+    exitMaka(terminal);
+    await run;
+  });
+
+  test('reserves first-session activity before its prepared event stream starts', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new FirstSessionPreparedDriver();
+    const activities = new SessionActivityRegistry();
+    let registered = false;
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'deepseek-v4-flash',
+      connectionSlug: 'deepseek',
+      permissionMode: 'ask',
+      terminal,
+      goalLifecycle: {
+        activities,
+        bindHost: () => () => {},
+        beginExternalTurn: (sessionId, turnId) => {
+          assert.equal(sessionId, 'session-first');
+          assert.equal(turnId, 'turn-first');
+          assert.ok(activities.whenIdle(sessionId));
+          registered = true;
+          return {
+            kind: 'registered',
+            settle: async () => {},
+          };
+        },
+      },
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await driver.streamStarted.promise;
+    assert.equal(registered, true);
+    assert.ok(activities.whenIdle('session-first'));
+    assert.equal(activities.reserveIfIdle('session-first'), undefined);
+
+    let heartbeatAcquired = false;
+    const heartbeat = activities.acquire('session-first').then((lease) => {
+      heartbeatAcquired = true;
+      return lease;
+    });
+    await delay(0);
+    assert.equal(heartbeatAcquired, false);
+
+    driver.releaseStream.resolve();
+    const heartbeatLease = await heartbeat;
+    heartbeatLease.release();
+    await waitFor(() => activities.whenIdle('session-first') === undefined);
+
+    exitMaka(terminal);
+    await run;
+  });
+
+  test('does not start a visible turn after closing while it waits for shared activity', async () => {
+    const terminal = new FakeTerminal();
+    const driver = new SlashCommandDriver();
+    const activities = new SessionActivityRegistry();
+    const heartbeat = activities.reserve('session-1');
+    const run = runMakaPiTui({
+      title: 'Maka',
+      driver,
+      cwd: '/repo',
+      model: 'deepseek-v4-flash',
+      connectionSlug: 'deepseek',
+      permissionMode: 'ask',
+      terminal,
+      goalLifecycle: createTestGoalLifecycle(undefined, activities),
+    });
+
+    terminal.input('run');
+    terminal.input('\r');
+    await delay(0);
+    assert.deepEqual(driver.prompts, []);
+
+    exitMaka(terminal);
+    await run;
+    heartbeat.release();
+    await delay(0);
+
+    assert.deepEqual(driver.prompts, []);
+    assert.equal(activities.whenIdle('session-1'), undefined);
   });
 
   test('flows a transcript taller than the viewport into scrollback, untruncated and un-paged', async () => {
@@ -1673,6 +1970,7 @@ describe('Maka Pi TUI runner', () => {
     terminal.input('start the work');
     terminal.input('\r');
     await waitFor(() => terminal.progressStates.at(-1) === true);
+    await waitFor(() => driver.prompts.length === 1);
 
     terminal.input('\x1b');
     terminal.input('\x1b'); // interrupt: stop issued, turn not yet terminal
@@ -1686,7 +1984,7 @@ describe('Maka Pi TUI runner', () => {
     driver.endTurn(); // the aborted turn finally terminates
     await waitFor(() => terminal.progressStates.at(-1) === false);
     await delay(30);
-    // No second sendPrompt; the typed text is still in the editor as a draft.
+    // No second turn is prepared; the typed text is still in the editor as a draft.
     assert.deepEqual(driver.prompts, ['start the work']);
     assert.equal(plainTerminalOutput(terminal.screenOutput()).includes('after stop'), true);
 
@@ -3132,9 +3430,11 @@ describe('Maka Pi TUI runner', () => {
     await run;
   });
 
-  test('blocks prompt submission while a control command is in flight', async () => {
+  test('serializes a control command with prompts and shared session activity', async () => {
     const terminal = new FakeTerminal();
     const driver = new DeferredControlDriver();
+    const activities = new SessionActivityRegistry();
+    let goalHost: CliGoalTurnHost | undefined;
     const run = runMakaPiTui({
       title: 'Maka',
       driver,
@@ -3143,11 +3443,26 @@ describe('Maka Pi TUI runner', () => {
       connectionSlug: 'claude-subscription',
       permissionMode: 'ask',
       terminal,
+      goalLifecycle: createTestGoalLifecycle(undefined, activities, (host) => {
+        if (host) goalHost = host;
+      }),
     });
+    assert.ok(goalHost);
 
     terminal.input('/model claude-opus-4-1');
     terminal.input('\r');
     await waitFor(() => driver.models.length === 1);
+    const admission = goalHost.admitTurn('session-1', 'wait for control');
+    assert.equal(admission.kind, 'busy');
+    if (admission.kind !== 'busy') throw new Error('expected busy admission');
+
+    let automationAcquired = false;
+    const automationActivity = activities.acquire('session-1').then((lease) => {
+      automationAcquired = true;
+      return lease;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(automationAcquired, false);
 
     // While the model switch is in flight, typing + Enter must not send a prompt.
     terminal.input('blocked');
@@ -3157,6 +3472,9 @@ describe('Maka Pi TUI runner', () => {
 
     // After the switch completes, the previously typed prompt goes through.
     driver.releaseSetModel();
+    await admission.whenIdle;
+    const automationLease = await automationActivity;
+    automationLease.release();
     await delay(20);
     terminal.input('\r');
     await waitFor(() => driver.prompts.length === 1);
@@ -4278,7 +4596,11 @@ class RejectingStopDriver implements MakaSessionDriver {
     return [];
   }
 
-  async *sendPrompt(_prompt: string): AsyncIterable<never> {}
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
+  async *promptEvents(_prompt: string): AsyncIterable<never> {}
   async *compactSession(): AsyncIterable<never> {}
 
   async stop(): Promise<void> {
@@ -4338,9 +4660,13 @@ class PermissionPromptDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     for (const [index, request] of this.requests.entries()) {
       this.permissionRequests += 1;
       yield this.additionalPermissions ? {
@@ -4447,8 +4773,9 @@ class UserQuestionPromptDriver implements MakaSessionDriver {
   private release: (() => void) | undefined;
 
   async listSessions(): Promise<SessionSummary[]> { return []; }
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> { return prepareTestPrompt(this, prompt); }
   async *compactSession(): AsyncIterable<never> {}
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'user_question_request', id: 'event-question', turnId: 'turn-1', ts: 1,
       requestId: 'question-1', toolUseId: 'tool-1',
@@ -4486,9 +4813,13 @@ class InterruptibleTurnDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     // The turn parks like a real long-running provider call until stop() aborts it.
     await new Promise<void>((resolve) => {
       this.releaseTurn = resolve;
@@ -4548,6 +4879,18 @@ class SteeringTurnDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(
+    prompt: string,
+    options: MakaPreparePromptOptions = {},
+  ): Promise<MakaPreparedSessionTurn> {
+    const turnId = options.turnId ?? 'turn-1';
+    return Promise.resolve({
+      sessionId: this.getSessionId(),
+      turnId,
+      events: this.promptEvents(prompt, turnId),
+    });
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
   // Queue contents travel on ONE path, exactly like the runtime: enqueues
@@ -4567,7 +4910,7 @@ class SteeringTurnDriver implements MakaSessionDriver {
     this.wakeTurn = null;
   }
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string, turnId: string): AsyncIterable<SessionEvent> {
     this.turnEnded = false;
     for (;;) {
       while (this.pendingEvents.length > 0) yield this.pendingEvents.shift()!;
@@ -4576,8 +4919,8 @@ class SteeringTurnDriver implements MakaSessionDriver {
         this.wakeTurn = resolve;
       });
     }
-    yield { type: 'abort', id: 'event-abort', turnId: 'turn-1', ts: 1, reason: 'user_stop' };
-    yield { type: 'complete', id: 'event-complete', turnId: 'turn-1', ts: 2, stopReason: 'user_stop' };
+    yield { type: 'abort', id: 'event-abort', turnId, ts: 1, reason: 'user_stop' };
+    yield { type: 'complete', id: 'event-complete', turnId, ts: 2, stopReason: 'user_stop' };
   }
 
   steer(text: string): QueueEnqueueOutcome {
@@ -4675,6 +5018,19 @@ class FallbackSteeringDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(
+    prompt: string,
+    options: MakaPreparePromptOptions = {},
+  ): Promise<MakaPreparedSessionTurn> {
+    this.prompts.push(options.modelText ?? prompt);
+    const turnId = options.turnId ?? `turn-${this.prompts.length}`;
+    return Promise.resolve({
+      sessionId: this.getSessionId(),
+      turnId,
+      events: this.promptEvents(turnId),
+    });
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
   // Same single-path contract as the runtime: queue contents reach the CLI
@@ -4693,8 +5049,7 @@ class FallbackSteeringDriver implements MakaSessionDriver {
     this.wakeTurn = null;
   }
 
-  async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
-    this.prompts.push(prompt);
+  async *promptEvents(turnId: string): AsyncIterable<SessionEvent> {
     this.turnOpen = true;
     this.turnEnded = false;
     for (;;) {
@@ -4707,14 +5062,14 @@ class FallbackSteeringDriver implements MakaSessionDriver {
     this.turnOpen = false;
     if (this.abortNextTurn) {
       this.abortNextTurn = false;
-      yield { type: 'abort', id: `abort-${this.prompts.length}`, turnId: `turn-${this.prompts.length}`, ts: 1, reason: 'user_stop' };
-      yield { type: 'complete', id: `complete-${this.prompts.length}`, turnId: `turn-${this.prompts.length}`, ts: 2, stopReason: 'user_stop' };
+      yield { type: 'abort', id: `abort-${this.prompts.length}`, turnId, ts: 1, reason: 'user_stop' };
+      yield { type: 'complete', id: `complete-${this.prompts.length}`, turnId, ts: 2, stopReason: 'user_stop' };
       return;
     }
     yield {
       type: 'complete',
       id: `complete-${this.prompts.length}`,
-      turnId: `turn-${this.prompts.length}`,
+      turnId,
       ts: 1,
       stopReason: 'end_turn',
     };
@@ -4802,10 +5157,14 @@ class SlowStopDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    this.prompts.push(prompt);
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
-    this.prompts.push(prompt);
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     await new Promise<void>((resolve) => {
       this.releaseTurn = resolve;
     });
@@ -4855,9 +5214,13 @@ class ThinkingOutputDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'thinking_delta',
       id: 'event-thinking',
@@ -4907,7 +5270,7 @@ class ThinkingOutputDriver implements MakaSessionDriver {
 
 /** 80 reasoning rows: expanding pushes the block's head into scrollback (#1134). */
 class TallThinkingOutputDriver extends ThinkingOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'thinking_delta',
       id: 'event-thinking',
@@ -4931,9 +5294,13 @@ class ToolOutputDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'tool_start',
       id: 'event-tool-start',
@@ -4992,7 +5359,7 @@ class ToolOutputDriver implements MakaSessionDriver {
 }
 
 class BackgroundShellRunDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'tool_start', id: 'event-tool-start', turnId: 'turn-1', ts: 1,
       toolUseId: 'tool-bg', toolName: 'Bash', args: { command: 'build' },
@@ -5014,7 +5381,7 @@ class BackgroundShellRunDriver extends ToolOutputDriver {
 }
 
 class OffscreenToolDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'tool_start', id: 'event-early-start', turnId: 'turn-1', ts: 1,
       toolUseId: 'tool-early', toolName: 'Bash', args: { command: 'early-build' },
@@ -5056,7 +5423,7 @@ class OffscreenToolDriver extends ToolOutputDriver {
 // #1135: a running Bash card scrolls off-screen, then the 1s ticker updates
 // its elapsed time. The freeze must keep the off-screen render unchanged.
 class OffscreenTickerDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'tool_start', id: 'event-early-start', turnId: 'turn-1', ts: 1,
       toolUseId: 'tool-early', toolName: 'Bash', args: { command: 'early-build' },
@@ -5098,7 +5465,7 @@ class OffscreenTickerDriver extends ToolOutputDriver {
 // is delivered via subscribeShellRunUpdates (see the test). The driver only
 // sets up the off-screen running card and a late visible tool.
 class OffscreenSettleDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'tool_start', id: 'event-early-start', turnId: 'turn-1', ts: 1,
       toolUseId: 'tool-early', toolName: 'Bash', args: { command: 'early-build' },
@@ -5139,7 +5506,7 @@ class OffscreenSettleDriver extends ToolOutputDriver {
 // #1135: a thinking entry is streamed off-screen, then thinking_complete
 // replaces its text. The freeze must keep the off-screen render unchanged.
 class OffscreenThinkingDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'thinking_delta', id: 'event-thinking-delta', turnId: 'turn-1', ts: 1,
       messageId: 'message-1', text: 'early-streamed-reasoning',
@@ -5166,7 +5533,7 @@ class OffscreenThinkingDriver extends ToolOutputDriver {
 // straddles scrollback and viewport — its scrollback prefix is frozen but the
 // visible tail must keep updating.
 class StreamingPastViewportDriver extends ToolOutputDriver {
-  override async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     // First delta: ~30 paragraphs fill a 24-row viewport.
     yield {
       type: 'text_delta', id: 'event-text-1', turnId: 'turn-1', ts: 1,
@@ -5197,7 +5564,7 @@ function pipeOutput(stdout = '', stderr = '') {
 class SlashCommandDriver implements MakaSessionDriver {
   /** Model-facing text (options.modelText when set, else the typed prompt). */
   readonly prompts: string[] = [];
-  /** Human-facing typed prompt for every sendPrompt call. */
+  /** Human-facing typed prompt for every prepared turn. */
   readonly displayPrompts: string[] = [];
   readonly models: string[] = [];
   readonly modelConnections: Array<string | undefined> = [];
@@ -5217,19 +5584,35 @@ class SlashCommandDriver implements MakaSessionDriver {
     return this.sessions;
   }
 
+  preparePrompt(
+    prompt: string,
+    options: MakaPreparePromptOptions = {},
+  ): Promise<MakaPreparedSessionTurn> {
+    const turnId = options.turnId ?? 'turn-1';
+    const modelText = options.modelText ?? prompt;
+    this.displayPrompts.push(prompt);
+    this.prompts.push(modelText);
+    return Promise.resolve({
+      sessionId: this.sessionId,
+      turnId,
+      events: this.promptEvents(modelText, turnId),
+    });
+  }
+
   async getSessionResumeAvailability(session: SessionSummary): Promise<SessionResumeAvailability> {
     return session.cwd
       ? { available: true }
       : { available: false, reason: 'Missing working directory' };
   }
 
-  async *sendPrompt(prompt: string, options?: { modelText?: string }): AsyncIterable<SessionEvent> {
-    this.displayPrompts.push(prompt);
-    this.prompts.push(options?.modelText ?? prompt);
+  async *promptEvents(
+    _prompt: string,
+    turnId = 'turn-1',
+  ): AsyncIterable<SessionEvent> {
     yield {
       type: 'complete',
       id: 'event-complete',
-      turnId: 'turn-1',
+      turnId,
       ts: 1,
       stopReason: 'end_turn',
     };
@@ -5277,18 +5660,61 @@ class SlashCommandDriver implements MakaSessionDriver {
     this.startNewSessionCalls += 1;
     this.sessionId = 'session-new';
   }
-  getSessionId(): string {
+  getSessionId(): string | null {
     return this.sessionId;
   }
 }
 
 class RuntimeTurnIdentityDriver extends SlashCommandDriver {
-  override async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
+  async preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return {
+      sessionId: this.sessionId,
+      turnId: 'runtime-turn-42',
+      events: this.promptEvents(prompt),
+    };
+  }
+
+  override async *promptEvents(
+    prompt: string,
+  ): AsyncIterable<SessionEvent> {
     this.prompts.push(prompt);
     yield {
       type: 'complete',
       id: 'event-complete',
       turnId: 'runtime-turn-42',
+      ts: 1,
+      stopReason: 'end_turn',
+    };
+  }
+}
+
+class FirstSessionPreparedDriver extends SlashCommandDriver {
+  readonly streamStarted = deferred<void>();
+  readonly releaseStream = deferred<void>();
+  private prepared = false;
+
+  override getSessionId(): string | null {
+    return this.prepared ? this.sessionId : null;
+  }
+
+  async preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    this.prepared = true;
+    this.sessionId = 'session-first';
+    return {
+      sessionId: this.sessionId,
+      turnId: 'turn-first',
+      events: this.events(prompt),
+    };
+  }
+
+  private async *events(prompt: string): AsyncIterable<SessionEvent> {
+    this.prompts.push(prompt);
+    this.streamStarted.resolve();
+    await this.releaseStream.promise;
+    yield {
+      type: 'complete',
+      id: 'event-complete',
+      turnId: 'turn-first',
       ts: 1,
       stopReason: 'end_turn',
     };
@@ -5315,7 +5741,7 @@ class HangingCloseDriver extends SlashCommandDriver {
 class HangingTurnDriver extends SlashCommandDriver {
   private resolveComplete: (() => void) | null = null;
 
-  override async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
+  override async *promptEvents(prompt: string): AsyncIterable<SessionEvent> {
     this.prompts.push(prompt);
     yield {
       type: 'text_delta',
@@ -5346,8 +5772,7 @@ class HangingTurnDriver extends SlashCommandDriver {
 }
 
 class LongTranscriptDriver extends SlashCommandDriver {
-  override async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
-    this.prompts.push(prompt);
+  override async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'text_complete',
       id: 'event-text-complete',
@@ -5424,9 +5849,15 @@ class DeferredControlDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(
+    prompt: string,
+  ): AsyncIterable<SessionEvent> {
     this.prompts.push(prompt);
     yield {
       type: 'complete',
@@ -5478,9 +5909,13 @@ class RejectingPermissionDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'permission_request',
       kind: 'tool_permission',
@@ -5552,9 +5987,13 @@ class PermissionThenErrorDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(_prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(_prompt: string): AsyncIterable<SessionEvent> {
     yield {
       type: 'permission_request',
       kind: 'tool_permission',
@@ -5572,14 +6011,7 @@ class PermissionThenErrorDriver implements MakaSessionDriver {
     await new Promise<void>((resolve) => {
       this.resolveContinue = resolve;
     });
-    yield {
-      type: 'error',
-      id: 'event-error',
-      turnId: 'turn-1',
-      ts: 2,
-      message: 'turn failed',
-      recoverable: false,
-    };
+    throw new Error('turn failed');
   }
 
   continueToError(): void {
@@ -5620,9 +6052,15 @@ class QuickErrorDriver implements MakaSessionDriver {
     return [];
   }
 
+  preparePrompt(prompt: string): Promise<MakaPreparedSessionTurn> {
+    return prepareTestPrompt(this, prompt);
+  }
+
   async *compactSession(): AsyncIterable<never> {}
 
-  async *sendPrompt(prompt: string): AsyncIterable<SessionEvent> {
+  async *promptEvents(
+    prompt: string,
+  ): AsyncIterable<SessionEvent> {
     this.prompts.push(prompt);
     // The turn fails immediately, so its duration never crosses the long-turn
     // threshold — the attention ring must come from the error, not the timer.
@@ -5761,8 +6199,13 @@ async function runSignalExitProbe(signalToSend: NodeJS.Signals, hangOuterCleanup
     }
 
     const terminal = new ReportingTerminal();
+    const goalLifecycle = {
+      activities: {},
+      beginExternalTurn() { throw new Error('unused'); },
+      bindHost() { return () => {}; },
+    };
     const driver = {
-      async *sendPrompt() {},
+      async preparePrompt() { throw new Error('unused'); },
       async *compactSession() {},
       async stop() {},
       async listSessions() { return []; },
@@ -5786,6 +6229,7 @@ async function runSignalExitProbe(signalToSend: NodeJS.Signals, hangOuterCleanup
       connectionSlug: 'test-connection',
       permissionMode: 'ask',
       terminal,
+      goalLifecycle,
       onProcessExit: (exitCode) => beginMakaCliExit(exitCode),
     });
     process.stdout.write('READY\\n');
@@ -5839,8 +6283,13 @@ async function runFatalExitProbe(kind: 'uncaughtException' | 'unhandledRejection
     }
 
     const terminal = new ReportingTerminal();
+    const goalLifecycle = {
+      activities: {},
+      beginExternalTurn() { throw new Error('unused'); },
+      bindHost() { return () => {}; },
+    };
     const driver = {
-      async *sendPrompt() {},
+      async preparePrompt() { throw new Error('unused'); },
       async *compactSession() {},
       async stop() {},
       async listSessions() { return []; },
@@ -5866,6 +6315,7 @@ async function runFatalExitProbe(kind: 'uncaughtException' | 'unhandledRejection
         connectionSlug: 'test-connection',
         permissionMode: 'ask',
         terminal,
+        goalLifecycle,
         onProcessExit: (exitCode, error) => {
           if (error) process.stderr.write(\`${'${formatMakaCliFatalError(error)}'}\\n\`);
           beginMakaCliExit(exitCode);
