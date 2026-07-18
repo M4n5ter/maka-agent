@@ -18,16 +18,13 @@ import {
   loadSynthesisCacheBlocksFromArtifacts,
   persistSynthesisCacheBlocksToArtifacts,
   type InvocationResult,
+  type SynthesisCacheArtifactStore,
   type SynthesisCacheLoader,
   type SynthesisCacheWriter,
 } from '@maka/runtime';
 import {
-  createAgentRunStore,
   createAttachmentByteReader,
-  createArtifactStore,
   createReadImageSnapshotter,
-  createRuntimeEventStore,
-  createSessionStore,
   persistProviderRequestCaptureArtifact,
 } from '@maka/storage';
 import { registerFakeBackend } from './backends.js';
@@ -44,6 +41,11 @@ import {
 import type { Config, Task } from './contracts.js';
 import { resolveHeavyTaskMode } from './heavy-task-policy.js';
 import { resolveEconomyTaskMode } from './economy-task-policy.js';
+import {
+  authenticateHeadlessStorageWriter,
+  openHeadlessStorageForWrite,
+  type HeadlessStorageWriter,
+} from './headless-storage.js';
 import type { HeadlessBackendContext, RealBackendIsolation } from './isolation.js';
 import { validateRealBackendIsolation } from './isolation.js';
 import { PiCliJsonTransport } from './pi-cli-json-transport.js';
@@ -251,6 +253,15 @@ const PI_PROVIDER_ENV_RULES = [
 ] satisfies Array<{ includes: string[]; keys?: string[]; prefixes?: string[] }>;
 
 export async function runHarborCell(input: RunHarborCellInput): Promise<RunHarborCellResult> {
+  const storage = await openHeadlessStorageForWrite(input.storageRoot);
+  return runHarborCellWithStorage(input, storage);
+}
+
+export async function runHarborCellWithStorage(
+  input: RunHarborCellInput,
+  storage: HeadlessStorageWriter,
+): Promise<RunHarborCellResult> {
+  storage = authenticateHeadlessStorageWriter(storage);
   if (
     input.settleAfterMs !== undefined &&
     (!Number.isFinite(input.settleAfterMs) || input.settleAfterMs <= 0)
@@ -268,9 +279,9 @@ export async function runHarborCell(input: RunHarborCellInput): Promise<RunHarbo
 
   const now = input.now ?? Date.now;
   const newId = input.newId ?? randomId;
-  const sessionStore = createSessionStore(input.storageRoot);
-  const agentRunStore = createAgentRunStore(input.storageRoot);
-  const runtimeEventStore = createRuntimeEventStore(input.storageRoot);
+  const sessionStore = storage.executionStores.sessionStore;
+  const agentRunStore = storage.executionStores.agentRunStore;
+  const runtimeEventStore = storage.executionStores.runtimeEventStore;
   const backends = new BackendRegistry();
   const sessionCapabilities = createHeadlessSessionCapabilityBridge();
   const task: Task = {
@@ -290,6 +301,7 @@ export async function runHarborCell(input: RunHarborCellInput): Promise<RunHarbo
     storageRoot: input.storageRoot,
     workspaceDir: input.cwd,
     ...sessionCapabilities.capabilities,
+    synthesisCacheArtifactStore: storage.synthesisCacheArtifactStore,
     ...(backendNeedsIsolation(input.config.backend)
       ? {
           realBackendIsolation: input.realBackendIsolation,
@@ -796,6 +808,8 @@ export function buildAiSdkCellBackendRegistration(input: {
     input.env.MAKA_STREAM_IDLE_TIMEOUT_MS,
     'MAKA_STREAM_IDLE_TIMEOUT_MS',
   );
+  const synthesisCacheEnabled =
+    contextBudgetBackendOptions.contextBudget?.synthesisCache?.enabled === true;
   const taskLedgerExperimentPolicy = buildHarborCellTaskLedgerExperimentPolicy(input.env);
   const taskLedgerExperimentStore = taskLedgerExperimentPolicy
     ? createInMemoryTaskLedgerExperimentStore({ now: input.now, newId: input.newId })
@@ -804,12 +818,11 @@ export function buildAiSdkCellBackendRegistration(input: {
     if (!context.toolExecutor) {
       throw new Error('Harbor ai-sdk backend requires an isolated tool executor');
     }
-    // FileArtifactStore owns an in-memory metadata index, so every artifact
-    // consumer under the run's authoritative storage root shares this instance.
-    const artifactStore = createArtifactStore(context.storageRoot);
+    // Both artifact consumers share the same lease-bound store and metadata index.
+    const artifactStore = context.synthesisCacheArtifactStore;
     const synthesisCacheCallbacks = buildHarborCellSynthesisCacheCallbacks(
       artifactStore,
-      contextBudgetBackendOptions.contextBudget?.synthesisCache?.enabled === true,
+      synthesisCacheEnabled,
     );
     registry.register('ai-sdk', (ctx) => {
       const subscriptionFetch = buildSubscriptionModelFetch({
@@ -953,7 +966,7 @@ async function writeHarborCellArtifact(path: string, contents: string): Promise<
 }
 
 function buildHarborCellSynthesisCacheCallbacks(
-  artifactStore: ReturnType<typeof createArtifactStore>,
+  artifactStore: SynthesisCacheArtifactStore,
   enabled: boolean,
 ): { loadSynthesisCache?: SynthesisCacheLoader; writeSynthesisCache?: SynthesisCacheWriter } {
   if (!enabled) return {};

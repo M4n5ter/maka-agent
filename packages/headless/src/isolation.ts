@@ -1,5 +1,5 @@
-import type { ShellPlan } from '@maka/runtime';
 import type { StorageRef } from '@maka/core';
+import type { ShellPlan, SynthesisCacheArtifactStore } from '@maka/runtime';
 import type { Config, Task } from './contracts.js';
 import type { HeavyTaskEvidenceRecorder } from './heavy-task-evidence.js';
 import type { HeavyTaskModeSelection } from './heavy-task-policy.js';
@@ -195,6 +195,8 @@ export interface HeadlessBackendContext extends Partial<HeadlessSessionCapabilit
   storageRoot: string;
   /** Absolute throwaway workspace path for this run. */
   workspaceDir: string;
+  /** Lease-bound storage for synthesis-cache artifacts. */
+  synthesisCacheArtifactStore: SynthesisCacheArtifactStore;
   /**
    * Present only for model-backed backends and only after the caller has
    * explicitly asserted an isolation boundary.

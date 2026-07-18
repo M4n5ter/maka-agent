@@ -6,9 +6,13 @@ import {
   buildChildAgentTools,
   type InvocationResult,
 } from '@maka/runtime';
-import { createAgentRunStore, createRuntimeEventStore, createSessionStore } from '@maka/storage';
 import type { Config, ResultRecord, Task } from './contracts.js';
 import { registerFakeBackend } from './backends.js';
+import {
+  authenticateHeadlessStorageWriter,
+  openHeadlessStorageForWrite,
+  type HeadlessStorageWriter,
+} from './headless-storage.js';
 import type { HeadlessBackendContext, RealBackendIsolation } from './isolation.js';
 import { validateRealBackendIsolation } from './isolation.js';
 import {
@@ -91,6 +95,17 @@ export async function runExperiment(
   task: Task,
   deps: RunExperimentDeps,
 ): Promise<ResultRecord> {
+  const storage = await openHeadlessStorageForWrite(deps.storageRoot);
+  return runExperimentWithStorage(config, task, deps, storage);
+}
+
+export async function runExperimentWithStorage(
+  config: Config,
+  task: Task,
+  deps: RunExperimentDeps,
+  storage: HeadlessStorageWriter,
+): Promise<ResultRecord> {
+  storage = authenticateHeadlessStorageWriter(storage);
   if (backendNeedsIsolation(config.backend)) {
     validateRealBackendIsolation(deps.realBackendIsolation);
     if (!deps.registerBackends) {
@@ -120,6 +135,7 @@ export async function runExperiment(
       storageRoot: deps.storageRoot,
       workspaceDir: agentWorkspaceDir,
       ...sessionCapabilities.capabilities,
+      synthesisCacheArtifactStore: storage.synthesisCacheArtifactStore,
       ...(backendNeedsIsolation(config.backend)
         ? {
             realBackendIsolation: deps.realBackendIsolation,
@@ -129,11 +145,10 @@ export async function runExperiment(
     });
 
     let invocation: InvocationResult | undefined;
-    const runStore = createAgentRunStore(deps.storageRoot);
     const manager = new SessionManager({
-      store: createSessionStore(deps.storageRoot),
-      runStore,
-      runtimeEventStore: createRuntimeEventStore(deps.storageRoot),
+      store: storage.executionStores.sessionStore,
+      runStore: storage.executionStores.agentRunStore,
+      runtimeEventStore: storage.executionStores.runtimeEventStore,
       backends,
       ...(deps.realBackendIsolation?.toolExecutor
         ? {

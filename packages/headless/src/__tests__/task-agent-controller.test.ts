@@ -22,10 +22,16 @@ import {
 } from '@maka/core';
 import type { BackendSendInput, PermissionDecision } from '@maka/core/backend-types';
 import { createRuntimeEventStore } from '@maka/storage';
+import { StorageRootAuthorityError } from '@maka/storage/root-authority';
 import type { Config, Task } from '../contracts.js';
+import { openHeadlessStorageForWrite } from '../headless-storage.js';
 import type { HeadlessBackendContext } from '../isolation.js';
 import { commandResourceScope, hashNormalizedArgs } from '../permission-grants.js';
-import { runTaskOnce, type RunTaskOnceResult } from '../task-agent-controller.js';
+import {
+  runTaskOnce,
+  runTaskOnceWithStorage,
+  type RunTaskOnceResult,
+} from '../task-agent-controller.js';
 import type { TaskPermissionGrant } from '../task-contracts.js';
 import { buildIsolatedHeadlessTools } from '../tools.js';
 
@@ -1809,6 +1815,39 @@ describe('runTaskOnce', () => {
       assert.notEqual(runHeader.status, 'completed');
       assert.notEqual(runHeader.status, 'failed');
       assert.notEqual(runHeader.status, 'cancelled');
+    });
+  });
+
+  test('rejects a copied Headless storage aggregate before execution', async () => {
+    await withDirs(async (fixtureDir, storageRoot) => {
+      await writeFile(join(fixtureDir, 'marker.txt'), 'present', 'utf8');
+      const task: Task = {
+        id: 'forged-storage',
+        instruction: 'do the thing',
+        workspaceDir: fixtureDir,
+        verification: { command: 'test -f marker.txt', protectedPaths: [] },
+      };
+      const storage = await openHeadlessStorageForWrite(storageRoot);
+      let backendRegistrationCalled = false;
+
+      await assert.rejects(
+        () =>
+          runTaskOnceWithStorage(
+            fakeConfig,
+            task,
+            {
+              storageRoot,
+              registerBackends: (registry) => {
+                backendRegistrationCalled = true;
+                registerFakeBackend(registry);
+              },
+            },
+            { ...storage },
+          ),
+        (error: unknown) =>
+          error instanceof StorageRootAuthorityError && error.code === 'invalid_lease',
+      );
+      assert.equal(backendRegistrationCalled, false);
     });
   });
 
