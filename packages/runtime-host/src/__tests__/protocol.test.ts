@@ -24,12 +24,13 @@ import {
 
 describe('Runtime Host bootstrap protocol', () => {
   test('selects the highest mutually supported protocol and rejects a gap', () => {
+    assert.equal(negotiateProtocol({ min: 0, max: 0 }, { min: 0, max: 0 }), 0);
     assert.equal(negotiateProtocol({ min: 1, max: 3 }, { min: 2, max: 4 }), 3);
     assert.equal(negotiateProtocol({ min: 1, max: 1 }, { min: 2, max: 2 }), undefined);
   });
 
-  test('uses protocol v8 and Session continuity schema v3 without compatibility aliases', () => {
-    assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 8);
+  test('uses experimental protocol v0 and Session continuity schema v3', () => {
+    assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 0);
     assert.equal(SESSION_CONTINUITY_SCHEMA_VERSION, 3);
   });
 

@@ -45,6 +45,7 @@ export type RuntimePolicyOperationKey = Extract<
   `runtime.policy.${string}` | `connection.catalog.${string}` | `credential.vault.${string}`
 >;
 export type SkillCatalogOperationKey = Extract<OperationKey, `skill.catalog.${string}`>;
+export type TaskLedgerOperationKey = Extract<OperationKey, 'task.ledger.query'>;
 export type TurnOperationHandlerMap = Pick<OperationHandlerMap, TurnOperationKey>;
 export type MessageOperationHandlerMap = Pick<OperationHandlerMap, MessageOperationKey>;
 export type AllDomainOperationHandlerMap = Pick<OperationHandlerMap, DomainOperationKey>;
@@ -55,6 +56,7 @@ export type SessionContinuityOperationHandlerMap = Pick<
 export type InteractionOperationHandlerMap = Pick<OperationHandlerMap, InteractionOperationKey>;
 export type RuntimePolicyOperationHandlerMap = Pick<OperationHandlerMap, RuntimePolicyOperationKey>;
 export type SkillCatalogOperationHandlerMap = Pick<OperationHandlerMap, SkillCatalogOperationKey>;
+export type TaskLedgerOperationHandlerMap = Pick<OperationHandlerMap, TaskLedgerOperationKey>;
 
 export function combineDomainOperationHandlers(
   ...domains: readonly Partial<AllDomainOperationHandlerMap>[]

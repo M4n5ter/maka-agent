@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { tmpdir } from 'node:os';
+import { projectTaskLedgerEvents, type TaskLedgerRecord } from '@maka/core';
 import {
   getE2eFixtureState,
   resolveE2eFixture,
@@ -359,10 +360,17 @@ describe('e2e-fixture mode', () => {
         now: 1_700_000_000_000,
       });
       assert.equal(getE2eFixtureState(fixture)?.activeSessionId, 'e2e-fixture-turn');
-      const tasks = JSON.parse(await readFile(
-        join(workspaceRoot, 'sessions', 'e2e-fixture-turn', 'tasks.json'),
-        'utf8',
-      )) as Array<{ key: string; parentId?: string; status: string; owner?: { actor: string } }>;
+      const record = JSON.parse(
+        await readFile(
+          join(workspaceRoot, 'sessions', 'e2e-fixture-turn', 'task-events.jsonl'),
+          'utf8',
+        ),
+      ) as TaskLedgerRecord;
+      assert.equal(record.version, 1);
+      assert.equal(record.sessionId, 'e2e-fixture-turn');
+      const projection = projectTaskLedgerEvents(record.events);
+      assert.deepEqual(projection.diagnostics, []);
+      const tasks = projection.tasks;
       assert.deepEqual(tasks.map((task) => task.key), ['T1', 'T1.1', 'T1.2', 'T1.2.1', 'T2', 'T3']);
       assert.equal(tasks.find((task) => task.key === 'T1.2')?.owner?.actor, 'child_agent');
       assert.equal(tasks.find((task) => task.key === 'T1.2.1')?.parentId, 'task-child-ui');

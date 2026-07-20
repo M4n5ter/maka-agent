@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { AgentRunHeader } from '@maka/core/agent-run';
 import type { MessageContent } from '@maka/core/events';
 import type { StoredMessage } from '@maka/core/session';
+import type { Task } from '@maka/core/task-ledger';
 import { isTerminalRuntimeEvent, type RuntimeEvent } from '@maka/core/runtime-event';
 import { classifyTerminalRuntimeLedger } from '@maka/runtime';
 import type { InteractionRecord, StoredInteractionRequest } from '@maka/storage';
@@ -15,6 +16,7 @@ import {
   openInteractiveExecutionStoresForRead,
   openInteractiveExecutionStoresForWrite,
 } from '@maka/storage/execution-stores';
+import { openInteractiveTaskLedgerStoreForWrite } from '@maka/storage/task-ledger-store';
 import {
   resolveRootControlNamespace,
   resolveStorageRoot,
@@ -124,6 +126,30 @@ export class ExecutionFixture {
     try {
       const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
       await stores.sessionStore.archive(this.sessionId);
+    } finally {
+      await owner.close();
+    }
+  }
+
+  async createTasks(subjects: readonly string[]): Promise<Task[]> {
+    const owner = await tryAcquireInteractiveRootOwner(this.capability);
+    assert.ok(owner);
+    if (!owner) throw new Error('Unable to acquire execution root for Task Ledger setup');
+    try {
+      const store = await openInteractiveTaskLedgerStoreForWrite(owner.lease);
+      return (await store.create(this.sessionId, subjects.map((subject) => ({ subject })))).created;
+    } finally {
+      await owner.close();
+    }
+  }
+
+  async updateTask(taskRef: string, patch: unknown): Promise<Task> {
+    const owner = await tryAcquireInteractiveRootOwner(this.capability);
+    assert.ok(owner);
+    if (!owner) throw new Error('Unable to acquire execution root for Task Ledger update');
+    try {
+      const store = await openInteractiveTaskLedgerStoreForWrite(owner.lease);
+      return (await store.update(this.sessionId, taskRef, patch)).updated;
     } finally {
       await owner.close();
     }

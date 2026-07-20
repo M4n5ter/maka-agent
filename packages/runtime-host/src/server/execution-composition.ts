@@ -10,6 +10,7 @@ import {
 } from '@maka/runtime';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';
+import { openInteractiveTaskLedgerStoreForWrite } from '@maka/storage/task-ledger-store';
 import { createCanonicalSessionProjectionReader } from './canonical-session-projection.js';
 import type {
   RuntimeHostComposition,
@@ -27,17 +28,20 @@ import { SessionAdmissionGate } from './session-admission-gate.js';
 import { SessionContinuityCoordinator } from './session-continuity-coordinator.js';
 import { HostSkillCatalogCoordinator } from './skill-catalog-coordinator.js';
 import { HostSkillCatalogFilesystem } from './skill-catalog-filesystem.js';
+import { HostTaskLedgerCoordinator } from './task-ledger-coordinator.js';
 
 export async function createExecutionRuntimeHostComposition(
   context: RuntimeHostCompositionContext,
 ): Promise<RuntimeHostComposition> {
   const stores = await openInteractiveExecutionStoresForWrite(context.owner.lease);
   const runtimePolicyStores = await openInteractiveRuntimePolicyStoresForWrite(context.owner.lease);
+  const taskLedgerStore = await openInteractiveTaskLedgerStoreForWrite(context.owner.lease);
   const runtimePolicy = new HostRuntimePolicyCoordinator(runtimePolicyStores);
   const skills = new HostSkillCatalogCoordinator(
     new HostSkillCatalogFilesystem(context.owner.lease),
   );
   const sessionAdmission = new SessionAdmissionGate();
+  const taskLedger = new HostTaskLedgerCoordinator(taskLedgerStore, sessionAdmission);
   const rootAdmissionOwner = new RootAdmissionOwner();
   let messages: HostMessageCoordinator | undefined;
   const canonicalProjection = createCanonicalSessionProjectionReader(
@@ -203,6 +207,7 @@ export async function createExecutionRuntimeHostComposition(
       continuity.handlers,
       runtimePolicy.handlers,
       skills.handlers,
+      taskLedger.handlers,
     ),
     continuity,
     beginDrain: () => {

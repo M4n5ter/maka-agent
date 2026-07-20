@@ -13,6 +13,7 @@ import { SESSION_CONTINUITY_OPERATION_SPECS } from './session-continuity.js';
 import { TURN_OPERATION_SPECS } from './turn.js';
 import { RUNTIME_POLICY_OPERATION_SPECS } from './runtime-policy.js';
 import { SKILL_CATALOG_OPERATION_SPECS } from './skill-catalog.js';
+import { TASK_LEDGER_OPERATION_SPECS } from './task-ledger.js';
 
 export {
   TURN_MESSAGE_CONTENT_MAX_BYTES,
@@ -104,6 +105,20 @@ export type {
   SkillRuntimeStatus,
   SkillSourceType,
 } from './skill-catalog.js';
+export type {
+  TaskLedgerQueryInput,
+  TaskLedgerQueryResult,
+  TaskLedgerRevision,
+  TaskLedgerTask,
+} from './task-ledger.js';
+export {
+  decodeTaskLedgerQueryInput,
+  decodeTaskLedgerQueryResult,
+  encodeTaskLedgerQueryResult,
+  TASK_LEDGER_CURSOR_MAX_BYTES,
+  TASK_LEDGER_PAGE_MAX_BYTES,
+  TASK_LEDGER_PAGE_MAX_ITEMS,
+} from './task-ledger.js';
 export {
   SKILL_CATALOG_PAGE_MAX_BYTES,
   SKILL_CATALOG_PAGE_MAX_ITEMS,
@@ -142,9 +157,14 @@ const HOST_AND_DOMAIN_OPERATION_SPECS = composeOperationSpecMaps(
   RUNTIME_POLICY_OPERATION_SPECS,
 );
 
-export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+const HOST_AND_SKILL_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_AND_DOMAIN_OPERATION_SPECS,
   SKILL_CATALOG_OPERATION_SPECS,
+);
+
+export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+  HOST_AND_SKILL_OPERATION_SPECS,
+  TASK_LEDGER_OPERATION_SPECS,
 );
 
 export type OperationSpecMap = typeof HOST_OPERATION_SPECS;

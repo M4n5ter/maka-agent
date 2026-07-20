@@ -1,10 +1,14 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type {
-  PermissionRequestEvent,
-  SessionHeader,
-  StoredMessage,
-  E2eFixtureState,
+import {
+  taskLedgerEventTypeForUpdate,
+  type E2eFixtureState,
+  type Task,
+  type TaskLedgerEvent,
+  type TaskLedgerRecord,
+  type PermissionRequestEvent,
+  type SessionHeader,
+  type StoredMessage,
 } from '@maka/core';
 import {
   ERROR_SESSION_ID,
@@ -33,7 +37,7 @@ const STREAMING_ANSWER_MARKDOWN = [
 ].join('\n');
 
 export async function writeTaskLedgerFixture(workspaceRoot: string, now: number): Promise<void> {
-  const tasks = [
+  const tasks: Task[] = [
     {
       id: 'task-root-implementation', key: 'T1', subject: '完成会话任务台账升级', status: 'in_progress',
       createdAt: now - 50 * 60_000, updatedAt: now - 2 * 60_000,
@@ -41,7 +45,7 @@ export async function writeTaskLedgerFixture(workspaceRoot: string, now: number)
     },
     {
       id: 'task-child-storage', key: 'T1.1', parentId: 'task-root-implementation',
-      subject: '验证旧 JSONL 迁移与并发短 key 分配', status: 'completed',
+      subject: '验证 JSONL 原子批次与并发短 key 分配', status: 'completed',
       createdAt: now - 45 * 60_000, updatedAt: now - 8 * 60_000, endedAt: now - 8 * 60_000,
       completionEvidence: 'Core 与 Storage 定向测试全部通过。',
     },
@@ -67,11 +71,57 @@ export async function writeTaskLedgerFixture(workspaceRoot: string, now: number)
       completionEvidence: 'Goal gate 定向测试覆盖空任务、阻塞任务、一次提醒和上限放行。',
     },
   ];
+  const events: TaskLedgerEvent[] = [];
+  for (const task of tasks) {
+    let current: Task = {
+      ...task,
+      status: 'pending',
+      updatedAt: task.createdAt,
+    };
+    delete current.endedAt;
+    delete current.blockedReason;
+    delete current.failureReason;
+    delete current.completionEvidence;
+    events.push(fixtureTaskEvent(TURN_SESSION_ID, current, undefined, events.length));
+    if (task.status !== 'pending') {
+      if (task.status !== 'cancelled' && task.status !== 'in_progress') {
+        const started: Task = { ...current, status: 'in_progress', updatedAt: task.updatedAt - 1 };
+        events.push(fixtureTaskEvent(TURN_SESSION_ID, started, current, events.length));
+        current = started;
+      }
+      events.push(fixtureTaskEvent(TURN_SESSION_ID, task, current, events.length));
+    }
+  }
+  const record: TaskLedgerRecord = {
+    version: 1,
+    recordId: 'e2e-fixture-task-ledger-record',
+    sessionId: TURN_SESSION_ID,
+    ts: now,
+    events,
+  };
   await writeFile(
-    join(workspaceRoot, 'sessions', TURN_SESSION_ID, 'tasks.json'),
-    `${JSON.stringify(tasks, null, 2)}\n`,
+    join(workspaceRoot, 'sessions', TURN_SESSION_ID, 'task-events.jsonl'),
+    `${JSON.stringify(record)}\n`,
     'utf8',
   );
+}
+
+function fixtureTaskEvent(
+  sessionId: string,
+  task: Task,
+  previous: Task | undefined,
+  index: number,
+): TaskLedgerEvent {
+  return {
+    eventId: `e2e-fixture-task-event-${index + 1}`,
+    type: previous ? taskLedgerEventTypeForUpdate(previous, task) : 'task_created',
+    ts: task.updatedAt,
+    sessionId,
+    taskId: task.id,
+    ...(previous ? { previousStatus: previous.status } : {}),
+    nextStatus: task.status,
+    task,
+  };
 }
 
 export function turnSession(now: number): SessionHeader {
