@@ -928,6 +928,7 @@ export type {
 export {
   LOCAL_MEMORY_MAX_BYTES,
   LOCAL_MEMORY_PROMPT_MAX_CHARS,
+  LOCAL_MEMORY_PROMPT_TRUNCATION_MARKER,
   appendApprovedLocalMemoryEntryDraft,
   appendLocalMemoryProposalDraft,
   appendManualLocalMemoryEntryDraft,
@@ -1237,6 +1238,7 @@ export {
   UI_LOCALE_PREFERENCES,
   isUiLocale,
   isUiLocalePreference,
+  resolveSystemUiLocale,
   resolveUiLocale,
   uiLocaleToIntlLocale,
 } from './ui-locale.js';

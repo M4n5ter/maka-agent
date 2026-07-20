@@ -6,6 +6,7 @@ import { readRendererContractCss } from './contract-css-helpers.js';
 import { readRendererShellCombinedSource, readRendererShellSources } from './renderer-shell-source-helpers.js';
 import { extractFunctionBlock } from './function-block-helpers.js';
 import { readSettingsCombinedSource } from './settings-contract-source-helpers.js';
+import { getDailyReviewSettingsCopy } from '../../renderer/locales/settings-daily-review-copy.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../../../..');
 
@@ -61,7 +62,7 @@ describe('Daily Review copy feedback contract', () => {
 
     assert.match(handlerBlock, /const owner = captureComposerImportOwner\(\)/);
     assert.match(handlerBlock, /if \(!owner\.sessionId\) return/);
-    assert.match(handlerBlock, /formatDailyReviewMarkdown\(summary,\s*copy\.today\)/);
+    assert.match(handlerBlock, /formatDailyReviewMarkdown\(summary,\s*copy\.today,\s*options\.uiLocale\)/);
     assert.match(handlerBlock, /if \(!isComposerImportOwnerActive\(owner\)\) return/);
     assert.match(handlerBlock, /composerRef\.current\?\.appendText\(markdown\)/);
     assert.match(handlerBlock, /toastApi\.success\(\s*copy\.reviewPastedTitle/);
@@ -83,7 +84,7 @@ describe('Daily Review copy feedback contract', () => {
     assert.match(modulePages, /onAppendMarkdown\?: \(input:/);
     assert.match(modulePages, /<DailyReviewPanel \{\.\.\.props\} bridge=\{props\.bridge\}/);
     assert.match(panelBlock, /props\.onAppendMarkdown\?\.\(\{\s*markdown:\s*md,\s*label:\s*dayLabel,\s*summary: visibleSummary\s*\}\)/);
-    assert.match(panelBlock, /pendingDailyReviewAction === 'append' \? '追加中…' : '粘到输入框'/);
+    assert.match(panelBlock, /pendingDailyReviewAction === 'append' \? copy\.export\.appending : copy\.export\.append/);
     assert.match(main, /onAppendMarkdown=\{appendDailyReviewMarkdown\}/);
     assert.match(appendBlock, /composerRef\.current\?\.appendText\(input\.markdown\)/);
     assert.match(appendBlock, /toastApi\.success\(\s*copy\.reviewPasted\(input\.label\)/);
@@ -139,9 +140,9 @@ describe('Daily Review copy feedback contract', () => {
     assert.match(panelBlock, /runDailyReviewAction\('save', async \(\) => \{/);
     assert.match(panelBlock, /disabled=\{dailyReviewActionBusy\}/);
     assert.match(panelBlock, /aria-busy=\{pendingDailyReviewAction === 'copy' \? 'true' : undefined\}/);
-    assert.match(panelBlock, /复制中…/);
-    assert.match(panelBlock, /追加中…/);
-    assert.match(panelBlock, /保存中…/);
+    assert.match(panelBlock, /copy\.export\.copying/);
+    assert.match(panelBlock, /copy\.export\.appending/);
+    assert.match(panelBlock, /copy\.export\.saving/);
     assert.doesNotMatch(
       main,
       /onSaveMarkdown=\{\(input\) => void saveDailyReviewMarkdown\(input\)\}/,
@@ -177,18 +178,18 @@ describe('Daily Review copy feedback contract', () => {
     );
     assert.match(
       manualRunBlock,
-      /catch \(err\) \{\s*if \(isDailyReviewActionCurrent\(actionKey\)\) setError\(dailyReviewPanelErrorMessage\(err\)\);\s*\}/,
+      /catch \(err\) \{\s*if \(isDailyReviewActionCurrent\(actionKey\)\) setError\(dailyReviewPanelErrorMessage\(err, locale\)\);\s*\}/,
       'Late manual-run failures must not render errors after leaving Daily Review',
     );
     assert.match(panelBlock, /disabled=\{dailyReviewActionBusy\}/);
-    assert.match(panelBlock, /pendingDailyReviewAction === 'run:daily' \? '生成中…' : '生成每日回顾'/);
-    assert.match(panelBlock, /pendingDailyReviewAction === 'run:deep' \? '生成中…' : '生成深度分析'/);
+    assert.match(panelBlock, /pendingDailyReviewAction === 'run:daily' \? copy\.page\.generating : copy\.page\.generateDaily/);
+    assert.match(panelBlock, /pendingDailyReviewAction === 'run:deep' \? copy\.page\.generating : copy\.page\.generateDeep/);
   });
 
   it('guards Daily Review archive body loads against stale async responses', async () => {
     const ui = await readFile(resolve(REPO_ROOT, 'packages/ui/src/daily-review-panel.tsx'), 'utf8');
     const panelBlock = extractFunctionBlock(ui, 'DailyReviewPanel');
-    const archiveLoadBlock = panelBlock.match(/useEffect\(\(\) => \{\s*const getArchive = bridgeRef\.current\.getArchive;[\s\S]*?\}, \[archiveReloadToken, selectedArchiveId\]\);/)?.[0] ?? '';
+    const archiveLoadBlock = panelBlock.match(/useEffect\(\(\) => \{\s*const getArchive = bridgeRef\.current\.getArchive;[\s\S]*?\}, \[archiveReloadToken, locale, selectedArchiveId\]\);/)?.[0] ?? '';
     assert.ok(archiveLoadBlock, 'archive load effect not found in DailyReviewPanel');
 
     assert.match(panelBlock, /const archiveLoadRequestRef = useRef\(0\)/);
@@ -286,7 +287,7 @@ describe('Daily Review copy feedback contract', () => {
     );
     assert.match(
       saveBlock,
-      /if \(mountedRef\.current && saveConfigGuard\.current === key\) \{\s*toast\.error\('保存每日回顾设置失败', settingsActionErrorMessage\(err\)\);\s*\}/,
+      /if \(mountedRef\.current && saveConfigGuard\.current === key\) \{\s*toast\.error\(copy\.saveFailed, settingsActionErrorMessage\(err, locale\)\);\s*\}/,
       'Late config save failures must not toast after Settings closes or ownership changes',
     );
     assert.match(
@@ -303,12 +304,12 @@ describe('Daily Review copy feedback contract', () => {
     );
     assert.match(
       runBlock,
-      /if \(mountedRef\.current && runModeGuard\.current === mode\) \{\s*toast\.success\(mode === 'daily' \? '已生成每日回顾' : '已生成深度分析', '可在「每日回顾」面板查看。'\);\s*\}/,
+      /if \(mountedRef\.current && runModeGuard\.current === mode\) \{\s*toast\.success\(copy\.runSuccess\[mode\], copy\.runSuccessDetail\);\s*\}/,
       'Manual run success feedback must be owned by the still-mounted request',
     );
     assert.match(
       runBlock,
-      /if \(mountedRef\.current && runModeGuard\.current === mode\) \{\s*toast\.error\('生成回顾失败', settingsActionErrorMessage\(err\)\);\s*\}/,
+      /if \(mountedRef\.current && runModeGuard\.current === mode\) \{\s*toast\.error\(copy\.runFailed, settingsActionErrorMessage\(err, locale\)\);\s*\}/,
       'Manual run failure feedback must be owned by the still-mounted request',
     );
     assert.match(
@@ -317,6 +318,8 @@ describe('Daily Review copy feedback contract', () => {
       'Manual run owners must be released by the matching request only',
     );
     assert.match(pageBlock, /disabled=\{runningMode !== null\}/);
+    assert.equal(getDailyReviewSettingsCopy('zh').runSuccess.daily, '已生成每日回顾');
+    assert.equal(getDailyReviewSettingsCopy('en').runSuccess.daily, 'Daily Review generated');
   });
 
   it('scrubs Daily Review load and action failures before rendering them', async () => {
@@ -333,9 +336,9 @@ describe('Daily Review copy feedback contract', () => {
     const saveTodayBlock = main.match(/onSaveTodayDailyReviewToFile: async \(\) => \{[\s\S]*?onCopyEnvSummary/)?.[0] ?? '';
 
     assert.match(uiHelpers, /generalizedErrorMessageChinese/);
-    assert.match(panelBlock, /setError\(dailyReviewPanelErrorMessage\(err\)\)/);
+    assert.match(panelBlock, /setError\(dailyReviewPanelErrorMessage\(err, locale\)\)/);
     assert.doesNotMatch(panelBlock, /err instanceof Error \? err\.message : ['"]加载失败['"]/);
-    assert.match(uiHelpers, /function dailyReviewPanelErrorMessage\(error: unknown\): string \{[\s\S]*generalizedErrorMessageChinese\(error, '每日回顾暂时不可用，请稍后重试。'\)/);
+    assert.match(uiHelpers, /function dailyReviewPanelErrorMessage\(error: unknown, locale: UiLocale\): string \{[\s\S]*getDailyReviewCopy\(locale\)\.errorFallback[\s\S]*locale === 'zh'[\s\S]*generalizedErrorMessageChinese\(error, fallback\)[\s\S]*generalizedErrorMessage\(error, fallback\)/);
 
     assert.match(helperBlock, /locale === 'zh' \? generalizedErrorMessageChinese\(error, fallback\) : generalizedErrorMessage\(error, fallback\)/);
     assert.match(saveBlock, /const shouldShowFeedback = options\.shouldShowFeedback \?\? \(\(\) => true\)/);

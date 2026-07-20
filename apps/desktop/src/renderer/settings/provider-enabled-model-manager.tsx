@@ -8,8 +8,10 @@ import {
   ItemMedia,
   ItemTitle,
   OverlayScrollArea,
+  useUiLocale,
 } from '@maka/ui';
 import { Check } from '@maka/ui/icons';
+import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 
 /**
  * Enabled-model editor. The full candidate catalog (live-fetched merged with
@@ -28,6 +30,7 @@ export function EnabledModelManager(props: {
   disabled: boolean;
   onChange(ids: string[]): void;
 }) {
+  const copy = getProviderSettingsCopy(useUiLocale()).detail;
   const [query, setQuery] = useState('');
   // Roving tabindex (composite-widget keyboard pattern): the whole list is ONE
   // Tab stop. Without this every row button is a Tab stop, and a large catalog
@@ -114,29 +117,29 @@ export function EnabledModelManager(props: {
   return (
     <section className="providerEnabledModels" aria-labelledby="provider-enabled-models-title">
       <div className="providerEnabledModelsHeader">
-        <strong id="provider-enabled-models-title">启用模型 {props.enabledModelIds.length}</strong>
-        <span>勾选的模型会出现在模型选择器中。</span>
+        <strong id="provider-enabled-models-title">{copy.enabledModelsTitle(props.enabledModelIds.length)}</strong>
+        <span>{copy.enabledModelsHelp}</span>
       </div>
       <Input
         type="search"
         value={query}
         onChange={(event) => setQuery(event.currentTarget.value)}
-        placeholder="搜索模型"
+        placeholder={copy.searchModels}
         autoComplete="off"
         spellCheck={false}
         disabled={props.disabled}
-        aria-label="搜索模型"
+        aria-label={copy.searchModels}
       />
       <OverlayScrollArea className="providerModelChoiceScroll">
         <ul
           ref={modelListRef}
           className="providerModelChoiceList"
-          aria-label="模型列表"
+          aria-label={copy.modelListAria}
           onKeyDown={onModelListKeyDown}
         >
           {visibleRows.length === 0 ? (
             <li className="providerModelChoiceEmpty">
-              {rows.length === 0 ? '暂无可选模型，请先更新模型目录。' : '没有匹配的模型。'}
+              {rows.length === 0 ? copy.noModels : copy.noMatchingModels}
             </li>
           ) : (
             visibleRows.map((row) => {
@@ -168,7 +171,7 @@ export function EnabledModelManager(props: {
                     </ItemContent>
                     {isDefault && (
                       <ItemActions>
-                        <span className="providerEnabledModelMeta">默认</span>
+                      <span className="providerEnabledModelMeta">{copy.defaultModel}</span>
                       </ItemActions>
                     )}
                   </Item>

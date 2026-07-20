@@ -1,5 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import type { AppSettings, UpdateAppSettingsResult, UsageRange, UsageStats } from '@maka/core';
+import {
+  uiLocaleToIntlLocale,
+  type AppSettings,
+  type UpdateAppSettingsResult,
+  type UsageRange,
+  type UsageStats,
+} from '@maka/core';
 import {
   Alert,
   AlertAction,
@@ -15,8 +21,13 @@ import {
   TabsRoot,
   TabsTrigger,
   useToast,
+  useUiLocale,
 } from '@maka/ui';
 import { Activity, BarChart3, Cpu, Database, RefreshCcw, Search } from '@maka/ui/icons';
+import {
+  getUsageSettingsCopy,
+  type UsageSettingsCopy,
+} from '../locales/settings-usage-copy';
 import { MetricCard } from './settings-metric-card';
 import { settingsActionErrorMessage } from './settings-error-copy';
 import { useActionGuard } from './use-action-guard';
@@ -31,6 +42,8 @@ export function UsageSettingsPage(props: {
   onReload(range?: UsageRange): Promise<void>;
   onOpenSession?(sessionId: string): void;
 }) {
+  const locale = useUiLocale();
+  const copy = getUsageSettingsCopy(locale);
   const persistedUsage = props.settings.usage;
   const [refreshing, setRefreshing] = useState(false);
   const usageRefreshGuard = useActionGuard<'refresh'>();
@@ -44,7 +57,7 @@ export function UsageSettingsPage(props: {
   } = useOptimisticSettingsDraft<AppSettings['usage']>(
     persistedUsage,
     (patch) => props.onUpdate({ usage: patch }).then((result) => result.settings.usage),
-    { onError: (error) => toast.error('保存使用统计设置失败', settingsActionErrorMessage(error)) },
+    { onError: (error) => toast.error(copy.saveFailed, settingsActionErrorMessage(error, locale)) },
   );
 
   const normalizedModelFilter = usageDraft.modelFilter.trim().toLowerCase();
@@ -98,15 +111,15 @@ export function UsageSettingsPage(props: {
 
   return (
     <div className="settingsUsagePage">
-      <div className="settingsUsageToolbar" role="group" aria-label="使用统计范围与刷新">
+      <div className="settingsUsageToolbar" role="group" aria-label={copy.toolbarAria}>
         <Segmented
           value={usageDraft.range}
-          ariaLabel="使用统计时间范围"
+          ariaLabel={copy.rangeAria}
           options={[
-            ['24h', '24h'],
-            ['7d', '7天'],
-            ['30d', '30天'],
-            ['all', '全部'],
+            ['24h', copy.ranges[0]],
+            ['7d', copy.ranges[1]],
+            ['30d', copy.ranges[2]],
+            ['all', copy.ranges[3]],
           ]}
           onChange={(value) => void setRange(value as UsageRange)}
         />
@@ -123,19 +136,19 @@ export function UsageSettingsPage(props: {
           disabled={refreshing}
           aria-busy={refreshing}
           data-pending={refreshing ? 'true' : undefined}
-          aria-label={refreshing ? '正在刷新使用统计' : '刷新使用统计'}
-          title={refreshing ? '正在刷新使用统计' : '刷新使用统计'}
+          aria-label={refreshing ? copy.refreshingAria : copy.refreshAria}
+          title={refreshing ? copy.refreshingAria : copy.refreshAria}
           onClick={() => void refresh()}
         >
           <RefreshCcw size={15} aria-hidden="true" />
         </Button>
       </div>
 
-      <div className="settingsUsageSummary" role="group" aria-label="使用统计汇总指标">
-        <MetricCard title="总请求" value={String(stats?.summary.totalRequests ?? 0)} />
-        <MetricCard title="总费用" value={`$${(stats?.summary.totalCostUsd ?? 0).toFixed(2)}`} detail="以模型供应商最终结算为准" />
-        <MetricCard title="总 Token" value={String(stats?.summary.totalTokens ?? 0)} detail={`输入 ${stats?.summary.inputTokens ?? 0} / 输出 ${stats?.summary.outputTokens ?? 0}`} />
-        <MetricCard title="缓存 Token" value={String(stats?.summary.cacheTokens ?? 0)} detail={`新 ${stats?.summary.cacheMiss ?? 0} / 命中 ${stats?.summary.cacheRead ?? 0} / 创建 ${stats?.summary.cacheCreation ?? 0}`} />
+      <div className="settingsUsageSummary" role="group" aria-label={copy.summaryAria}>
+        <MetricCard title={copy.totalRequests} value={String(stats?.summary.totalRequests ?? 0)} />
+        <MetricCard title={copy.totalCost} value={`$${(stats?.summary.totalCostUsd ?? 0).toFixed(2)}`} detail={copy.costHelp} />
+        <MetricCard title={copy.totalTokens} value={String(stats?.summary.totalTokens ?? 0)} detail={copy.tokenDetail(stats?.summary.inputTokens ?? 0, stats?.summary.outputTokens ?? 0)} />
+        <MetricCard title={copy.cacheTokens} value={String(stats?.summary.cacheTokens ?? 0)} detail={copy.cacheDetail(stats?.summary.cacheMiss ?? 0, stats?.summary.cacheRead ?? 0, stats?.summary.cacheCreation ?? 0)} />
       </div>
 
       <TabsRoot
@@ -143,12 +156,12 @@ export function UsageSettingsPage(props: {
         onValueChange={(activeTab) => void updateUsage({ activeTab: activeTab as UsageActiveTab })}
       >
         <div className="settingsUsageTabsBar">
-          <TabsList variant="underline" className="settingsUsageTabs" aria-label="使用统计视图">
-            <TabsTrigger className="settingsUsageTab" value="requests">请求日志 <span>{tabCounts.requests}</span></TabsTrigger>
-            <TabsTrigger className="settingsUsageTab" value="providers">供应商统计 <span>{tabCounts.providers}</span></TabsTrigger>
-            <TabsTrigger className="settingsUsageTab" value="models">模型统计 <span>{tabCounts.models}</span></TabsTrigger>
-            <TabsTrigger className="settingsUsageTab" value="tools">工具统计 <span>{tabCounts.tools}</span></TabsTrigger>
-            <TabsTrigger className="settingsUsageTab" value="pricing">定价配置 <span>{tabCounts.pricing}</span></TabsTrigger>
+          <TabsList variant="underline" className="settingsUsageTabs" aria-label={copy.viewAria}>
+            <TabsTrigger className="settingsUsageTab" value="requests">{copy.tabs[0]} <span>{tabCounts.requests}</span></TabsTrigger>
+            <TabsTrigger className="settingsUsageTab" value="providers">{copy.tabs[1]} <span>{tabCounts.providers}</span></TabsTrigger>
+            <TabsTrigger className="settingsUsageTab" value="models">{copy.tabs[2]} <span>{tabCounts.models}</span></TabsTrigger>
+            <TabsTrigger className="settingsUsageTab" value="tools">{copy.tabs[3]} <span>{tabCounts.tools}</span></TabsTrigger>
+            <TabsTrigger className="settingsUsageTab" value="pricing">{copy.tabs[4]} <span>{tabCounts.pricing}</span></TabsTrigger>
           </TabsList>
         </div>
 
@@ -161,7 +174,9 @@ export function UsageSettingsPage(props: {
             status={usageDraft.status}
             recordCount={filteredLogs.length}
             hasRequestFilters={hasRequestFilters}
-            requestEmpty={hasRequestFilters ? '没有符合筛选条件的请求记录' : '暂无请求记录'}
+            requestEmpty={hasRequestFilters ? copy.filteredEmpty : copy.requestEmpty}
+            copy={copy}
+            locale={locale}
             onOpenSession={props.onOpenSession}
             onEnableDetails={() => void updateUsage({ showDetails: true })}
             onModelFilterChange={(modelFilter) => void updateUsage({ modelFilter })}
@@ -172,19 +187,19 @@ export function UsageSettingsPage(props: {
         </TabsPanel>
 
         <TabsPanel className="settingsUsageTabPanel" value="providers">
-          <UsageProvidersPanel stats={stats} />
+          <UsageProvidersPanel stats={stats} copy={copy} />
         </TabsPanel>
 
         <TabsPanel className="settingsUsageTabPanel" value="models">
-          <UsageModelsPanel stats={stats} />
+          <UsageModelsPanel stats={stats} copy={copy} />
         </TabsPanel>
 
         <TabsPanel className="settingsUsageTabPanel" value="tools">
-          <UsageToolsPanel stats={stats} />
+          <UsageToolsPanel stats={stats} copy={copy} />
         </TabsPanel>
 
         <TabsPanel className="settingsUsageTabPanel" value="pricing">
-          <UsagePricingPanel stats={stats} />
+          <UsagePricingPanel stats={stats} copy={copy} />
         </TabsPanel>
       </TabsRoot>
     </div>
@@ -206,6 +221,8 @@ function UsageRequestsPanel(props: {
   recordCount: number;
   hasRequestFilters: boolean;
   requestEmpty: string;
+  copy: UsageSettingsCopy;
+  locale: ReturnType<typeof useUiLocale>;
   onOpenSession?(sessionId: string): void;
   onEnableDetails(): void;
   onModelFilterChange(value: string): void;
@@ -216,10 +233,10 @@ function UsageRequestsPanel(props: {
   if (!props.showDetails) {
     return (
       <Alert variant="info">
-        <AlertDescription>当前仅显示汇总指标。打开详情记录后，可以查看逐条模型请求和工具调用，按模型、工具或状态筛选，并用于排查费用与失败请求。</AlertDescription>
+        <AlertDescription>{props.copy.summaryOnly}</AlertDescription>
         <AlertAction>
           <Button type="button" variant="secondary" size="sm" onClick={props.onEnableDetails}>
-            显示明细
+            {props.copy.showDetails}
           </Button>
         </AlertAction>
       </Alert>
@@ -227,27 +244,27 @@ function UsageRequestsPanel(props: {
   }
   return (
     <>
-      <div className="settingsUsageFilters" role="group" aria-label="请求记录筛选">
-        <Input value={props.modelFilter} onChange={(event) => props.onModelFilterChange(event.currentTarget.value)} placeholder="按模型或工具筛选…" aria-label="按模型或工具筛选请求记录" />
+      <div className="settingsUsageFilters" role="group" aria-label={props.copy.filtersAria}>
+        <Input value={props.modelFilter} onChange={(event) => props.onModelFilterChange(event.currentTarget.value)} placeholder={props.copy.filterPlaceholder} aria-label={props.copy.filterAria} />
         <SettingsSelect
           value={props.status}
-          ariaLabel="请求状态筛选"
+          ariaLabel={props.copy.statusAria}
           options={[
-            ['all', '全部状态'],
-            ['success', '成功'],
-            ['error', '错误'],
+            ['all', props.copy.statuses[0]],
+            ['success', props.copy.statuses[1]],
+            ['error', props.copy.statuses[2]],
           ] satisfies Array<readonly [AppSettings['usage']['status'], string]>}
           onChange={props.onStatusChange}
         />
         <label className="settingsUsageDetailToggle">
-          <span>详情记录</span>
+          <span>{props.copy.details}</span>
           <Switch
-            ariaLabel="显示使用统计详情记录"
+            ariaLabel={props.copy.detailsAria}
             checked={props.showDetails}
             onChange={props.onToggleDetails}
           />
         </label>
-        <small className="settingsUsageRecordCount">共 {props.recordCount} 条记录</small>
+        <small className="settingsUsageRecordCount">{props.copy.recordCount(props.recordCount)}</small>
         <Button
           className="settingsUsageClearFilter"
           type="button"
@@ -258,30 +275,30 @@ function UsageRequestsPanel(props: {
           tabIndex={!props.hasRequestFilters ? -1 : undefined}
           onClick={props.hasRequestFilters ? props.onClearFilters : undefined}
         >
-          清除筛选
+          {props.copy.clearFilters}
         </Button>
       </div>
       <UsageStatsTable
-        ariaLabel="使用统计请求日志表"
+        ariaLabel={props.copy.tables.requestsAria}
         columns={[
-          { header: '时间' },
-          { header: '类型' },
-          { header: '对象', grow: true },
-          { header: '会话' },
-          { header: 'Token', numeric: true },
-          { header: '费用', numeric: true },
-          { header: '延迟', numeric: true },
-          { header: '状态' },
+          { header: props.copy.tables.requestHeaders[0] },
+          { header: props.copy.tables.requestHeaders[1] },
+          { header: props.copy.tables.requestHeaders[2], grow: true },
+          { header: props.copy.tables.requestHeaders[3] },
+          { header: props.copy.tables.requestHeaders[4], numeric: true },
+          { header: props.copy.tables.requestHeaders[5], numeric: true },
+          { header: props.copy.tables.requestHeaders[6], numeric: true },
+          { header: props.copy.tables.requestHeaders[7] },
         ]}
         rows={props.logs.map((row) => [
-          new Date(row.ts).toLocaleString(),
-          usageRequestKindLabel(row.kind),
+          new Date(row.ts).toLocaleString(uiLocaleToIntlLocale(props.locale)),
+          usageRequestKindLabel(row.kind, props.copy),
           usageRequestTarget(row),
-          usageRequestSessionCell(row, props.onOpenSession),
+          usageRequestSessionCell(row, props.copy, props.onOpenSession),
           row.inputTokens + row.outputTokens,
           row.kind === 'model' ? `$${(row.costUsd ?? 0).toFixed(2)}` : '-',
           row.latencyMs ? `${row.latencyMs}ms` : '-',
-          usageRequestStatusLabel(row.status),
+          usageRequestStatusLabel(row.status, props.copy),
         ])}
         empty={{ Icon: props.hasRequestFilters ? Search : Activity, title: props.requestEmpty }}
       />
@@ -289,77 +306,77 @@ function UsageRequestsPanel(props: {
   );
 }
 
-function UsageProvidersPanel(props: { stats: UsageStats | null }) {
+function UsageProvidersPanel(props: { stats: UsageStats | null; copy: UsageSettingsCopy }) {
   return (
     <UsageStatsTable
-      ariaLabel="使用统计供应商统计表"
+      ariaLabel={props.copy.tables.providersAria}
       columns={[
-        { header: '供应商', grow: true },
-        { header: '请求', numeric: true },
-        { header: 'Token', numeric: true },
-        { header: '费用', numeric: true },
+        { header: props.copy.tables.providerHeaders[0], grow: true },
+        { header: props.copy.tables.providerHeaders[1], numeric: true },
+        { header: props.copy.tables.providerHeaders[2], numeric: true },
+        { header: props.copy.tables.providerHeaders[3], numeric: true },
       ]}
       rows={(props.stats?.byProvider ?? []).map((row) => [row.provider, row.requests, row.tokens, `$${row.costUsd.toFixed(2)}`])}
-      empty={{ Icon: Database, title: '暂无供应商用量', body: '完成一次模型请求后，这里会按供应商聚合请求数、Token 与费用。' }}
+      empty={{ Icon: Database, title: props.copy.tables.providerEmptyTitle, body: props.copy.tables.providerEmptyBody }}
     />
   );
 }
 
-function UsageModelsPanel(props: { stats: UsageStats | null }) {
+function UsageModelsPanel(props: { stats: UsageStats | null; copy: UsageSettingsCopy }) {
   return (
     <UsageStatsTable
-      ariaLabel="使用统计模型统计表"
+      ariaLabel={props.copy.tables.modelsAria}
       columns={[
-        { header: '模型', grow: true },
-        { header: '请求', numeric: true },
-        { header: 'Token', numeric: true },
-        { header: '费用', numeric: true },
+        { header: props.copy.tables.modelHeaders[0], grow: true },
+        { header: props.copy.tables.modelHeaders[1], numeric: true },
+        { header: props.copy.tables.modelHeaders[2], numeric: true },
+        { header: props.copy.tables.modelHeaders[3], numeric: true },
       ]}
       rows={(props.stats?.byModel ?? []).map((row) => [row.model, row.requests, row.tokens, `$${row.costUsd.toFixed(2)}`])}
-      empty={{ Icon: Cpu, title: '暂无模型用量', body: '完成一次模型请求后，这里会按模型聚合请求数、Token 与费用。' }}
+      empty={{ Icon: Cpu, title: props.copy.tables.modelEmptyTitle, body: props.copy.tables.modelEmptyBody }}
     />
   );
 }
 
-function UsageToolsPanel(props: { stats: UsageStats | null }) {
+function UsageToolsPanel(props: { stats: UsageStats | null; copy: UsageSettingsCopy }) {
   return (
     <UsageStatsTable
-      ariaLabel="使用统计工具统计表"
+      ariaLabel={props.copy.tables.toolsAria}
       columns={[
-        { header: '工具', grow: true },
-        { header: '调用', numeric: true },
-        { header: '成功', numeric: true },
-        { header: '错误', numeric: true },
-        { header: '平均耗时', numeric: true },
+        { header: props.copy.tables.toolHeaders[0], grow: true },
+        { header: props.copy.tables.toolHeaders[1], numeric: true },
+        { header: props.copy.tables.toolHeaders[2], numeric: true },
+        { header: props.copy.tables.toolHeaders[3], numeric: true },
+        { header: props.copy.tables.toolHeaders[4], numeric: true },
       ]}
       rows={(props.stats?.byTool ?? []).map((row) => [row.tool, row.calls, row.success, row.errors, `${row.avgDurationMs}ms`])}
-      empty={{ Icon: Activity, title: '暂无工具调用', body: '智能体调用工具后，这里会按工具聚合调用次数、成功、错误与平均耗时。' }}
+      empty={{ Icon: Activity, title: props.copy.tables.toolEmptyTitle, body: props.copy.tables.toolEmptyBody }}
     />
   );
 }
 
-function UsagePricingPanel(props: { stats: UsageStats | null }) {
+function UsagePricingPanel(props: { stats: UsageStats | null; copy: UsageSettingsCopy }) {
   return (
     <UsageStatsTable
-      ariaLabel="使用统计定价配置表"
+      ariaLabel={props.copy.tables.pricingAria}
       columns={[
-        { header: '供应商', grow: true },
-        { header: '模型' },
-        { header: '输入 / 1M', numeric: true },
-        { header: '输出 / 1M', numeric: true },
+        { header: props.copy.tables.pricingHeaders[0], grow: true },
+        { header: props.copy.tables.pricingHeaders[1] },
+        { header: props.copy.tables.pricingHeaders[2], numeric: true },
+        { header: props.copy.tables.pricingHeaders[3], numeric: true },
       ]}
       rows={(props.stats?.pricing ?? []).map((row) => [row.provider, row.model, `$${row.inputPerMTokUsd}`, `$${row.outputPerMTokUsd}`])}
-      empty={{ Icon: BarChart3, title: '暂无定价覆盖配置', body: '未配置定价覆盖时，费用按内置模型定价表结算；在此可为特定模型登记自定义价格。' }}
+      empty={{ Icon: BarChart3, title: props.copy.tables.noPricing, body: props.copy.tables.pricingEmptyBody }}
     />
   );
 }
 
 // ── Request-log cell helpers ────────────────────────────────────────────────
 
-function usageRequestKindLabel(kind: UsageStats['logs'][number]['kind']) {
+function usageRequestKindLabel(kind: UsageStats['logs'][number]['kind'], copy: UsageSettingsCopy) {
   switch (kind) {
-    case 'model': return '模型';
-    case 'tool': return '工具';
+    case 'model': return copy.tables.modelKind;
+    case 'tool': return copy.tables.toolKind;
   }
 }
 
@@ -367,12 +384,12 @@ function usageRequestTarget(row: UsageStats['logs'][number]) {
   return row.kind === 'tool' ? row.toolName ?? row.model : row.model;
 }
 
-function usageRequestSessionCell(row: UsageStats['logs'][number], onOpenSession?: (sessionId: string) => void) {
+function usageRequestSessionCell(row: UsageStats['logs'][number], copy: UsageSettingsCopy, onOpenSession?: (sessionId: string) => void) {
   const label = shortUsageSessionId(row.sessionId);
   if (!onOpenSession) return label;
   return (
     <Button type="button" variant="ghost" size="sm" onClick={() => onOpenSession(row.sessionId)}>
-      打开 {label}
+      {copy.tables.openSession(label)}
     </Button>
   );
 }
@@ -381,10 +398,10 @@ function shortUsageSessionId(sessionId: string) {
   return sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId;
 }
 
-function usageRequestStatusLabel(status: UsageStats['logs'][number]['status']) {
+function usageRequestStatusLabel(status: UsageStats['logs'][number]['status'], copy: UsageSettingsCopy) {
   switch (status) {
-    case 'success': return '成功';
-    case 'error': return '错误';
+    case 'success': return copy.tables.success;
+    case 'error': return copy.tables.error;
   }
 }
 

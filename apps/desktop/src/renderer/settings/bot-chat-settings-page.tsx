@@ -6,7 +6,7 @@ import type {
   UpdateAppSettingsResult,
 } from '@maka/core';
 import type { BotStatus } from '@maka/runtime';
-import { useMountedRef, useToast } from '@maka/ui';
+import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { settingsActionErrorMessage } from './settings-error-copy';
 import {
   BOT_LABELS,
@@ -16,6 +16,7 @@ import {
 } from './bot-chat-shared';
 import { BotChatOverview } from './bot-chat-overview';
 import { BotChatChannelDetail } from './bot-chat-detail';
+import { getBotSettingsCopy } from '../locales/settings-bot-copy';
 
 /**
  * Remote-access settings container: owns overview/detail routing, bot status
@@ -40,6 +41,9 @@ export function BotChatSettingsPage(props: {
   const [statusLoadError, setStatusLoadError] = useState<string | null>(null);
   const channel = props.settings.botChat.channels[selected];
   const toast = useToast();
+  const locale = useUiLocale();
+  const botCopy = getBotSettingsCopy(locale);
+  const copy = botCopy.page;
   const selectedStatus = statuses?.[selected];
   const pendingBotActionRef = useRef<BotPendingAction | null>(null);
   const botPageMountedRef = useMountedRef();
@@ -93,7 +97,7 @@ export function BotChatSettingsPage(props: {
       return true;
     } catch (error) {
       if (botPageMountedRef.current) {
-        toast.error(`${BOT_LABELS[provider].label} 保存失败`, settingsActionErrorMessage(error));
+        toast.error(copy.saveFailed(botCopy.providers[provider].label), settingsActionErrorMessage(error, locale));
       }
       return false;
     }
@@ -111,9 +115,9 @@ export function BotChatSettingsPage(props: {
       setStatusLoadError(null);
     }).catch((error) => {
       if (!active) return;
-      const message = settingsActionErrorMessage(error);
+      const message = settingsActionErrorMessage(error, locale);
       setStatusLoadError(message);
-      toast.error('载入远程接入状态失败', message);
+      toast.error(copy.loadFailed, message);
     });
     const unsubscribe = window.maka.settings.bots.subscribeStatusChanges((status) => {
       if (!botPageMountedRef.current) return;
@@ -135,21 +139,21 @@ export function BotChatSettingsPage(props: {
     try {
       const result = await window.maka.settings.testBotChannel(provider);
       if (!botPageMountedRef.current) return;
-      const platform = BOT_LABELS[provider].label;
+      const platform = botCopy.providers[provider].label;
       if (result.ok) {
         // PR-BOT-CHAT-POLISH-0: title now matches kenji boundary 2's
         // 5-state readiness chain — a successful test PROVES
         // `credentials_valid`, NOT `operational`. The detail copy
         // still carries the IPC-side message so the user can see
         // latency / identity etc.
-        toast.success(`${platform} 凭据已验证`, result.message);
+        toast.success(copy.credentialVerified(platform), locale === 'zh' ? result.message : copy.credentialVerifiedDetail);
       } else {
-        toast.error(`${platform} 凭据测试失败`, result.message);
+        toast.error(copy.credentialTestFailed(platform), locale === 'zh' ? result.message : copy.credentialTestFailedDetail);
       }
       await refreshBotStatuses();
     } catch (error) {
       if (botPageMountedRef.current) {
-        toast.error(`${BOT_LABELS[provider].label} 测试出错`, settingsActionErrorMessage(error));
+        toast.error(copy.testError(botCopy.providers[provider].label), settingsActionErrorMessage(error, locale));
       }
     } finally {
       finishBotAction(provider, 'test');
@@ -172,17 +176,17 @@ export function BotChatSettingsPage(props: {
     try {
       const result = await window.maka.settings.testBotChannel(provider);
       if (!botPageMountedRef.current) return;
-      const platform = BOT_LABELS[provider].label;
+      const platform = botCopy.providers[provider].label;
       testOk = result.ok;
       if (result.ok) {
-        toast.success(`${platform} 凭据已验证`, result.message);
+        toast.success(copy.credentialVerified(platform), locale === 'zh' ? result.message : copy.credentialVerifiedDetail);
       } else {
-        toast.error(`${platform} 凭据测试失败`, result.message);
+        toast.error(copy.credentialTestFailed(platform), locale === 'zh' ? result.message : copy.credentialTestFailedDetail);
       }
       await refreshBotStatuses();
     } catch (error) {
       if (botPageMountedRef.current) {
-        toast.error(`${BOT_LABELS[provider].label} 测试出错`, settingsActionErrorMessage(error));
+        toast.error(copy.testError(botCopy.providers[provider].label), settingsActionErrorMessage(error, locale));
       }
       finishBotAction(provider, 'connect');
       return;
@@ -214,17 +218,17 @@ export function BotChatSettingsPage(props: {
       // the bare fact that the restart command returned. A restarted
       // bot that immediately stops (e.g. token rejected, network
       // down) was previously surfaced as a green success toast.
-      const platform = BOT_LABELS[provider].label;
+      const platform = botCopy.providers[provider].label;
       if (status.running) {
-        toast.success(`${platform} 已开始监听`, botStatusDetail(status));
+        toast.success(copy.listening(platform), botStatusDetail(status, locale));
       } else {
-        toast.error(`${platform} 启动后未进入监听`, botStatusDetail(status));
+        toast.error(copy.notListening(platform), botStatusDetail(status, locale));
       }
       return status.running;
     } catch (error) {
       if (!botPageMountedRef.current) return false;
-      const message = settingsActionErrorMessage(error);
-      toast.error(`${BOT_LABELS[provider].label} 启动失败`, message);
+      const message = settingsActionErrorMessage(error, locale);
+      toast.error(copy.startFailed(botCopy.providers[provider].label), message);
       return false;
     }
   }
@@ -251,9 +255,9 @@ export function BotChatSettingsPage(props: {
       return true;
     } catch (error) {
       if (!botPageMountedRef.current) return false;
-      const message = settingsActionErrorMessage(error);
+      const message = settingsActionErrorMessage(error, locale);
       setStatusLoadError(message);
-      toast.error('刷新远程接入状态失败', message);
+      toast.error(copy.refreshFailed, message);
       return false;
     }
   }
@@ -264,10 +268,10 @@ export function BotChatSettingsPage(props: {
     if (!beginBotAction(provider, 'disconnect')) return;
     try {
       const ok = await toast.confirm({
-        title: '断开微信登录？',
-        description: '将清除本机保存的扫码登录凭据，之后需要重新扫码才能继续使用微信渠道。',
-        confirmLabel: '断开登录',
-        cancelLabel: '取消',
+        title: copy.disconnectTitle,
+        description: copy.disconnectDescription,
+        confirmLabel: copy.disconnect,
+        cancelLabel: copy.cancel,
         destructive: true,
       });
       if (!ok) return;
@@ -286,7 +290,7 @@ export function BotChatSettingsPage(props: {
       if (!botPageMountedRef.current) return;
       await refreshBotStatuses();
       if (botPageMountedRef.current) {
-        toast.success('微信登录已断开', '本机扫码登录凭据已清除。');
+        toast.success(copy.disconnected, copy.credentialsCleared);
       }
     } finally {
       finishBotAction(provider, 'disconnect');

@@ -8,7 +8,8 @@ import {
   type ProviderType,
 } from '@maka/core';
 import { providerAuthRequiresSecret, providerAuthSupportsApiKey } from '@maka/core/llm-connections';
-import { useMountedRef, useToast } from '@maka/ui';
+import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
+import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 import { buildCatalogModelChoices } from '../model-catalog-choices';
 import { connectionChipStatus } from './provider-connection-status';
 import { useKeyedActionGuard } from './use-action-guard';
@@ -65,6 +66,8 @@ export interface ConnectionDetailProps {
 // the guard, lifecycle gate, and cross-calls (save auto-fetches models) stay in
 // one place with zero behavior change.
 export function useConnectionDetail(props: ConnectionDetailProps) {
+  const locale = useUiLocale();
+  const copy = getProviderSettingsCopy(locale).detail;
   const { connection } = props;
   const defaults = PROVIDER_DEFAULTS[connection.providerType];
   const [apiKey, setApiKey] = useState('');
@@ -104,8 +107,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   const credentialProbePending = requiresCredential && (hasSecret === 'loading' || hasSecret === 'error');
   const hasUsableCredential = !requiresCredential || hasSecret === true;
   const credentialTroubleshootingCopy = needsOAuth
-    ? 'OAuth 登录 / 代理设置'
-    : '模型密钥 / 服务地址 / 代理设置';
+    ? copy.oauthTroubleshooting
+    : copy.keyTroubleshooting;
   const savedBaseUrl = connection.baseUrl ?? defaults.baseUrl;
   const draftBaseUrl = baseUrl;
   const hasApiKeyChange = apiKey.length > 0;
@@ -115,15 +118,15 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   // async secret probe resolves — the dialog height stays constant.
   const apiKeyStatusHint =
     hasSecret === true
-      ? '已设置，粘贴新值可替换'
+      ? copy.keySet
       : hasSecret === 'loading'
-        ? '正在读取状态'
+        ? copy.statusLoading
         : hasSecret === 'error'
-          ? '凭据状态未知'
-          : '尚未设置密钥';
+          ? copy.credentialUnknown
+          : copy.keyMissing;
   const detailActionBusy = busy || testing || fetchingModels || savingEnabledModels || settingDefault || deleting;
-  const issue = connectionChipStatus(connection);
-  const lastTestMessage = connectionLastTestMessageDisplay(connection.lastTestMessage);
+  const issue = connectionChipStatus(connection, locale);
+  const lastTestMessage = connectionLastTestMessageDisplay(connection.lastTestMessage, locale);
   const lastTestAtMs = connection.lastTestAt ? Date.parse(connection.lastTestAt) : NaN;
 
   useEffect(() => {
@@ -153,7 +156,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       .catch((error) => {
         if (!isConnectionDetailCurrent(lifecycle)) return;
         setHasSecret('error');
-        toast.error('读取模型凭据状态失败', providerPanelActionErrorMessage(error));
+        toast.error(copy.credentialReadFailed, providerPanelActionErrorMessage(error, locale));
       });
   }, [props.bridge, connection.slug, probesCredential, toast]);
 
@@ -238,8 +241,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
         setHasSecret('error');
       }
       toast.error(
-        saved ? '刷新模型连接失败' : '保存模型连接失败',
-        providerPanelActionErrorMessage(error),
+        saved ? copy.refreshFailed : copy.saveFailed,
+        providerPanelActionErrorMessage(error, locale),
       );
     } finally {
       releaseSave();
@@ -270,8 +273,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       if (!saved) setEnabledModelIds(previous);
       toast.error(
-        saved ? '刷新模型连接失败' : '保存启用模型失败',
-        providerPanelActionErrorMessage(error),
+        saved ? copy.refreshFailed : copy.saveModelsFailed,
+        providerPanelActionErrorMessage(error, locale),
       );
     } finally {
       releaseSaveModels();
@@ -289,22 +292,22 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       if (result.ok) {
         toast.success(
-          `连接成功 · ${connection.name}`,
+          copy.connectionSuccess(connection.name),
           `${result.modelTested} · ${result.latencyMs} ms`,
         );
       } else {
         toast.error(
-          `连接失败 · ${connection.name}`,
+          copy.connectionFailed(connection.name),
           connectionTestFailureMessage(result, {
-            auth: `鉴权失败，请确认 ${credentialTroubleshootingCopy} 后重试。`,
-            recheck: `检查 ${credentialTroubleshootingCopy} 后重试。`,
-          }),
+            auth: copy.authTroubleshooting(credentialTroubleshootingCopy),
+            recheck: copy.recheckTroubleshooting(credentialTroubleshootingCopy),
+          }, locale),
         );
       }
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
-      const message = providerPanelActionErrorMessage(error);
-      toast.error(`连接测试出错 · ${connection.name}`, message);
+      const message = providerPanelActionErrorMessage(error, locale);
+      toast.error(copy.connectionTestError(connection.name), message);
     } finally {
       releaseTest();
       if (isConnectionDetailCurrent(lifecycle)) setTesting(false);
@@ -333,19 +336,19 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       await props.onChanged();
       if (!isConnectionDetailCurrent(lifecycle)) return;
       if (!opts.silent) {
-        toast.success(`已拉取 ${result.models.length} 个模型 · ${connection.name}`);
+        toast.success(copy.modelsFetched(result.models.length, connection.name));
       }
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
-      const message = providerPanelActionErrorMessage(error);
+      const message = providerPanelActionErrorMessage(error, locale);
       // Leave the previously-known source / models intact (so the dropdown
       // doesn't suddenly empty out), but downgrade the source label back to
       // 'fallback' if we have nothing fresh to show — the failed fetch
       // means whatever's on screen is not from the latest probe.
       if (models.length === 0) setModelSource('fallback');
       toast.error(
-        `拉取模型失败 · ${connection.name}`,
-        `${message} · 当前继续显示静态列表，请确认 ${credentialTroubleshootingCopy} 后重试。`,
+        copy.modelsFetchFailed(connection.name),
+        copy.modelsFetchFailedDetail(message, credentialTroubleshootingCopy),
       );
     } finally {
       releaseFetch();
@@ -358,7 +361,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     if (!releaseSetDefault) return;
     if (!connection.enabled) {
       releaseSetDefault();
-      toast.error('无法设为默认', '这个模型连接已禁用，请重新登录或启用后再设为默认。');
+      toast.error(copy.connectionDisabled, copy.connectionDisabledDetail);
       return;
     }
     const lifecycle = connectionDetailLifecycleRef.current;
@@ -368,10 +371,10 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       await props.onChanged();
       if (!isConnectionDetailCurrent(lifecycle)) return;
-      toast.success(`已设为默认 · ${connection.name}`);
+      toast.success(copy.defaultSet(connection.name));
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
-      toast.error('切换默认失败', providerPanelActionErrorMessage(error));
+      toast.error(copy.switchDefaultFailed, providerPanelActionErrorMessage(error, locale));
     } finally {
       releaseSetDefault();
       if (isConnectionDetailCurrent(lifecycle)) setSettingDefault(false);
@@ -384,10 +387,10 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     const lifecycle = connectionDetailLifecycleRef.current;
     setDeleting(true);
     const ok = await toast.confirm({
-      title: `删除供应商 ${connection.name}？`,
-      description: '将从模型连接中移除这个供应商配置；如需再次使用，需要重新添加凭据。',
-      confirmLabel: '删除',
-      cancelLabel: '取消',
+      title: copy.deleteProviderTitle(connection.name),
+      description: copy.deleteDescription,
+      confirmLabel: copy.delete,
+      cancelLabel: copy.cancel,
       destructive: true,
     });
     if (!isConnectionDetailCurrent(lifecycle)) return;
@@ -405,8 +408,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       toast.error(
-        deleted ? '刷新模型列表失败' : '删除模型连接失败',
-        providerPanelActionErrorMessage(error),
+        deleted ? copy.refreshFailed : copy.deleteFailed,
+        providerPanelActionErrorMessage(error, locale),
       );
     } finally {
       releaseDelete();
@@ -426,7 +429,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       setHasSecret('error');
-      toast.error('读取模型凭据状态失败', providerPanelActionErrorMessage(error));
+      toast.error(copy.credentialReadFailed, providerPanelActionErrorMessage(error, locale));
     }
     await props.onChanged();
   }

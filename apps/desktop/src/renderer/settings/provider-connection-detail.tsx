@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PROVIDER_DEFAULTS, generalizedErrorMessageChinese } from '@maka/core';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import {
   Alert,
   AlertAction,
@@ -16,11 +16,15 @@ import {
   useUiLocale,
 } from '@maka/ui';
 import { PasswordInput } from './password-input';
+import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 import { providerDisplay } from './provider-display';
 import { EnabledModelManager } from './provider-enabled-model-manager';
 import { useActionGuard } from './use-action-guard';
 import { useOAuthLoginFlow } from './use-oauth-login-flow';
-import type { CredentialPresenceStatus } from './provider-panel-shared';
+import {
+  providerPanelActionErrorMessage,
+  type CredentialPresenceStatus,
+} from './provider-panel-shared';
 import {
   useConnectionDetail,
   type ConnectionDetailProps,
@@ -38,6 +42,8 @@ export function ConnectionDetail(props: ConnectionDetailProps) {
 }
 
 function UnknownConnectionDetail({ props }: { props: ConnectionDetailProps }) {
+  const locale = useUiLocale();
+  const copy = getProviderSettingsCopy(locale).detail;
   const { connection } = props;
   const toast = useToast();
   const mounted = useMountedRef();
@@ -45,10 +51,10 @@ function UnknownConnectionDetail({ props }: { props: ConnectionDetailProps }) {
   async function remove() {
     if (deleting) return;
     const ok = await toast.confirm({
-      title: `删除供应商 ${connection.name || connection.slug}？`,
-      description: '删除后，支持该 provider 的其他版本也无法恢复这条连接及其凭据。',
-      confirmLabel: '删除',
-      cancelLabel: '取消',
+      title: copy.deleteProviderTitle(connection.name || connection.slug),
+      description: copy.deleteUnknownDescription,
+      confirmLabel: copy.delete,
+      cancelLabel: copy.cancel,
       destructive: true,
     });
     if (!mounted.current || !ok) return;
@@ -59,7 +65,7 @@ function UnknownConnectionDetail({ props }: { props: ConnectionDetailProps }) {
       await props.onDeleted();
     } catch (error) {
       if (!mounted.current) return;
-      toast.error('删除模型连接失败', generalizedErrorMessageChinese(error));
+      toast.error(copy.deleteFailed, providerPanelActionErrorMessage(error, locale));
     } finally {
       if (mounted.current) setDeleting(false);
     }
@@ -67,10 +73,10 @@ function UnknownConnectionDetail({ props }: { props: ConnectionDetailProps }) {
   return (
     <div className="providerConnectionDetail">
       <p>
-        该连接使用的 provider「{connection.providerType}」在当前版本未注册。配置和凭据会保留，切回支持它的版本即可继续使用。
+        {copy.unknownDescription(connection.providerType)}
       </p>
       <Button variant="destructive" type="button" onClick={remove} disabled={deleting}>
-        {deleting ? '删除中…' : '不再需要，删除连接'}
+        {deleting ? copy.deleting : copy.deleteUnused}
       </Button>
     </div>
   );
@@ -78,6 +84,7 @@ function UnknownConnectionDetail({ props }: { props: ConnectionDetailProps }) {
 
 function ConnectionDetailInner(props: ConnectionDetailProps) {
   const locale = useUiLocale();
+  const copy = getProviderSettingsCopy(locale).detail;
   const { connection } = props;
   const defaults = PROVIDER_DEFAULTS[connection.providerType];
   const display = providerDisplay(connection.providerType, locale);
@@ -122,27 +129,33 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
       {supportsApiKey && (
         <div className="providerCredentialTask">
           <FieldRoot className="grid gap-1.5">
-            <Label className="text-xs text-foreground-secondary">模型密钥</Label>
+            <Label className="text-xs text-foreground-secondary">{copy.modelKey}</Label>
             <FieldDescription>{apiKeyStatusHint}</FieldDescription>
             <PasswordInput
               value={apiKey}
               onChange={setApiKey}
-              placeholder={hasSecret === true ? '••••••••' : '粘贴模型密钥'}
-              ariaLabel={`${display.name} 模型密钥`}
+              placeholder={hasSecret === true ? '••••••••' : copy.pasteModelKey}
+              ariaLabel={copy.modelKeyAria(display.name)}
               disabled={detailActionBusy}
             />
           </FieldRoot>
           <div className="providerCredentialActions">
             {defaults.signupUrl && (
-              <a className="providerExternalLink" href={defaults.signupUrl} target="_blank" rel="noreferrer noopener">
-                获取模型密钥
+              <a
+                className="providerExternalLink"
+                href={defaults.signupUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label={copy.getModelKey}
+              >
+                {copy.getModelKey}
               </a>
             )}
             {/* Persistent button (disabled until a new key is typed) so the
                 credential actions row keeps a fixed height — no jitter when the
                 user starts pasting a key. */}
             <Button type="button" disabled={detailActionBusy || !hasApiKeyChange} onClick={save}>
-              {busy ? '保存中…' : '更新密钥'}
+              {busy ? copy.saving : copy.updateKey}
             </Button>
           </div>
         </div>
@@ -172,21 +185,21 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
           <Alert variant="info">
             <AlertTitle>
               {hasSecret === true
-                ? 'OAuth 已登录'
+                ? copy.oauthLoggedIn
                 : hasSecret === 'loading'
-                  ? 'OAuth 状态读取中'
+                  ? copy.oauthLoading
                   : hasSecret === 'error'
-                    ? 'OAuth 状态未知'
-                    : '等待 OAuth 登录'}
+                    ? copy.oauthUnknown
+                    : copy.oauthWaiting}
             </AlertTitle>
             <AlertDescription>
               {hasSecret === true
-                ? '该模型连接使用主进程保存的 OAuth access token；若请求提示需要重新登录，请到账号连接重新授权。'
+                ? copy.oauthLoggedInDetail
                 : hasSecret === 'loading'
-                  ? '正在读取本机 OAuth 登录状态，读取完成前不会把未知状态显示成未登录。'
+                  ? copy.oauthLoadingDetail
                   : hasSecret === 'error'
-                    ? '暂时无法读取本机 OAuth 登录状态；请刷新页面或重新打开设置。'
-                    : '请到账号连接完成登录；登录成功后会自动出现在模型连接里。'}
+                    ? copy.oauthUnknownDetail
+                    : copy.oauthWaitingDetail}
             </AlertDescription>
           </Alert>
         )
@@ -194,12 +207,12 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
       {credentialProbePending && (
         <p className="providerError" role="alert">
           {hasSecret === 'loading'
-            ? '正在读取模型凭据状态，读取完成前暂不测试连接或刷新模型。'
-            : '模型凭据状态暂时没刷新成功，已避免把未知状态显示成未登录或未配置。'}
+            ? copy.credentialLoadingDetail
+            : copy.credentialUnknownDetail}
         </p>
       )}
       <details className="providerAdvancedSettings">
-        <summary>高级设置</summary>
+        <summary>{copy.advanced}</summary>
         <div className="providerAdvancedSettingsBody">
           <EnabledModelManager
             modelChoices={modelChoices}
@@ -223,25 +236,25 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
             {!hasFixedOAuthBaseUrl && (
               <div className="providerEndpointActions">
                 <Button type="button" disabled={detailActionBusy || !hasBaseUrlChange} onClick={save}>
-                  {busy ? '保存中…' : '保存服务地址'}
+                  {busy ? copy.saving : copy.saveEndpoint}
                 </Button>
               </div>
             )}
           </div>
           <div className="providerAdvancedActions">
             <Button variant="secondary" type="button" disabled={detailActionBusy || !hasUsableCredential} onClick={runTest}>
-              {testing ? '测试中…' : '测试连接'}
+              {testing ? copy.testing : copy.testConnection}
             </Button>
             <Button variant="quiet" type="button" disabled={detailActionBusy || !hasUsableCredential} onClick={() => void refreshModels()}>
-              {fetchingModels ? '更新中…' : '更新模型目录'}
+              {fetchingModels ? copy.updating : copy.updateModels}
             </Button>
             {!props.isDefault && connection.enabled && (
               <Button variant="quiet" type="button" disabled={detailActionBusy} onClick={setAsDefault}>
-                {settingDefault ? '设置中…' : '设为默认连接'}
+                {settingDefault ? copy.setting : copy.setDefault}
               </Button>
             )}
             <Button className="providerAdvancedDanger" variant="quiet" type="button" disabled={detailActionBusy} onClick={remove}>
-              {deleting ? '删除中…' : '删除连接'}
+              {deleting ? copy.deleting : copy.deleteConnection}
             </Button>
           </div>
         </div>
@@ -257,10 +270,11 @@ function ConnectionEndpointField(props: {
   disabled: boolean;
   onChange(value: string): void;
 }) {
+  const copy = getProviderSettingsCopy(useUiLocale()).detail;
   return (
     <FieldRoot className="grid gap-1.5">
-      <Label className="text-xs text-foreground-secondary">服务地址</Label>
-      {props.fixedOAuth && <FieldDescription>OAuth 固定</FieldDescription>}
+      <Label className="text-xs text-foreground-secondary">{copy.endpoint}</Label>
+      {props.fixedOAuth && <FieldDescription>{copy.oauthFixed}</FieldDescription>}
       <Input
         value={props.baseUrl}
         onChange={(event) => props.onChange(event.currentTarget.value)}
@@ -268,7 +282,7 @@ function ConnectionEndpointField(props: {
         readOnly={props.fixedOAuth}
         disabled={props.disabled}
         aria-readonly={props.fixedOAuth ? 'true' : undefined}
-        aria-label={props.fixedOAuth ? '模型连接服务地址，OAuth 固定' : '模型连接服务地址'}
+        aria-label={props.fixedOAuth ? copy.endpointFixedAria : copy.endpointAria}
       />
     </FieldRoot>
   );
@@ -278,6 +292,8 @@ function GitHubCopilotReloginNotice(props: {
   hasSecret: CredentialPresenceStatus;
   onRelogin(): Promise<void>;
 }) {
+  const locale = useUiLocale();
+  const copy = getProviderSettingsCopy(locale).detail;
   const [busy, setBusy] = useState(false);
   const connectGuard = useActionGuard<'connect'>();
   const mountedRef = useMountedRef();
@@ -291,12 +307,14 @@ function GitHubCopilotReloginNotice(props: {
     try {
       const result = await window.maka.githubCopilotSubscription.connectExistingLogin();
       if (!result.ok) {
-        toast.error('导入 GitHub Copilot 登录失败', result.message);
+        toast.error(copy.copilotImportFailed, result.message);
         return;
       }
       await props.onRelogin();
     } catch (error) {
-      if (mountedRef.current) toast.error('导入 GitHub Copilot 登录失败', generalizedErrorMessageChinese(error));
+      if (mountedRef.current) {
+        toast.error(copy.copilotImportFailed, providerPanelActionErrorMessage(error, locale));
+      }
     } finally {
       connectGuard.finish();
       if (mountedRef.current) setBusy(false);
@@ -305,12 +323,12 @@ function GitHubCopilotReloginNotice(props: {
 
   return (
     <Alert variant="info">
-      <AlertTitle>{loggedIn ? 'GitHub Copilot 已登录' : loading ? 'OAuth 状态读取中' : '等待兼容 GitHub 凭据'}</AlertTitle>
-      <AlertDescription>{loggedIn ? '若账号或组织策略变化，可重新导入兼容凭据。' : '配置具有 Copilot Requests 权限的凭据后从本机安全导入。'}</AlertDescription>
+      <AlertTitle>{loggedIn ? copy.copilotLoggedIn : loading ? copy.oauthLoading : copy.copilotWaiting}</AlertTitle>
+      <AlertDescription>{loggedIn ? copy.copilotLoggedInDetail : copy.copilotWaitingDetail}</AlertDescription>
       {!loading && (
         <AlertAction>
           <Button type="button" size="sm" disabled={busy} onClick={() => void connect()}>
-            {busy ? '导入中…' : loggedIn ? '重新导入' : '导入兼容凭据'}
+            {busy ? copy.importing : loggedIn ? copy.reimport : copy.importCredential}
           </Button>
         </AlertAction>
       )}
@@ -329,6 +347,7 @@ function OAuthReloginNotice(props: {
   hasSecret: CredentialPresenceStatus;
   onRelogin(): Promise<void>;
 }) {
+  const copy = getProviderSettingsCopy(useUiLocale()).detail;
   const flow = useOAuthLoginFlow({
     bridge: props.service.bridge,
     display: props.service.display,
@@ -339,19 +358,19 @@ function OAuthReloginNotice(props: {
   const loading = hasSecret === 'loading';
   const errored = hasSecret === 'error';
   const title = loggedIn
-    ? 'OAuth 已登录'
+    ? copy.oauthLoggedIn
     : loading
-      ? 'OAuth 状态读取中'
+      ? copy.oauthLoading
       : errored
-        ? 'OAuth 状态未知'
-        : '等待 OAuth 登录';
+        ? copy.oauthUnknown
+        : copy.oauthWaiting;
   const detail = loggedIn
-    ? '若请求提示需要重新登录，点这里重新走一遍授权。'
+    ? copy.oauthReloginDetail
     : loading
-      ? '正在读取本机 OAuth 登录状态，读取完成前不会把未知状态显示成未登录。'
+      ? copy.oauthLoadingDetail
       : errored
-        ? '暂时无法读取本机 OAuth 登录状态；请刷新页面或重新打开设置。'
-        : '点下方按钮打开浏览器完成登录，授权成功后会自动刷新这里的状态。';
+        ? copy.oauthUnknownDetail
+        : copy.oauthStartDetail;
   return (
     <Alert variant="info">
       <AlertTitle>{title}</AlertTitle>
@@ -364,7 +383,7 @@ function OAuthReloginNotice(props: {
             disabled={flow.actionBusy}
             onClick={() => void flow.startLogin()}
           >
-            {flow.pendingAction === 'login' ? '登录中…' : loggedIn ? '重新登录' : '登录'}
+            {flow.pendingAction === 'login' ? copy.loggingIn : loggedIn ? copy.relogin : copy.login}
           </Button>
         </AlertAction>
       )}

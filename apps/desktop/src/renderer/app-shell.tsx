@@ -19,6 +19,7 @@ import {
   type MakaUriDest,
   MakaUriContext,
   LocaleProvider,
+  ToastProvider,
   type NavSelection,
   SessionListPanel,
   SkillsPage,
@@ -97,6 +98,7 @@ import { useShellLiveTurn } from './use-shell-live-turn';
 import { useShellLayout } from './use-shell-layout';
 import { useShellResume } from './use-shell-resume';
 import { useSettingsModal } from './use-settings-modal';
+import { useSystemUiLocale } from './use-system-ui-locale';
 import {
   isSessionWorkspaceUnavailableError,
   showSessionWorkspaceUnavailableToast,
@@ -124,19 +126,22 @@ type AppShellProps = {
 export function AppShell({ initialOnboardingSnapshot = null }: AppShellProps = {}) {
   const [uiLocalePreference, setUiLocalePreference] = useState<UiLocalePreference>('auto');
   const [uiLocaleOverride, setUiLocaleOverride] = useState<UiLocale | null>(null);
-  const uiLocale = resolveUiLocale(uiLocalePreference, uiLocaleOverride);
+  const systemUiLocale = useSystemUiLocale();
+  const uiLocale = resolveUiLocale(uiLocalePreference, systemUiLocale, uiLocaleOverride);
 
   return (
     <LocaleProvider locale={uiLocale} override={uiLocaleOverride}>
-      <ErrorBoundary locale={uiLocale}>
-        <AppShellContent
-          initialOnboardingSnapshot={initialOnboardingSnapshot}
-          uiLocale={uiLocale}
-          uiLocaleOverride={uiLocaleOverride}
-          setUiLocaleOverride={setUiLocaleOverride}
-          setUiLocalePreference={setUiLocalePreference}
-        />
-      </ErrorBoundary>
+      <ToastProvider>
+        <ErrorBoundary locale={uiLocale}>
+          <AppShellContent
+            initialOnboardingSnapshot={initialOnboardingSnapshot}
+            uiLocale={uiLocale}
+            uiLocaleOverride={uiLocaleOverride}
+            setUiLocaleOverride={setUiLocaleOverride}
+            setUiLocalePreference={setUiLocalePreference}
+          />
+        </ErrorBoundary>
+      </ToastProvider>
     </LocaleProvider>
   );
 }
@@ -226,7 +231,7 @@ function AppShellContent({
     setDefaultConnection,
     refreshConnections,
     handleConnectionEvent,
-  } = useShellConnections({ toastApi });
+  } = useShellConnections({ toastApi, uiLocale });
   const {
     settingsOpen,
     settingsRequestedSection,
@@ -297,13 +302,13 @@ function AppShellContent({
     () => deriveSessionStatusGroups(visibleSessions, { pinFirst: true, locale: uiLocale }),
     [visibleSessions, uiLocale],
   );
-  const sessionProjectGroups = useMemo(() => deriveProjectGroups(visibleSessions), [visibleSessions]);
+  const sessionProjectGroups = useMemo(() => deriveProjectGroups(visibleSessions, uiLocale), [visibleSessions, uiLocale]);
   const sessionListGroups = viewMode === 'project' ? sessionProjectGroups : sessionStatusGroups;
 
   // PR-DAILY-REVIEW-MVP-0: bridge for the main Daily Review module.
   // Memoized so the panel's `useEffect` cleanup keys
   // off a stable reference instead of refetching on every render.
-  const dailyReviewBridge = useMemo(() => createAppShellDailyReviewBridge(connections), [connections]);
+  const dailyReviewBridge = useMemo(() => createAppShellDailyReviewBridge(connections, uiLocale), [connections, uiLocale]);
   const {
     appendDailyReviewMarkdown,
     copyDailyReviewMarkdown,
