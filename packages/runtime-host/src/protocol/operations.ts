@@ -1,5 +1,6 @@
-import { invalidProtocolFrame } from './errors.js';
+import { ARTIFACT_OPERATION_SPECS } from './artifact.js';
 import { requireExactRecord, requireId, requireRecord, requireString } from './codec.js';
+import { invalidProtocolFrame } from './errors.js';
 import { HOST_STATUS_OPERATION_SPECS } from './host-status.js';
 import { INTERACTION_OPERATION_SPECS } from './interaction.js';
 import { MESSAGE_OPERATION_SPECS } from './message.js';
@@ -21,6 +22,16 @@ export {
   TURN_MESSAGE_TEXT_MAX_BYTES,
 } from './turn.js';
 
+export type {
+  ArtifactBinaryPreview,
+  ArtifactDeleteInput,
+  ArtifactDeleteResult,
+  ArtifactProjection,
+  ArtifactQueryInput,
+  ArtifactQueryResult,
+  ArtifactRevision,
+  ArtifactTextPreview,
+} from './artifact.js';
 export type {
   InFlightMessageSnapshot,
   MessagePlacement,
@@ -123,6 +134,21 @@ export type {
   UsageLogProjection,
 } from './usage-pricing.js';
 export {
+  ARTIFACT_CURSOR_MAX_BYTES,
+  ARTIFACT_MIME_TYPE_MAX_BYTES,
+  ARTIFACT_NAME_MAX_BYTES,
+  ARTIFACT_PAGE_MAX_ITEMS,
+  ARTIFACT_PREVIEW_MAX_BYTES,
+  ARTIFACT_RESULT_MAX_BYTES,
+  ARTIFACT_SUMMARY_MAX_BYTES,
+  decodeArtifactDeleteInput,
+  decodeArtifactDeleteResult,
+  decodeArtifactQueryInput,
+  decodeArtifactQueryResult,
+  encodeArtifactDeleteResult,
+  encodeArtifactQueryResult,
+} from './artifact.js';
+export {
   decodeTaskLedgerQueryInput,
   decodeTaskLedgerQueryResult,
   encodeTaskLedgerQueryResult,
@@ -194,8 +220,13 @@ const HOST_SKILL_AND_TASK_OPERATION_SPECS = composeOperationSpecMaps(
   TASK_LEDGER_OPERATION_SPECS,
 );
 
-export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+const HOST_TASK_AND_ARTIFACT_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_SKILL_AND_TASK_OPERATION_SPECS,
+  ARTIFACT_OPERATION_SPECS,
+);
+
+export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+  HOST_TASK_AND_ARTIFACT_OPERATION_SPECS,
   USAGE_PRICING_OPERATION_SPECS,
 );
 

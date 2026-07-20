@@ -73,6 +73,7 @@ export interface DurableArtifactAttachmentReader {
 }
 
 export interface ArtifactStore extends ArtifactStoreReader, DurableArtifactAttachmentReader {
+  recover(): Promise<void>;
   create(input: CreateArtifactInput): Promise<ArtifactRecord>;
   delete(artifactId: string): Promise<void>;
   purge(artifactIds: readonly string[]): Promise<void>;
@@ -94,6 +95,10 @@ class FileArtifactStore implements ArtifactStore {
   constructor(private readonly workspaceRoot: string) {
     this.artifactRoot = join(workspaceRoot, 'artifacts');
     this.metadataPath = join(this.artifactRoot, 'metadata.jsonl');
+  }
+
+  async recover(): Promise<void> {
+    await this.enqueue(() => this.prepareWriterUnlocked());
   }
 
   async create(input: CreateArtifactInput): Promise<ArtifactRecord> {

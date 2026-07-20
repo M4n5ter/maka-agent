@@ -27,6 +27,7 @@ export interface InteractiveArtifactStoreWriter
   readonly kind: 'interactive';
   readonly access: 'write';
   readonly [writerBrand]: true;
+  recover(): Promise<void>;
   create(input: CreateArtifactInput): Promise<ArtifactRecord>;
   delete(artifactId: string): Promise<void>;
   purge(artifactIds: readonly string[]): Promise<void>;
@@ -129,6 +130,7 @@ function createWriterFacade(
     readText: (artifactId, options) => read(() => store.readText(artifactId, options)),
     readBinary: (artifactId, options) => read(() => store.readBinary(artifactId, options)),
     readDurableAttachmentBinary: (input) => read(() => store.readDurableAttachmentBinary(input)),
+    recover: () => mutate(() => store.recover()),
     create: (input) => mutate(() => store.create(input)),
     delete: (artifactId) => mutate(() => store.delete(artifactId)),
     purge: (artifactIds) => mutate(() => store.purge(artifactIds)),

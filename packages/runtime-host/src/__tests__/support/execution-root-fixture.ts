@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRunHeader } from '@maka/core/agent-run';
+import type { ArtifactRecord } from '@maka/core/artifacts';
 import type { MessageContent } from '@maka/core/events';
 import type { StoredMessage } from '@maka/core/session';
 import type { Task } from '@maka/core/task-ledger';
@@ -16,6 +17,10 @@ import type {
   PersistedLlmCallRecord,
   StoredInteractionRequest,
 } from '@maka/storage';
+import {
+  openInteractiveArtifactStoreForWrite,
+  type InteractiveArtifactStoreWriter,
+} from '@maka/storage/artifact-stores';
 import {
   openInteractiveExecutionStoresForRead,
   openInteractiveExecutionStoresForWrite,
@@ -181,6 +186,61 @@ export class ExecutionFixture {
         await owner.close();
       }
     }
+  }
+
+  async createArtifacts(
+    inputs: readonly {
+      id?: string;
+      name: string;
+      content: string | Uint8Array;
+      kind?: 'file' | 'image';
+      mimeType?: string;
+      now?: number;
+    }[],
+  ): Promise<ArtifactRecord[]> {
+    const owner = await tryAcquireInteractiveRootOwner(this.capability);
+    assert.ok(owner);
+    if (!owner) throw new Error('Unable to acquire execution root for Artifact setup');
+    let store: InteractiveArtifactStoreWriter | undefined;
+    try {
+      store = await openInteractiveArtifactStoreForWrite(owner.lease);
+      const records: ArtifactRecord[] = [];
+      for (const input of inputs) {
+        records.push(
+          await store.create({
+            sessionId: this.sessionId,
+            turnId: 'artifact-fixture-turn',
+            name: input.name,
+            content: input.content,
+            kind: input.kind ?? 'file',
+            ...(input.id === undefined ? {} : { id: input.id }),
+            ...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
+            ...(input.now === undefined ? {} : { now: input.now }),
+            source: 'fixture',
+          }),
+        );
+      }
+      return records;
+    } finally {
+      try {
+        await store?.close();
+      } finally {
+        await owner.close();
+      }
+    }
+  }
+
+  async seedArtifactPublicationResidue(targetName = 'unpublished.txt'): Promise<string> {
+    const directory = join(this.root, 'artifacts', this.sessionId);
+    await mkdir(directory, { recursive: true });
+    const targetHash = createHash('sha256').update(targetName).digest('hex');
+    const stagingName = `.artifact-publish.${targetHash}.${randomUUID()}.tmp`;
+    await writeFile(join(directory, stagingName), 'unpublished', { flag: 'wx' });
+    return stagingName;
+  }
+
+  async artifactDirectoryEntries(): Promise<string[]> {
+    return readdir(join(this.root, 'artifacts', this.sessionId));
   }
 
   seedRunWithoutUserMessage(

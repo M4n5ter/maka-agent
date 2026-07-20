@@ -8,6 +8,7 @@ import {
   type RuntimeMessageRunOwner,
   SessionManager,
 } from '@maka/runtime';
+import { openInteractiveArtifactStoreForWrite } from '@maka/storage/artifact-stores';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';
 import { openInteractiveTaskLedgerStoreForWrite } from '@maka/storage/task-ledger-store';
@@ -19,6 +20,7 @@ import type {
   RuntimeHostCompositionContext,
   RuntimeHostFailStopDisposition,
 } from './host-kernel.js';
+import { HostArtifactCoordinator } from './artifact-coordinator.js';
 import { HostInteractionAuthority } from './interaction-coordinator.js';
 import { HostMessageCoordinator, type HostMessageRootPort } from './message-coordinator.js';
 import { combineDomainOperationHandlers } from './operation-dispatcher.js';
@@ -38,6 +40,7 @@ export async function createExecutionRuntimeHostComposition(
   const stores = await openInteractiveExecutionStoresForWrite(context.owner.lease);
   const runtimePolicyStores = await openInteractiveRuntimePolicyStoresForWrite(context.owner.lease);
   const taskLedgerStore = await openInteractiveTaskLedgerStoreForWrite(context.owner.lease);
+  const artifactStore = await openInteractiveArtifactStoreForWrite(context.owner.lease);
   const usageStores = await openInteractiveUsageStoresForWrite(context.owner.lease);
   const runtimePolicy = new HostRuntimePolicyCoordinator(runtimePolicyStores);
   const usagePricing = new HostUsagePricingCoordinator(usageStores);
@@ -46,6 +49,7 @@ export async function createExecutionRuntimeHostComposition(
   );
   const sessionAdmission = new SessionAdmissionGate();
   const taskLedger = new HostTaskLedgerCoordinator(taskLedgerStore, sessionAdmission);
+  const artifacts = new HostArtifactCoordinator(artifactStore, sessionAdmission);
   const rootAdmissionOwner = new RootAdmissionOwner();
   let messages: HostMessageCoordinator | undefined;
   const canonicalProjection = createCanonicalSessionProjectionReader(
@@ -136,12 +140,19 @@ export async function createExecutionRuntimeHostComposition(
   coordinator = rootCoordinator;
   let runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']> | undefined;
   let usageDrain: Promise<void> | undefined;
+  let artifactDrain: Promise<void> | undefined;
+  const beginArtifactDrain = () => {
+    artifactDrain ??= artifactStore.beginDrain();
+    observe(artifactDrain);
+    return artifactDrain;
+  };
   const beginUsageDrain = () => {
     usageDrain ??= usageStores.beginDrain();
     observe(usageDrain);
     return usageDrain;
   };
   const beginRuntimeDrain = () => {
+    beginArtifactDrain();
     beginUsageDrain();
     skills.beginDrain();
     messageCoordinator.beginDrain();
@@ -155,6 +166,7 @@ export async function createExecutionRuntimeHostComposition(
     if (failStopDisposition) return;
     const handoffFailures: unknown[] = [];
     try {
+      beginArtifactDrain();
       beginUsageDrain();
       skills.beginDrain();
       const runtimeFailStop = manager.installInteractionFailStop(error);
@@ -220,10 +232,12 @@ export async function createExecutionRuntimeHostComposition(
       runtimePolicy.handlers,
       skills.handlers,
       taskLedger.handlers,
+      artifacts.handlers,
       usagePricing.handlers,
     ),
     continuity,
     beginDrain: () => {
+      beginArtifactDrain();
       beginUsageDrain();
       skills.beginDrain();
       messageCoordinator.beginDrain();
@@ -232,6 +246,7 @@ export async function createExecutionRuntimeHostComposition(
     },
     recover: async () => {
       await rootCoordinator.prepareRecovery();
+      await artifactStore.recover();
       await skills.recover();
       await interaction.recoverPendingAfterHostRestart();
       await manager.recoverInterruptedSessionsStrict(stores);
@@ -249,6 +264,7 @@ export async function createExecutionRuntimeHostComposition(
         interaction,
         continuity,
         skills,
+        artifactStore,
         usageStores,
         drain,
         () => failStopDisposition,
@@ -264,6 +280,7 @@ async function closeComposition(
   interaction: HostInteractionAuthority,
   continuity: SessionContinuityCoordinator,
   skills: HostSkillCatalogCoordinator,
+  artifactStore: Awaited<ReturnType<typeof openInteractiveArtifactStoreForWrite>>,
   usageStores: Awaited<ReturnType<typeof openInteractiveUsageStoresForWrite>>,
   runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']>,
   getFailStop: () => RuntimeHostFailStopDisposition | undefined,
@@ -280,6 +297,7 @@ async function closeComposition(
     interaction,
     continuity,
     skills,
+    artifactStore,
     usageStores,
     runtimeDrain,
   );
@@ -310,6 +328,7 @@ async function closeNormally(
   interaction: HostInteractionAuthority,
   continuity: SessionContinuityCoordinator,
   skills: HostSkillCatalogCoordinator,
+  artifactStore: Awaited<ReturnType<typeof openInteractiveArtifactStoreForWrite>>,
   usageStores: Awaited<ReturnType<typeof openInteractiveUsageStoresForWrite>>,
   runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']>,
 ): Promise<{ readonly kind: 'clean' }> {
@@ -326,6 +345,7 @@ async function closeNormally(
     await interaction.close().catch((error: unknown) => errors.push(error));
     await messages.close().catch((error: unknown) => errors.push(error));
     await skills.close().catch((error: unknown) => errors.push(error));
+    await artifactStore.close().catch((error: unknown) => errors.push(error));
     await usageStores.close().catch((error: unknown) => errors.push(error));
   } finally {
     continuity.close();

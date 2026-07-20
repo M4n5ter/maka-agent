@@ -211,7 +211,7 @@ describe('FileArtifactStore', () => {
     });
   });
 
-  test('recovers a pre-metadata publication residue on the first mutation and permits stable-id retry', async () => {
+  test('explicitly recovers a pre-metadata publication residue and permits stable-id retry', async () => {
     await withWorkspace(async (workspaceRoot) => {
       const residue = await createPublicationResidue(workspaceRoot, {
         id: 'stable-retry',
@@ -225,7 +225,7 @@ describe('FileArtifactStore', () => {
       assert.equal(await store.get('stable-retry'), null);
       assert.deepEqual(await recursiveManifest(workspaceRoot), beforeRead);
 
-      await store.delete('missing');
+      await store.recover();
       await assert.rejects(() => lstat(residue.stagingPath), { code: 'ENOENT' });
       await assert.rejects(() => lstat(residue.targetPath), { code: 'ENOENT' });
 
@@ -245,7 +245,7 @@ describe('FileArtifactStore', () => {
     });
   });
 
-  test('recovers a post-metadata publication residue by removing only staging', async () => {
+  test('explicitly recovers a post-metadata publication residue by removing only staging', async () => {
     await withWorkspace(async (workspaceRoot) => {
       const writer = createArtifactStore(workspaceRoot);
       const record = await writer.create({
@@ -267,7 +267,7 @@ describe('FileArtifactStore', () => {
       });
       assert.equal((await lstat(stagingPath)).isFile(), true);
 
-      await store.delete('missing');
+      await store.recover();
       await assert.rejects(() => lstat(stagingPath), { code: 'ENOENT' });
       assert.equal(await readFile(targetPath, 'utf8'), 'committed payload');
       assert.equal((await store.get('committed'))?.status, 'live');
@@ -286,7 +286,7 @@ describe('FileArtifactStore', () => {
       const before = await recursiveManifest(workspaceRoot);
       const store = createArtifactStore(workspaceRoot);
       await assert.rejects(
-        () => store.delete('missing'),
+        () => store.recover(),
         /Artifact publication residue does not match canonical state/,
       );
       assert.deepEqual(await recursiveManifest(workspaceRoot), before);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -78,12 +79,50 @@ describe('interactive artifact store authority', () => {
     });
   });
 
+  test('drain waits for accepted recovery and rejects recovery after mutation admission closes', async () => {
+    await withInteractiveOwner(async (owner) => {
+      const artifactDirectory = join(owner.lease.canonicalPath, 'artifacts', 'session-1');
+      const targetName = 'interrupted.txt';
+      const targetHash = createHash('sha256').update(targetName).digest('hex');
+      const stagingPath = join(
+        artifactDirectory,
+        `.artifact-publish.${targetHash}.00000000-0000-4000-8000-000000000000.tmp`,
+      );
+      await mkdir(artifactDirectory, { recursive: true });
+      await writeFile(stagingPath, 'interrupted payload', { flag: 'wx' });
+
+      const writer = await openInteractiveArtifactStoreForWrite(owner.lease);
+      const recovery = writer.recover();
+      const drained = writer.beginDrain();
+
+      await drained;
+      await assert.rejects(() => lstat(stagingPath), { code: 'ENOENT' });
+      await recovery;
+      await assert.rejects(
+        () => writer.recover(),
+        (error: unknown) =>
+          error instanceof ArtifactStoreLifecycleError && error.code === 'draining',
+      );
+
+      await writer.close();
+      await assert.rejects(
+        () => writer.recover(),
+        (error: unknown) => error instanceof ArtifactStoreLifecycleError && error.code === 'closed',
+      );
+    });
+  });
+
   test('guards every facade operation with the live root lease', async () => {
     await withInteractiveOwner(async (owner) => {
       const writer = await openInteractiveArtifactStoreForWrite(owner.lease);
       await writer.create(artifactInput('before-close', 'published'));
       owner.beginClose();
 
+      await assert.rejects(
+        () => writer.recover(),
+        (error: unknown) =>
+          error instanceof StorageRootAuthorityError && error.code === 'invalid_lease',
+      );
       await assert.rejects(
         () => writer.list('session-1'),
         (error: unknown) =>
