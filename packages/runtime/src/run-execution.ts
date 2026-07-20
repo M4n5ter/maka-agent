@@ -20,10 +20,7 @@ import {
   isRuntimeLifecycleFatal,
   isTypedRuntimeStopClosure,
 } from './runtime-lifecycle-errors.js';
-import type {
-  RuntimeMessageAuthority,
-  RuntimeMessageRunOwner,
-} from './message-authority.js';
+import type { RuntimeMessageAuthority, RuntimeMessageRunOwner } from './message-authority.js';
 
 export type RuntimeExecutionCapability =
   | { readonly kind: 'embedded' }

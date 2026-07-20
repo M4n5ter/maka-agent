@@ -17,10 +17,7 @@ import type {
   RuntimeHostFailStopDisposition,
 } from './host-kernel.js';
 import { HostInteractionAuthority } from './interaction-coordinator.js';
-import {
-  HostMessageCoordinator,
-  type HostMessageRootPort,
-} from './message-coordinator.js';
+import { HostMessageCoordinator, type HostMessageRootPort } from './message-coordinator.js';
 import { combineDomainOperationHandlers } from './operation-dispatcher.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
 import { RootTurnCoordinator } from './root-turn-coordinator.js';
@@ -55,7 +52,8 @@ export async function createExecutionRuntimeHostComposition(
   );
   let coordinator: RootTurnCoordinator | undefined;
   const rootPort: HostMessageRootPort = {
-    readSessionHeader: (sessionId) => requireRootCoordinator(coordinator).readSessionHeader(sessionId),
+    readSessionHeader: (sessionId) =>
+      requireRootCoordinator(coordinator).readSessionHeader(sessionId),
     readRootState: (sessionId) => requireRootCoordinator(coordinator).readRootState(sessionId),
     startFromMessage: (input, admission) =>
       requireRootCoordinator(coordinator).startFromMessage(input, admission),
@@ -89,9 +87,8 @@ export async function createExecutionRuntimeHostComposition(
     },
   });
   messages = messageCoordinator;
-  const runtimeMessageAuthority = createFailStopMessageAuthority(
-    messageCoordinator,
-    (error) => failStopHandoff(error),
+  const runtimeMessageAuthority = createFailStopMessageAuthority(messageCoordinator, (error) =>
+    failStopHandoff(error),
   );
   const backends = new BackendRegistry();
   backends.register('fake', (backendContext) => new FakeBackend(backendContext));
@@ -308,9 +305,7 @@ function requireMessages(messages: HostMessageCoordinator | undefined): HostMess
   return messages;
 }
 
-function requireRootCoordinator(
-  coordinator: RootTurnCoordinator | undefined,
-): RootTurnCoordinator {
+function requireRootCoordinator(coordinator: RootTurnCoordinator | undefined): RootTurnCoordinator {
   if (!coordinator) throw new Error('Runtime Host root coordinator is not bound');
   return coordinator;
 }

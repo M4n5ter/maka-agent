@@ -877,9 +877,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
       return;
     }
     const hostedMessageOwner =
-      steering && this.deps.execution.kind === 'hosted'
-        ? execution.bindMessageOwner()
-        : undefined;
+      steering && this.deps.execution.kind === 'hosted' ? execution.bindMessageOwner() : undefined;
     // Steering is a top-level-turn affordance only; child agent turns run
     // without a queue. Ownership is established only AFTER run.begin()
     // succeeds (a failed begin must not leak a live owner into the next turn)

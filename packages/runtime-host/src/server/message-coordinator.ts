@@ -229,7 +229,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     this.#assertHealthy();
     const state = this.#state(identity.sessionId);
     if (state.phase !== 'open') {
-      throw new RuntimeMessageAuthorityInvariantError('Message Run bound while admission was closed');
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Message Run bound while admission was closed',
+      );
     }
     if (!state.reservedRoot || !sameRun(state.reservedRoot, identity) || state.run) {
       throw new RuntimeMessageAuthorityInvariantError(
@@ -255,7 +257,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       throw new RuntimeMessageAuthorityInvariantError('Session already reserved another root Turn');
     }
     if (state.run || state.transition) {
-      throw new RuntimeMessageAuthorityInvariantError('Cannot reserve a root Turn during live ownership');
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Cannot reserve a root Turn during live ownership',
+      );
     }
     state.reservedRoot = { ...identity };
     state.phase = 'open';
@@ -406,9 +410,7 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     }
   }
 
-  private submit(
-    input: TurnMessageSubmitInput,
-  ): Promise<MessageOutcome<TurnMessageSubmitResult>> {
+  private submit(input: TurnMessageSubmitInput): Promise<MessageOutcome<TurnMessageSubmitResult>> {
     return this.#sessionAdmission.run(input.sessionId, async (lease) => {
       if (input.originHostEpoch !== this.#hostEpoch) return this.#proveOldSubmit(input);
       this.#assertHealthy();
@@ -452,7 +454,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         return failure('session_busy', 'Message admission is closed for the active generation');
       }
       if (!state.reservedRoot || !sameRun(state.reservedRoot, rootState)) {
-        throw new RuntimeMessageAuthorityInvariantError('Root state does not match message reservation');
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Root state does not match message reservation',
+        );
       }
       if (allLiveEntries(state).length >= MESSAGE_QUEUE_MAX_ENTRIES) {
         return failure('session_busy', 'Message queue capacity is full');
@@ -481,9 +485,7 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
               ]
             : current.steering,
         followup:
-          disposition === 'followup'
-            ? [...current.followup, candidateEntry]
-            : current.followup,
+          disposition === 'followup' ? [...current.followup, candidateEntry] : current.followup,
       };
       if (!(await this.#validateProjectionCapacity(input.sessionId, candidate))) {
         return failure('session_busy', 'Message queue projection capacity is full');
@@ -552,7 +554,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     if (prior) {
       return samePayload(prior.payload, input)
         ? prior.result
-        : Promise.resolve(failure('operation_conflict', 'Interrupt identity has a different payload'));
+        : Promise.resolve(
+            failure('operation_conflict', 'Interrupt identity has a different payload'),
+          );
     }
     const task = this.#interruptOnce(input);
     state.interruptReceipts.set(input.interruptId, { payload: input, result: task });
@@ -585,7 +589,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         },
       );
       if (!fence) {
-        throw new RuntimeMessageAuthorityInvariantError('Root stop claim omitted queue fence commit');
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Root stop claim omitted queue fence commit',
+        );
       }
       return { ok: true as const, claim, fence };
     });
@@ -710,7 +716,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     this.#assertRun(run);
     const state = this.#requireState(run.sessionId);
     if (state.inFlight.size !== 0) {
-      throw new RuntimeMessageAuthorityInvariantError('Message Run released with in-flight steering');
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Message Run released with in-flight steering',
+      );
     }
     state.phase = 'closed';
     const folded = state.steering.splice(0);
@@ -736,7 +744,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       return existing.result;
     }
     if (!state.reservedRoot || !sameRun(state.reservedRoot, identity)) {
-      throw new RuntimeMessageAuthorityInvariantError('Stop fence does not match the reserved root Turn');
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Stop fence does not match the reserved root Turn',
+      );
     }
     state.phase = 'closed';
     const retracted = this.#retractQueued(state);
@@ -776,7 +786,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       !isDeepStrictEqual(transition.entries.map(sourceFromEntry), batch.sources) ||
       transition.entries.map((entry) => entry.text).join('\n\n') !== batch.text
     ) {
-      throw new RuntimeMessageAuthorityInvariantError('Follow-up batch does not own the transition');
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Follow-up batch does not own the transition',
+      );
     }
     return state;
   }
@@ -790,7 +802,8 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
   }
 
   #assertHealthy(): void {
-    if (this.#poisoned) throw new RuntimeMessageAuthorityInvariantError('Message coordinator is poisoned');
+    if (this.#poisoned)
+      throw new RuntimeMessageAuthorityInvariantError('Message coordinator is poisoned');
   }
 
   #state(sessionId: string): SessionState {
@@ -814,15 +827,12 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
 
   #requireState(sessionId: string): SessionState {
     const state = this.#sessions.get(sessionId);
-    if (!state) throw new RuntimeMessageAuthorityInvariantError(`Unknown message Session ${sessionId}`);
+    if (!state)
+      throw new RuntimeMessageAuthorityInvariantError(`Unknown message Session ${sessionId}`);
     return state;
   }
 
-  #mutated(
-    sessionId: string,
-    state: SessionState,
-    admission?: SessionAdmissionLease,
-  ): void {
+  #mutated(sessionId: string, state: SessionState, admission?: SessionAdmissionLease): void {
     state.revision += 1;
     this.#notifyProjection(sessionId, admission);
   }

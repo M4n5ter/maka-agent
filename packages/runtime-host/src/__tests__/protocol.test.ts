@@ -106,11 +106,7 @@ describe('Runtime Host bootstrap protocol', () => {
       'outcome_unknown',
       'internal_failure',
     ];
-    for (const operation of [
-      'turn.message.submit',
-      'queue.retract',
-      'turn.interrupt',
-    ] as const) {
+    for (const operation of ['turn.message.submit', 'queue.retract', 'turn.interrupt'] as const) {
       assert.equal(HOST_OPERATION_SPECS[operation].retry, 'semantic');
       assert.deepEqual(HOST_OPERATION_SPECS[operation].errors, expectedErrors);
     }
@@ -152,7 +148,8 @@ describe('Runtime Host bootstrap protocol', () => {
     assert.deepEqual(decodeClientFrame(retract), retract);
     assert.deepEqual(decodeClientFrame(interrupt), interrupt);
     assert.throws(
-      () => decodeClientFrame({ ...submit, input: { ...submit.input, originHostEpoch: undefined } }),
+      () =>
+        decodeClientFrame({ ...submit, input: { ...submit.input, originHostEpoch: undefined } }),
       isInvalidFrame,
     );
     assert.throws(

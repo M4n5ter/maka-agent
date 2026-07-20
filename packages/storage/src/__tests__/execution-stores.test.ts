@@ -848,13 +848,7 @@ describe('execution stores', () => {
           sourceMessages: [],
           admittedAt: 10,
         });
-        const admissionPath = join(
-          root,
-          'sessions',
-          session.id,
-          'turn-admissions',
-          'turn-1.json',
-        );
+        const admissionPath = join(root, 'sessions', session.id, 'turn-admissions', 'turn-1.json');
         const admission = JSON.parse(await readFile(admissionPath, 'utf8')) as Record<
           string,
           unknown
@@ -864,11 +858,7 @@ describe('execution stores', () => {
           () => stores.agentRunStore.readRootTurnAdmission(session.id, 'turn-1'),
           /malformed fields/,
         );
-        await writeFile(
-          admissionPath,
-          '{"turnId":"wrong"}\n',
-          'utf8',
-        );
+        await writeFile(admissionPath, '{"turnId":"wrong"}\n', 'utf8');
         await assert.rejects(() =>
           stores.agentRunStore.listRootTurnAdmissionsForRecovery(session.id),
         );

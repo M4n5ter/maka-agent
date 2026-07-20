@@ -23,14 +23,20 @@ test('pull crosses the retract commit cut and only queued entries are retracted'
   const [lease] = owner.pull();
   assert.ok(lease);
 
-  const outcome = await fixture.coordinator.handlers['queue.retract']({
-    originHostEpoch: 'epoch-1',
-    sessionId: ROOT.sessionId,
-    retractId: 'retract-1',
-  }, operationContext());
+  const outcome = await fixture.coordinator.handlers['queue.retract'](
+    {
+      originHostEpoch: 'epoch-1',
+      sessionId: ROOT.sessionId,
+      retractId: 'retract-1',
+    },
+    operationContext(),
+  );
   assert.equal(outcome.ok, true);
   if (!outcome.ok) return;
-  assert.deepEqual(outcome.result.retracted.map((entry) => entry.messageId), ['follow-1']);
+  assert.deepEqual(
+    outcome.result.retracted.map((entry) => entry.messageId),
+    ['follow-1'],
+  );
   assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId), {
     hostEpoch: 'epoch-1',
     queueRevision: 4,
@@ -62,20 +68,26 @@ test('an interrupt generation fence makes a late nack discard its in-flight entr
   const [lease] = owner.pull();
   assert.ok(lease);
 
-  const interrupted = fixture.coordinator.handlers['turn.interrupt']({
-    originHostEpoch: 'epoch-1',
-    sessionId: ROOT.sessionId,
-    interruptId: 'interrupt-1',
-    turnId: ROOT.turnId,
-    runId: ROOT.runId,
-  }, operationContext());
-  const retry = fixture.coordinator.handlers['turn.interrupt']({
-    originHostEpoch: 'epoch-1',
-    sessionId: ROOT.sessionId,
-    interruptId: 'interrupt-1',
-    turnId: ROOT.turnId,
-    runId: ROOT.runId,
-  }, operationContext());
+  const interrupted = fixture.coordinator.handlers['turn.interrupt'](
+    {
+      originHostEpoch: 'epoch-1',
+      sessionId: ROOT.sessionId,
+      interruptId: 'interrupt-1',
+      turnId: ROOT.turnId,
+      runId: ROOT.runId,
+    },
+    operationContext(),
+  );
+  const retry = fixture.coordinator.handlers['turn.interrupt'](
+    {
+      originHostEpoch: 'epoch-1',
+      sessionId: ROOT.sessionId,
+      interruptId: 'interrupt-1',
+      turnId: ROOT.turnId,
+      runId: ROOT.runId,
+    },
+    operationContext(),
+  );
   await fixture.stopClaimed.promise;
 
   owner.nack([lease.id]);
@@ -91,7 +103,10 @@ test('an interrupt generation fence makes a late nack discard its in-flight entr
   assert.equal(outcome.ok, true);
   assert.deepEqual(retryOutcome, outcome);
   if (outcome.ok) {
-    assert.deepEqual(outcome.result.retracted.map((entry) => entry.messageId), ['follow-1']);
+    assert.deepEqual(
+      outcome.result.retracted.map((entry) => entry.messageId),
+      ['follow-1'],
+    );
   }
 
   owner.release();
@@ -212,11 +227,14 @@ test('semantic retry history does not become a permanent Session admission cap',
   fixture.coordinator.reserveRootTurn(ROOT);
 
   for (let index = 0; index < 65; index += 1) {
-    const outcome = await fixture.coordinator.handlers['queue.retract']({
-      originHostEpoch: 'epoch-1',
-      sessionId: ROOT.sessionId,
-      retractId: `retract-${index}`,
-    }, operationContext());
+    const outcome = await fixture.coordinator.handlers['queue.retract'](
+      {
+        originHostEpoch: 'epoch-1',
+        sessionId: ROOT.sessionId,
+        retractId: `retract-${index}`,
+      },
+      operationContext(),
+    );
     assert.equal(outcome.ok, true);
   }
 });
@@ -257,21 +275,18 @@ test('same-Epoch submit dedupes, conflicts on payload change, and old Epoch need
   );
   assert.equal(oldSteer.ok && oldSteer.result.disposition, 'steering');
 
-  const unknown = await submit(
-    fixture,
-    'old-unknown',
-    'not durable',
-    'current_turn',
-    'old-epoch',
-  );
+  const unknown = await submit(fixture, 'old-unknown', 'not durable', 'current_turn', 'old-epoch');
   assert.equal(unknown.ok, false);
   if (!unknown.ok) assert.equal(unknown.error.code, 'outcome_unknown');
 
-  const retracted = await fixture.coordinator.handlers['queue.retract']({
-    originHostEpoch: 'epoch-1',
-    sessionId: ROOT.sessionId,
-    retractId: 'cleanup',
-  }, operationContext());
+  const retracted = await fixture.coordinator.handlers['queue.retract'](
+    {
+      originHostEpoch: 'epoch-1',
+      sessionId: ROOT.sessionId,
+      retractId: 'cleanup',
+    },
+    operationContext(),
+  );
   assert.equal(retracted.ok, true);
   owner.release();
   const batch = fixture.coordinator.beginTerminalTransition(ROOT);
@@ -352,13 +367,16 @@ function submit(
   placement: 'current_turn' | 'next_turn',
   originHostEpoch = 'epoch-1',
 ) {
-  return fixture.coordinator.handlers['turn.message.submit']({
-    originHostEpoch,
-    sessionId: ROOT.sessionId,
-    messageId,
-    text,
-    placement,
-  }, operationContext());
+  return fixture.coordinator.handlers['turn.message.submit'](
+    {
+      originHostEpoch,
+      sessionId: ROOT.sessionId,
+      messageId,
+      text,
+      placement,
+    },
+    operationContext(),
+  );
 }
 
 function sourceReceipt(

@@ -9,11 +9,7 @@ import {
   requireUtf8BoundedString,
 } from './codec.js';
 import { defineOperation } from './operation-spec.js';
-import {
-  decodeTurnSnapshot,
-  TURN_MESSAGE_TEXT_MAX_BYTES,
-  type TurnSnapshot,
-} from './turn.js';
+import { decodeTurnSnapshot, TURN_MESSAGE_TEXT_MAX_BYTES, type TurnSnapshot } from './turn.js';
 
 export const MESSAGE_QUEUE_MAX_ENTRIES = 64;
 export const MESSAGE_QUEUE_PROJECTION_MAX_BYTES = 52 * 1024;
@@ -134,9 +130,7 @@ export const MESSAGE_OPERATION_SPECS = {
   }),
 } as const;
 
-export function decodeSessionMessageQueueProjection(
-  value: unknown,
-): SessionMessageQueueProjection {
+export function decodeSessionMessageQueueProjection(value: unknown): SessionMessageQueueProjection {
   requireEncodedByteLimit(
     value,
     'Session message queue projection',
@@ -189,10 +183,7 @@ function decodeTurnMessageSubmitResult(value: unknown): TurnMessageSubmitResult 
     };
   }
   if (record.disposition === 'steering' || record.disposition === 'followup') {
-    assertExactKeys(record, 'turn.message.submit queued result', [
-      'disposition',
-      'queueRevision',
-    ]);
+    assertExactKeys(record, 'turn.message.submit queued result', ['disposition', 'queueRevision']);
     return {
       disposition: record.disposition,
       queueRevision: requireCount(record.queueRevision, 'queueRevision'),
@@ -216,10 +207,7 @@ function decodeQueueRetractInput(value: unknown): QueueRetractInput {
 
 function decodeQueueRetractResult(value: unknown): QueueRetractResult {
   requireEncodedByteLimit(value, 'queue.retract result', MESSAGE_OPERATION_RESULT_MAX_BYTES);
-  const record = requireExactRecord(value, 'queue.retract result', [
-    'queueRevision',
-    'retracted',
-  ]);
+  const record = requireExactRecord(value, 'queue.retract result', ['queueRevision', 'retracted']);
   return {
     queueRevision: requireCount(record.queueRevision, 'queueRevision'),
     retracted: decodeRetractedMessages(record.retracted),

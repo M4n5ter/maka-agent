@@ -425,7 +425,10 @@ export class RootTurnCoordinator {
         );
         this.#throwIfPoisoned();
         if (existing) {
-          if (existing.normalizedInput.text !== input.text || existing.sourceMessages.length !== 0) {
+          if (
+            existing.normalizedInput.text !== input.text ||
+            existing.sourceMessages.length !== 0
+          ) {
             return completedStart(
               operationConflict('Turn identity was already admitted with a different payload'),
             );
@@ -536,10 +539,8 @@ export class RootTurnCoordinator {
   private stopTurn(input: TurnStopInput): Promise<OperationOutcome<'turn.stop'>> {
     return this.runCommand(async () => {
       this.#throwIfPoisoned();
-      const disposition = await this.sessionAdmission.run(
-        input.sessionId,
-        (lease) =>
-          this.#prepareStopDisposition(input, () => this.messages.commitStopFence(input, lease)),
+      const disposition = await this.sessionAdmission.run(input.sessionId, (lease) =>
+        this.#prepareStopDisposition(input, () => this.messages.commitStopFence(input, lease)),
       );
       this.#throwIfPoisoned();
       if (disposition.kind === 'complete') return disposition.outcome;
@@ -575,11 +576,7 @@ export class RootTurnCoordinator {
       };
     }
 
-    const snapshot = await this.readCanonicalSnapshot(
-      input.sessionId,
-      input.turnId,
-      input.runId,
-    );
+    const snapshot = await this.readCanonicalSnapshot(input.sessionId, input.turnId, input.runId);
     this.#throwIfPoisoned();
     const active = this.#activeBySession.get(input.sessionId);
     if (isTerminalSnapshot(snapshot)) {
@@ -603,7 +600,9 @@ export class RootTurnCoordinator {
     commitQueueFence();
     const shouldRequestStop = !active.stopRequested;
     active.stopRequested = true;
-    return shouldRequestStop ? { kind: 'request_stop', active } : { kind: 'await_terminal', active };
+    return shouldRequestStop
+      ? { kind: 'request_stop', active }
+      : { kind: 'await_terminal', active };
   }
 
   private async prepareAdmittedTurn(
@@ -877,10 +876,7 @@ export class RootTurnCoordinator {
     await this.sessionAdmission.run(sessionId, async (lease) => {
       this.#assertTurnUsable(active.ownership);
       const identity = { sessionId, turnId: active.turnId, runId: active.runId };
-      await this.interaction.assertRunClosedAndNoPending(
-        identity,
-        lease,
-      );
+      await this.interaction.assertRunClosedAndNoPending(identity, lease);
       this.#assertTurnUsable(active.ownership);
       await this.continuity.publishTerminalProjection(
         sessionId,
@@ -948,7 +944,9 @@ export class RootTurnCoordinator {
         admission.admission,
         () => {
           if (residencyTransferred) {
-            throw new RuntimeInteractionInvariantError('Follow-up root residency was acquired twice');
+            throw new RuntimeInteractionInvariantError(
+              'Follow-up root residency was acquired twice',
+            );
           }
           residencyTransferred = true;
           return nextResidency;

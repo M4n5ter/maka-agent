@@ -28,10 +28,7 @@ import {
   type RuntimeInteractionRunOwner,
   type RuntimeUserQuestionContinuation,
 } from '../interaction-authority.js';
-import type {
-  RuntimeMessageAuthority,
-  RuntimeMessageRunOwner,
-} from '../message-authority.js';
+import type { RuntimeMessageAuthority, RuntimeMessageRunOwner } from '../message-authority.js';
 import { PermissionEngine } from '../permission-engine.js';
 import { PiAgentBackend, type PiAgentFrame, type PiAgentTransport } from '../pi-agent-backend.js';
 import {
@@ -205,21 +202,18 @@ describe('hosted Runtime lifecycle', () => {
         };
       });
       const backends = new BackendRegistry();
-      backends.register(
-        'fake',
-        (context) => {
-          if (context.header.name === 'Hosted message failure') {
-            return new RejectingSendHostedBackend(context.sessionId, new Error('provider failed'));
-          }
-          return new FakeBackend({
-            execution: context.execution,
-            sessionId: context.sessionId,
-            header: context.header,
-            store: context.store,
-            appendMessage: context.appendMessage,
-          });
-        },
-      );
+      backends.register('fake', (context) => {
+        if (context.header.name === 'Hosted message failure') {
+          return new RejectingSendHostedBackend(context.sessionId, new Error('provider failed'));
+        }
+        return new FakeBackend({
+          execution: context.execution,
+          sessionId: context.sessionId,
+          header: context.header,
+          store: context.store,
+          appendMessage: context.appendMessage,
+        });
+      });
       const manager = managerFor({
         store,
         runStore,
@@ -250,13 +244,14 @@ describe('hosted Runtime lifecycle', () => {
       assert.deepEqual([...activeOwners], []);
 
       assert.throws(() => manager.steer(session.id, 'runtime queue'), /Runtime Host owns/);
-      assert.throws(() => manager.queueMessage(session.id, 'runtime followup'), /Runtime Host owns/);
+      assert.throws(
+        () => manager.queueMessage(session.id, 'runtime followup'),
+        /Runtime Host owns/,
+      );
       assert.throws(() => manager.drainFollowup(session.id), /Runtime Host owns/);
       assert.throws(() => manager.retractQueue(session.id), /Runtime Host owns/);
 
-      const stoppedSession = await manager.createSession(
-        sessionInput(root, 'Hosted message stop'),
-      );
+      const stoppedSession = await manager.createSession(sessionInput(root, 'Hosted message stop'));
       const stoppedIterator = manager
         .sendMessage(stoppedSession.id, { turnId: 'turn-host-stop', text: 'stop' })
         [Symbol.asyncIterator]();
@@ -265,10 +260,7 @@ describe('hosted Runtime lifecycle', () => {
       const stopCompletion = manager.claimSessionStop(stoppedSession.id, {
         source: 'stop_button',
       });
-      await Promise.all([
-        stopCompletion,
-        drain({ [Symbol.asyncIterator]: () => stoppedIterator }),
-      ]);
+      await Promise.all([stopCompletion, drain({ [Symbol.asyncIterator]: () => stoppedIterator })]);
       assert.deepEqual([...activeOwners], []);
 
       const failedSession = await manager.createSession(
@@ -392,11 +384,7 @@ describe('hosted Runtime lifecycle', () => {
       );
 
       transport.releaseSend();
-      await Promise.all([
-        running,
-        runtimeDrain.ownerIsolationDrain,
-        runtimeDrain.reclaimDrain,
-      ]);
+      await Promise.all([running, runtimeDrain.ownerIsolationDrain, runtimeDrain.reclaimDrain]);
       const [run] = await runStore.listSessionRuns(session.id);
       assert.equal(run?.status, 'cancelled');
     });

@@ -204,9 +204,7 @@ async function openExecutionStoresForWrite<K extends StorageRootKind>(
       readRootTurnAdmission: (sessionId, turnId) =>
         run(() => agentRunStore.readRootTurnAdmission(sessionId, turnId)),
       readRootTurnSourceMessageReceipt: (sessionId, sourceMessageId) =>
-        run(() =>
-          agentRunStore.readRootTurnSourceMessageReceipt(sessionId, sourceMessageId),
-        ),
+        run(() => agentRunStore.readRootTurnSourceMessageReceipt(sessionId, sourceMessageId)),
       listRootTurnAdmissionsForRecovery: (sessionId) =>
         run(() => agentRunStore.listRootTurnAdmissionsForRecovery(sessionId)),
     },
@@ -273,9 +271,7 @@ async function openExecutionStoresForRead<K extends StorageRootKind>(
       readRootTurnAdmission: (sessionId, turnId) =>
         run(() => agentRunStore.readRootTurnAdmission(sessionId, turnId)),
       readRootTurnSourceMessageReceipt: (sessionId, sourceMessageId) =>
-        run(() =>
-          agentRunStore.readRootTurnSourceMessageReceipt(sessionId, sourceMessageId),
-        ),
+        run(() => agentRunStore.readRootTurnSourceMessageReceipt(sessionId, sourceMessageId)),
     },
     runtimeEventStore: {
       readRuntimeEvents: (sessionId, runId) =>

@@ -442,16 +442,12 @@ async function openAcceptedTransport(
 function createHandlers(queryTurn: TurnQueryHandler): RuntimeHostComposition['handlers'] {
   const turnHandlers = createTurnHandlers(queryTurn);
   const unavailable = createUnavailableDomainOperationHandlers();
-  return combineDomainOperationHandlers(
-    turnHandlers,
-    createUnavailableMessageHandlers(),
-    {
-      'subscription.open': unavailable['subscription.open'],
-      'subscription.close': unavailable['subscription.close'],
-      'interaction.query': unavailable['interaction.query'],
-      'interaction.answer': unavailable['interaction.answer'],
-    },
-  );
+  return combineDomainOperationHandlers(turnHandlers, createUnavailableMessageHandlers(), {
+    'subscription.open': unavailable['subscription.open'],
+    'subscription.close': unavailable['subscription.close'],
+    'interaction.query': unavailable['interaction.query'],
+    'interaction.answer': unavailable['interaction.answer'],
+  });
 }
 
 function createTurnHandlers(queryTurn: TurnQueryHandler): TurnOperationHandlerMap {

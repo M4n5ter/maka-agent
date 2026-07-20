@@ -61,8 +61,7 @@ export function createCanonicalSessionProjectionReader(
         queue: canonical.queue,
       };
       if (
-        Buffer.byteLength(JSON.stringify(snapshot), 'utf8') >
-        SESSION_CONTINUITY_SNAPSHOT_MAX_BYTES
+        Buffer.byteLength(JSON.stringify(snapshot), 'utf8') > SESSION_CONTINUITY_SNAPSHOT_MAX_BYTES
       ) {
         return false;
       }
