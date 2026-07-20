@@ -104,8 +104,6 @@ export interface LlmCallRecord {
   outputTokens: number;
   cacheHitInputTokens?: number;
   cacheMissInputTokens?: number;
-  /** Backward-compatible alias for cacheHitInputTokens. */
-  cachedInputTokens?: number;
   cacheWriteInputTokens?: number;
   reasoningTokens?: number;
   totalTokens?: number;

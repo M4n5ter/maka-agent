@@ -1441,6 +1441,10 @@ export type {
   UsageQuery,
   UsageSummaryV2,
 } from './usage-stats/types.js';
+export {
+  isContextBudgetDiagnostic,
+  isPromptSegmentEstimate,
+} from './usage-record-schema.js';
 
 export {
   formatCompactTimestamp,

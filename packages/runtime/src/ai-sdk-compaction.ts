@@ -1210,7 +1210,6 @@ export class AiSdkCompaction {
       ...(input.usage.cacheMissInputSource !== undefined
         ? { cacheMissInputSource: input.usage.cacheMissInputSource }
         : {}),
-      cachedInputTokens: input.usage.cachedInputTokens,
       cacheWriteInputTokens: input.usage.cacheWriteInputTokens,
       reasoningTokens: input.usage.reasoningTokens,
       totalTokens: input.usage.totalTokens,

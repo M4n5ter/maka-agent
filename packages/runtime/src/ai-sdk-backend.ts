@@ -2196,7 +2196,6 @@ export class AiSdkBackend implements AgentBackend {
               ...(tokenUsage.cacheMissInputSource !== undefined
                 ? { cacheMissInputSource: tokenUsage.cacheMissInputSource }
                 : {}),
-              cachedInputTokens: tokenUsage.cachedInputTokens,
               cacheWriteInputTokens: tokenUsage.cacheWriteInputTokens,
               reasoningTokens: tokenUsage.reasoningTokens,
               totalTokens: tokenUsage.totalTokens,

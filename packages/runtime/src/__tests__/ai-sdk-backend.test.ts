@@ -7704,7 +7704,6 @@ describe('AiSdkBackend usage telemetry', () => {
     assert.equal(llmRecords[0]?.cacheHitInputTokens, 3);
     assert.equal(llmRecords[0]?.cacheMissInputTokens, 5);
     assert.equal(llmRecords[0]?.cacheMissInputSource, 'explicit');
-    assert.equal(llmRecords[0]?.cachedInputTokens, 3);
     assert.equal(llmRecords[0]?.cacheWriteInputTokens, 2);
     assert.equal(llmRecords[0]?.reasoningTokens, 2);
     assert.equal(llmRecords[0]?.totalTokens, 17);

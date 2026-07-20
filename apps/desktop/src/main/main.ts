@@ -65,6 +65,7 @@ import {
   createSessionStore,
   createSettingsStore,
   createMcpConfigStore,
+  createPricingStore,
   createShellRunStore,
   createTelemetryRepo,
 } from '@maka/storage';
@@ -223,6 +224,7 @@ function ensureMcpReady(): Promise<void> {
   return mcpStartup;
 }
 const telemetryRepo = createTelemetryRepo(workspaceRoot);
+const pricingStore = createPricingStore(workspaceRoot);
 const dailyReviewArchiveStore = createDailyReviewArchiveStore(workspaceRoot);
 const artifactStore = createArtifactStore(workspaceRoot);
 const deepResearchStore = createDeepResearchStore(workspaceRoot);
@@ -608,6 +610,22 @@ const systemPromptService = createSystemPromptMainService({
   hostCapabilities: desktopHostCapabilities,
 });
 let lookupPricing = buildPricingLookup();
+let usageReadiness: Promise<void> | undefined;
+function ensureUsageReady(): Promise<void> {
+  if (!usageReadiness) {
+    const readiness = Promise.all([
+      telemetryRepo.load(),
+      pricingStore.load(),
+    ]).then(() => {
+      lookupPricing = buildPricingLookup(pricingStore.snapshot().overrides);
+    });
+    usageReadiness = readiness;
+    void readiness.catch(() => {
+      if (usageReadiness === readiness) usageReadiness = undefined;
+    });
+  }
+  return usageReadiness;
+}
 // Track the last status fields that affect persisted diagnostics. The reason
 // is part of the key because a running bridge can remain degraded while a
 // newer, more useful failure replaces the previous one.
@@ -694,6 +712,7 @@ backends.register('ai-sdk', createAiSdkBackendFactory({
   permissionEngine,
   taskLedgerStore,
   telemetryRepo,
+  ensureUsageReady,
   artifactStore,
   deepResearchTools,
   desktopSessionSkillHosts,
@@ -819,6 +838,7 @@ const dailyReview = createDailyReviewMainService({
   archiveStore: dailyReviewArchiveStore,
   connectionStore,
   telemetryRepo,
+  ensureUsageReady,
   listSessions: async () => collapseSessionRevisions(await runtime.listSessions()),
   resolveConnectionSecret,
   buildSubscriptionModelFetch,
@@ -964,6 +984,7 @@ function registerIpc(): void {
     settingsStore,
     connectionStore,
     telemetryRepo,
+    ensureUsageReady,
     botRegistry,
     getComputerUseCapabilityInput: computerUseCapabilityInput,
   });
@@ -989,8 +1010,10 @@ function registerIpc(): void {
   registerUsageIpc({
     settingsStore,
     telemetryRepo,
+    pricingStore,
+    ensureUsageReady,
     refreshPricingLookup: () => {
-      lookupPricing = buildPricingLookup(telemetryRepo.listPricingOverrides());
+      lookupPricing = buildPricingLookup(pricingStore.snapshot().overrides);
     },
     sendToRenderer: safeSendToRenderer,
   });
@@ -1177,6 +1200,8 @@ wireAppLifecycle({
   connectionStore,
   settingsStore,
   telemetryRepo,
+  pricingStore,
+  ensureUsageReady,
   keepSystemAwake,
   botRegistry,
   openGateway,
@@ -1196,9 +1221,6 @@ wireAppLifecycle({
   emitConnectionListChanged,
   handleExternalSettingsChange,
   getSettingsIpc: () => settingsIpc,
-  setLookupPricing: (value) => {
-    lookupPricing = value;
-  },
 });
 
 function computerUseCapabilityInput() {
