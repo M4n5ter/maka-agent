@@ -12,6 +12,7 @@ import {
 import { SESSION_CONTINUITY_OPERATION_SPECS } from './session-continuity.js';
 import { TURN_OPERATION_SPECS } from './turn.js';
 import { RUNTIME_POLICY_OPERATION_SPECS } from './runtime-policy.js';
+import { SKILL_CATALOG_OPERATION_SPECS } from './skill-catalog.js';
 
 export {
   TURN_MESSAGE_CONTENT_MAX_BYTES,
@@ -78,6 +79,37 @@ export type {
   SetDefaultConnectionTargetResult,
   UpdateCatalogConnectionResult,
 } from './runtime-policy.js';
+export type {
+  SkillCatalogDiagnostic,
+  SkillCatalogEntry,
+  SkillCatalogItem,
+  SkillCatalogManagedUpdateStatus,
+  SkillCatalogMutateInput,
+  SkillCatalogMutateResult,
+  SkillCatalogMutation,
+  SkillCatalogMutationRejectedReason,
+  SkillCatalogPreviewRejectedReason,
+  SkillCatalogPreviewUpdateInput,
+  SkillCatalogPreviewUpdateResult,
+  SkillCatalogQueryInput,
+  SkillCatalogQueryResult,
+  SkillCatalogRefreshInput,
+  SkillCatalogRefreshResult,
+  SkillCatalogRevision,
+  SkillCatalogRevisionConflict,
+  SkillCatalogSourceEntry,
+  SkillCatalogValidationStatus,
+  SkillCatalogView,
+  SkillContentSha256,
+  SkillRuntimeStatus,
+  SkillSourceType,
+} from './skill-catalog.js';
+export {
+  SKILL_CATALOG_PAGE_MAX_BYTES,
+  SKILL_CATALOG_PAGE_MAX_ITEMS,
+  SKILL_CATALOG_PREVIEW_CONTENT_MAX_BYTES,
+  SKILL_CATALOG_PREVIEW_RESULT_MAX_BYTES,
+} from './skill-catalog.js';
 export {
   CONNECTION_CATALOG_PAGE_MAX_BYTES,
   CONNECTION_CATALOG_PAGE_MAX_ITEMS,
@@ -105,9 +137,14 @@ const HOST_TURN_MESSAGE_INTERACTION_AND_CONTINUITY_OPERATION_SPECS = composeOper
   SESSION_CONTINUITY_OPERATION_SPECS,
 );
 
-export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+const HOST_AND_DOMAIN_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_TURN_MESSAGE_INTERACTION_AND_CONTINUITY_OPERATION_SPECS,
   RUNTIME_POLICY_OPERATION_SPECS,
+);
+
+export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
+  HOST_AND_DOMAIN_OPERATION_SPECS,
+  SKILL_CATALOG_OPERATION_SPECS,
 );
 
 export type OperationSpecMap = typeof HOST_OPERATION_SPECS;

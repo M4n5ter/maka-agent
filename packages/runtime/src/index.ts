@@ -1387,3 +1387,5 @@ export type {
   SkillSourceResolver,
   SkillDiscoveryEntry,
 } from './skills.js';
+export { BUNDLED_SKILL_CATALOG, getBundledSkillSource } from './bundled-skill-catalog.js';
+export type { BundledSkillSource } from './bundled-skill-catalog.js';

@@ -361,6 +361,11 @@ export class ExecutionFixture {
       [this.root, this.capability.rootId, '60000'],
       {
         stdio: ['ignore', 'ignore', stderr, 'ipc'],
+        env: {
+          ...process.env,
+          HOME: join(this.base, 'home'),
+          USERPROFILE: join(this.base, 'home'),
+        },
         ...(execArgv ? { execArgv: [...execArgv] } : {}),
       },
     );

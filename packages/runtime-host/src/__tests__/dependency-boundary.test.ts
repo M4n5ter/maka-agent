@@ -36,6 +36,8 @@ const allowedServerExternalImports = new Set([
   '@maka/storage/execution-stores',
   '@maka/storage/runtime-policy-stores',
   'node:async_hooks',
+  'node:fs',
+  'node:os',
 ]);
 const allowedExternalImports = {
   client: allowedHostExternalImports,
@@ -104,7 +106,7 @@ test('protocol and client stay within their subpaths and the root-authority boun
   assert.deepEqual(violations, []);
 });
 
-test('only the server subgraph can reach the M2 Runtime composition', async () => {
+test('only the server subgraph can reach serving Runtime dependencies', async () => {
   const violations: string[] = [];
   for (const path of await listTypeScriptFiles(sourceRoot)) {
     const localPath = relative(sourceRoot, path);

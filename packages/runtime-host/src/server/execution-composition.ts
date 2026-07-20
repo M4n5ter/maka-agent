@@ -25,6 +25,8 @@ import { RootTurnCoordinator } from './root-turn-coordinator.js';
 import { HostRuntimePolicyCoordinator } from './runtime-policy-coordinator.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
 import { SessionContinuityCoordinator } from './session-continuity-coordinator.js';
+import { HostSkillCatalogCoordinator } from './skill-catalog-coordinator.js';
+import { HostSkillCatalogFilesystem } from './skill-catalog-filesystem.js';
 
 export async function createExecutionRuntimeHostComposition(
   context: RuntimeHostCompositionContext,
@@ -32,6 +34,9 @@ export async function createExecutionRuntimeHostComposition(
   const stores = await openInteractiveExecutionStoresForWrite(context.owner.lease);
   const runtimePolicyStores = await openInteractiveRuntimePolicyStoresForWrite(context.owner.lease);
   const runtimePolicy = new HostRuntimePolicyCoordinator(runtimePolicyStores);
+  const skills = new HostSkillCatalogCoordinator(
+    new HostSkillCatalogFilesystem(context.owner.lease),
+  );
   const sessionAdmission = new SessionAdmissionGate();
   const rootAdmissionOwner = new RootAdmissionOwner();
   let messages: HostMessageCoordinator | undefined;
@@ -123,6 +128,7 @@ export async function createExecutionRuntimeHostComposition(
   coordinator = rootCoordinator;
   let runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']> | undefined;
   const beginRuntimeDrain = () => {
+    skills.beginDrain();
     messageCoordinator.beginDrain();
     interaction.beginDrain();
     runtimeDrain ??= manager.beginRuntimeDrain();
@@ -134,6 +140,7 @@ export async function createExecutionRuntimeHostComposition(
     if (failStopDisposition) return;
     const handoffFailures: unknown[] = [];
     try {
+      skills.beginDrain();
       const runtimeFailStop = manager.installInteractionFailStop(error);
       observe(runtimeFailStop.ownerIsolationDrain);
       observe(runtimeFailStop.reclaimDrain);
@@ -195,15 +202,18 @@ export async function createExecutionRuntimeHostComposition(
       interaction.handlers,
       continuity.handlers,
       runtimePolicy.handlers,
+      skills.handlers,
     ),
     continuity,
     beginDrain: () => {
+      skills.beginDrain();
       messageCoordinator.beginDrain();
       interaction.beginDrain();
       if (!failStopDisposition) beginRuntimeDrain();
     },
     recover: async () => {
       await rootCoordinator.prepareRecovery();
+      await skills.recover();
       await interaction.recoverPendingAfterHostRestart();
       await manager.recoverInterruptedSessionsStrict(stores);
       await rootCoordinator.recover();
@@ -219,6 +229,7 @@ export async function createExecutionRuntimeHostComposition(
         messageCoordinator,
         interaction,
         continuity,
+        skills,
         drain,
         () => failStopDisposition,
       );
@@ -232,6 +243,7 @@ async function closeComposition(
   messages: HostMessageCoordinator,
   interaction: HostInteractionAuthority,
   continuity: SessionContinuityCoordinator,
+  skills: HostSkillCatalogCoordinator,
   runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']>,
   getFailStop: () => RuntimeHostFailStopDisposition | undefined,
 ): Promise<RuntimeHostCompositionCloseResult> {
@@ -241,7 +253,14 @@ async function closeComposition(
     return existingFailStop;
   }
 
-  const normalClose = closeNormally(coordinator, messages, interaction, continuity, runtimeDrain);
+  const normalClose = closeNormally(
+    coordinator,
+    messages,
+    interaction,
+    continuity,
+    skills,
+    runtimeDrain,
+  );
   const observedNormal = normalClose.then(
     (result) => ({ kind: 'fulfilled' as const, result }),
     (error: unknown) => ({ kind: 'rejected' as const, error }),
@@ -268,6 +287,7 @@ async function closeNormally(
   messages: HostMessageCoordinator,
   interaction: HostInteractionAuthority,
   continuity: SessionContinuityCoordinator,
+  skills: HostSkillCatalogCoordinator,
   runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']>,
 ): Promise<{ readonly kind: 'clean' }> {
   const errors: unknown[] = [];
@@ -282,6 +302,7 @@ async function closeNormally(
     }
     await interaction.close().catch((error: unknown) => errors.push(error));
     await messages.close().catch((error: unknown) => errors.push(error));
+    await skills.close().catch((error: unknown) => errors.push(error));
   } finally {
     continuity.close();
   }

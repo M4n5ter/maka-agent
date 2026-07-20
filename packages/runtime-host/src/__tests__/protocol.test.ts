@@ -28,8 +28,8 @@ describe('Runtime Host bootstrap protocol', () => {
     assert.equal(negotiateProtocol({ min: 1, max: 1 }, { min: 2, max: 2 }), undefined);
   });
 
-  test('uses protocol v7 and Session continuity schema v3 without compatibility aliases', () => {
-    assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 7);
+  test('uses protocol v8 and Session continuity schema v3 without compatibility aliases', () => {
+    assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 8);
     assert.equal(SESSION_CONTINUITY_SCHEMA_VERSION, 3);
   });
 

@@ -24,8 +24,6 @@ import { RuntimeHostKernel } from '../server/index.js';
 import {
   combineDomainOperationHandlers,
   createUnavailableDomainOperationHandlers,
-  type MessageOperationHandlerMap,
-  type RuntimePolicyOperationHandlerMap,
   type TurnOperationHandlerMap,
 } from '../server/operation-dispatcher.js';
 import { SessionAdmissionGate } from '../server/session-admission-gate.js';
@@ -85,13 +83,11 @@ test('a connection accepted during recovery resolves ready handlers and continui
       );
       recoveryEntered.resolve();
       return {
-        handlers: combineDomainOperationHandlers(
-          createTurnHandlers(),
-          createUnavailableMessageHandlers(),
-          continuity.handlers,
-          createUnavailableInteractionHandlers(),
-          createUnavailableRuntimePolicyHandlers(),
-        ),
+        handlers: combineDomainOperationHandlers({
+          ...createUnavailableDomainOperationHandlers(),
+          ...createTurnHandlers(),
+          ...continuity.handlers,
+        }),
         continuity,
         async recover() {
           await releaseRecovery.promise;
@@ -471,13 +467,11 @@ async function withContinuityHost(
           )
         : createContinuity(context.hostEpoch, sessionId);
       return {
-        handlers: combineDomainOperationHandlers(
-          createTurnHandlers(),
-          createUnavailableMessageHandlers(),
-          continuity.handlers,
-          createUnavailableInteractionHandlers(),
-          createUnavailableRuntimePolicyHandlers(),
-        ),
+        handlers: combineDomainOperationHandlers({
+          ...createUnavailableDomainOperationHandlers(),
+          ...createTurnHandlers(),
+          ...continuity.handlers,
+        }),
         continuity,
         async recover() {},
         async close() {
@@ -498,39 +492,6 @@ async function withContinuityHost(
     });
     await rm(base, { recursive: true, force: true });
   }
-}
-
-function createUnavailableInteractionHandlers() {
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return {
-    'interaction.query': unavailable['interaction.query'],
-    'interaction.answer': unavailable['interaction.answer'],
-  };
-}
-
-function createUnavailableRuntimePolicyHandlers(): RuntimePolicyOperationHandlerMap {
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return {
-    'runtime.policy.query': unavailable['runtime.policy.query'],
-    'runtime.policy.mutate': unavailable['runtime.policy.mutate'],
-    'connection.catalog.query': unavailable['connection.catalog.query'],
-    'connection.catalog.create': unavailable['connection.catalog.create'],
-    'connection.catalog.update': unavailable['connection.catalog.update'],
-    'connection.catalog.remove': unavailable['connection.catalog.remove'],
-    'connection.catalog.set-default-target': unavailable['connection.catalog.set-default-target'],
-    'credential.vault.query': unavailable['credential.vault.query'],
-    'credential.vault.set': unavailable['credential.vault.set'],
-    'credential.vault.delete': unavailable['credential.vault.delete'],
-  };
-}
-
-function createUnavailableMessageHandlers(): MessageOperationHandlerMap {
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return {
-    'turn.message.submit': unavailable['turn.message.submit'],
-    'queue.retract': unavailable['queue.retract'],
-    'turn.interrupt': unavailable['turn.interrupt'],
-  };
 }
 
 function createContinuity(hostEpoch: string, sessionId: string): SessionContinuityCoordinator {

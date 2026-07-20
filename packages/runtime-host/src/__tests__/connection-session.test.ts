@@ -20,9 +20,7 @@ import { RuntimeHostConnectionSession } from '../server/connection-session.js';
 import {
   combineDomainOperationHandlers,
   createUnavailableDomainOperationHandlers,
-  type MessageOperationHandlerMap,
   type OperationHandlerMap,
-  type RuntimePolicyOperationHandlerMap,
   type TurnOperationHandlerMap,
 } from '../server/operation-dispatcher.js';
 import { SessionAdmissionGate } from '../server/session-admission-gate.js';
@@ -441,19 +439,10 @@ async function openAcceptedTransport(
 }
 
 function createHandlers(queryTurn: TurnQueryHandler): RuntimeHostComposition['handlers'] {
-  const turnHandlers = createTurnHandlers(queryTurn);
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return combineDomainOperationHandlers(
-    turnHandlers,
-    createUnavailableMessageHandlers(),
-    {
-      'subscription.open': unavailable['subscription.open'],
-      'subscription.close': unavailable['subscription.close'],
-      'interaction.query': unavailable['interaction.query'],
-      'interaction.answer': unavailable['interaction.answer'],
-    },
-    createUnavailableRuntimePolicyHandlers(),
-  );
+  return combineDomainOperationHandlers({
+    ...createUnavailableDomainOperationHandlers(),
+    ...createTurnHandlers(queryTurn),
+  });
 }
 
 function createTurnHandlers(queryTurn: TurnQueryHandler): TurnOperationHandlerMap {
@@ -475,7 +464,6 @@ function createConnectionHandlers(continuity: SessionContinuityCoordinator): Ope
     ok: true,
     result: runningSnapshot(input.sessionId, input.turnId),
   });
-  const unavailable = createUnavailableDomainOperationHandlers();
   return {
     'host.status': async () => ({
       ok: true,
@@ -487,41 +475,11 @@ function createConnectionHandlers(continuity: SessionContinuityCoordinator): Ope
         activeResidencies: 0,
       },
     }),
-    ...combineDomainOperationHandlers(
-      createTurnHandlers(queryTurn),
-      createUnavailableMessageHandlers(),
-      continuity.handlers,
-      {
-        'interaction.query': unavailable['interaction.query'],
-        'interaction.answer': unavailable['interaction.answer'],
-      },
-      createUnavailableRuntimePolicyHandlers(),
-    ),
-  };
-}
-
-function createUnavailableRuntimePolicyHandlers(): RuntimePolicyOperationHandlerMap {
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return {
-    'runtime.policy.query': unavailable['runtime.policy.query'],
-    'runtime.policy.mutate': unavailable['runtime.policy.mutate'],
-    'connection.catalog.query': unavailable['connection.catalog.query'],
-    'connection.catalog.create': unavailable['connection.catalog.create'],
-    'connection.catalog.update': unavailable['connection.catalog.update'],
-    'connection.catalog.remove': unavailable['connection.catalog.remove'],
-    'connection.catalog.set-default-target': unavailable['connection.catalog.set-default-target'],
-    'credential.vault.query': unavailable['credential.vault.query'],
-    'credential.vault.set': unavailable['credential.vault.set'],
-    'credential.vault.delete': unavailable['credential.vault.delete'],
-  };
-}
-
-function createUnavailableMessageHandlers(): MessageOperationHandlerMap {
-  const unavailable = createUnavailableDomainOperationHandlers();
-  return {
-    'turn.message.submit': unavailable['turn.message.submit'],
-    'queue.retract': unavailable['queue.retract'],
-    'turn.interrupt': unavailable['turn.interrupt'],
+    ...combineDomainOperationHandlers({
+      ...createUnavailableDomainOperationHandlers(),
+      ...createTurnHandlers(queryTurn),
+      ...continuity.handlers,
+    }),
   };
 }
 
