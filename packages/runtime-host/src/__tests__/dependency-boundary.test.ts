@@ -28,6 +28,7 @@ const allowedServerExternalImports = new Set([
   '@maka/core/automation',
   '@maka/core/artifacts',
   '@maka/core/backend-types',
+  '@maka/core/computer-use',
   '@maka/core/events',
   '@maka/core/expert-team',
   '@maka/core/explore-agent',
@@ -63,6 +64,7 @@ const allowedExternalImports = {
   protocol: new Set([
     '@maka/core/attachments',
     '@maka/core/artifacts',
+    '@maka/core/computer-use',
     '@maka/core/events',
     '@maka/core/interaction',
     '@maka/core/local-memory',
@@ -73,6 +75,14 @@ const allowedExternalImports = {
     'node:util',
   ]),
 } as const;
+const nativeComputerUseEntrypoint = 'native-provider/computer-use';
+const nativeComputerUseSourcePath = join(sourceRoot, 'native-provider', 'computer-use.ts');
+const allowedNativeComputerUseExternalImports = new Set([
+  '@maka/core/computer-use',
+  '@maka/core/redaction',
+  '@maka/runtime',
+  'node:crypto',
+]);
 
 async function dependencyScannerFixture(target: string): Promise<void> {
   await import(`node:url`);
@@ -130,24 +140,69 @@ test('protocol and client stay within their subpaths and the root-authority boun
   assert.deepEqual(violations, []);
 });
 
-test('only the server subgraph can reach serving Runtime dependencies', async () => {
+test('serving Runtime dependencies stay within server and explicit adapter boundaries', async () => {
   const violations: string[] = [];
   for (const path of await listTypeScriptFiles(sourceRoot)) {
     const localPath = relative(sourceRoot, path);
     const topLevelArea = localPath.split(sep)[0];
     if (topLevelArea === '__tests__') continue;
     const allowedImports =
-      topLevelArea === 'server' || localPath === 'candidate-main.ts'
-        ? allowedServerExternalImports
-        : topLevelArea === 'protocol'
-          ? allowedExternalImports.protocol
-          : allowedHostExternalImports;
+      path === nativeComputerUseSourcePath
+        ? allowedNativeComputerUseExternalImports
+        : topLevelArea === 'server' || localPath === 'candidate-main.ts'
+          ? allowedServerExternalImports
+          : topLevelArea === 'protocol'
+            ? allowedExternalImports.protocol
+            : allowedHostExternalImports;
     for (const specifier of moduleSpecifiers(path)) {
       if (isRelativeSpecifier(specifier)) {
         const target = sourcePathForSpecifier(path, specifier);
         if (!isInside(sourceRoot, target)) violations.push(`${path}: ${specifier}`);
         continue;
       }
+      if (!allowedImports.has(specifier)) violations.push(`${path}: ${specifier}`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});
+
+test('the public native Computer Use leaf stays within its exact adapter boundary', async () => {
+  const publicEntrypoints = await readPublicEntrypoints();
+  const entrypoint = publicEntrypoints.get(nativeComputerUseEntrypoint);
+  assert.ok(entrypoint, `missing public ${nativeComputerUseEntrypoint} entrypoint`);
+  assert.equal(entrypoint, nativeComputerUseSourcePath);
+  const violations: string[] = [];
+  for (const path of reachableModules(entrypoint, publicEntrypoints)) {
+    const localPath = relative(sourceRoot, path);
+    const topLevelArea = localPath.split(sep)[0];
+    if (localPath === 'candidate-main.ts' || topLevelArea === 'server') {
+      violations.push(`${nativeComputerUseEntrypoint} reaches ${localPath}`);
+    }
+    for (const specifier of moduleSpecifiers(path)) {
+      const target = sourcePathForLocalSpecifier(path, specifier, publicEntrypoints);
+      if (target) {
+        if (!isInside(sourceRoot, target)) {
+          violations.push(`${path}: ${specifier}`);
+          continue;
+        }
+        if (path === entrypoint) {
+          const targetArea = relative(sourceRoot, target).split(sep)[0];
+          if (targetArea !== 'client' && targetArea !== 'protocol') {
+            violations.push(`${path}: ${specifier}`);
+          }
+        }
+        continue;
+      }
+      if (isStorageWriterDependency(specifier)) {
+        violations.push(`${localPath}: ${specifier}`);
+        continue;
+      }
+      const allowedImports =
+        path === entrypoint
+          ? allowedNativeComputerUseExternalImports
+          : topLevelArea === 'protocol'
+            ? allowedExternalImports.protocol
+            : allowedHostExternalImports;
       if (!allowedImports.has(specifier)) violations.push(`${path}: ${specifier}`);
     }
   }
@@ -183,6 +238,7 @@ test('the public server entrypoint does not expose serving execution composition
   const forbidden = new Set([
     'server/execution-candidate.ts',
     'server/execution-composition.ts',
+    'server/native-computer-use-provider.ts',
     'server/root-turn-coordinator.ts',
     'server/runtime-resource-coordinator.ts',
   ]);
@@ -221,6 +277,13 @@ function isServingDependency(specifier: string): boolean {
     specifier === '@maka/runtime' ||
     (specifier !== '@maka/storage/root-authority' &&
       (specifier === '@maka/storage' || specifier.startsWith('@maka/storage/')))
+  );
+}
+
+function isStorageWriterDependency(specifier: string): boolean {
+  return (
+    specifier !== '@maka/storage/root-authority' &&
+    (specifier === '@maka/storage' || specifier.startsWith('@maka/storage/'))
   );
 }
 
@@ -344,7 +407,7 @@ async function readPublicEntrypoints(): Promise<Map<string, string>> {
   };
   assert.equal(manifest.name, packageName);
   const entrypoints = new Map<string, string>();
-  for (const area of ['protocol', 'client', 'server']) {
+  for (const area of ['protocol', 'client', 'server', nativeComputerUseEntrypoint]) {
     const target = manifest.exports?.[`./${area}`];
     if (typeof target !== 'string') throw new Error(`missing ${packageName}/${area} export`);
     assert.match(target, /^\.\/dist\/.+\.js$/, `invalid ${packageName}/${area} export target`);

@@ -72,7 +72,7 @@ describe('ToolRuntime durable boundary', () => {
     );
   });
 
-  it('commits T1 before implementation and T2 before publishing the result', async () => {
+  it('exposes the committed T1 operation to implementation before publishing the result', async () => {
     const order: string[] = [];
     const prepared: ToolPreparedCommit[] = [];
     const outcomes: ToolOutcomeCommit[] = [];
@@ -93,7 +93,9 @@ describe('ToolRuntime durable boundary', () => {
     );
 
     const result = await harness.execute(
-      tool(() => {
+      tool((_args, context) => {
+        assert.deepEqual(order, ['t1']);
+        assert.equal(context.operationId, prepared[0]?.operationId);
         order.push('impl');
         return { ok: true, text: 'done' };
       }),
@@ -111,6 +113,10 @@ describe('ToolRuntime durable boundary', () => {
     assert.equal(prepared[0]?.operationId, outcomes[0]?.operationId);
     assert.equal(prepared[0]?.runtimeEvent.refs?.operationId, prepared[0]?.operationId);
     assert.equal(prepared[0]?.dispatchRuntimeEvent.refs?.operationId, prepared[0]?.operationId);
+    assert.equal(
+      prepared[0]?.dispatchRuntimeEvent.actions?.toolDispatch?.operationId,
+      prepared[0]?.operationId,
+    );
     assert.equal(outcomes[0]?.runtimeEvent.refs?.operationId, prepared[0]?.operationId);
   });
 

@@ -7,6 +7,7 @@
   "exports": {
     "./protocol": "./dist/protocol/index.js",
     "./client": "./dist/client/index.js",
+    "./native-provider/computer-use": "./dist/native-provider/computer-use.js",
     "./server": "./dist/server/index.js"
   },
   "scripts": {

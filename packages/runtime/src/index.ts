@@ -247,7 +247,7 @@ export type {
   MakaTool as BuiltinMakaTool,
   MakaToolContext as BuiltinMakaToolContext,
 } from './builtin-tools.js';
-export { buildComputerUseTools, adaptToCuAction } from './computer-use-tools.js';
+export { buildComputerUseTools, adaptToCuAction, CuBackendError } from './computer-use-tools.js';
 export {
   convertOpenAIComputerAction,
   openAIComputerActionSchema,
@@ -290,6 +290,11 @@ export {
 export type { OpenAIResponsesTransportOptions } from './openai-responses-transport.js';
 export type {
   ComputerUseToolSet,
+  CuBackendAffinity,
+  CuBackendInvocation,
+  CuBackendInvocationAcquisition,
+  CuBackendInvocationContext,
+  CuBackendInvocationProvider,
   CuAppSummary,
   CuDispatchBackend,
   CuDispatchEvidence,

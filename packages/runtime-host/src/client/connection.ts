@@ -14,6 +14,10 @@ import {
   type HostIncompatible,
   type HostRegistration,
   type HostStatusResult,
+  type NativeProviderCancelFrame,
+  type NativeProviderReleaseFrame,
+  type NativeProviderSessionReleaseFrame,
+  type NativeProviderSubcallFrame,
   type OperationInput,
   type OperationKey,
   type OperationOutput,
@@ -30,6 +34,11 @@ import {
   validateProtocolRange,
 } from '../protocol/index.js';
 import { FramedTransport, RuntimeHostTransportError } from '../transport/framed-transport.js';
+import {
+  ClientNativeProviderAttachment,
+  NativeCapabilityProvider,
+  type NativeProviderRegistration,
+} from './native-provider.js';
 import {
   ClientSessionSubscription,
   RuntimeHostSubscriptionError,
@@ -57,10 +66,22 @@ export type RuntimeHostUnavailableReason =
   | 'epoch_mismatch';
 
 export type ConnectRuntimeHostResult =
-  | { kind: 'connected'; connection: RuntimeHostConnection; registration: HostRegistration }
-  | { kind: 'incompatible'; handshake: HostIncompatible; registration: HostRegistration }
+  | {
+      kind: 'connected';
+      connection: RuntimeHostConnection;
+      registration: HostRegistration;
+    }
+  | {
+      kind: 'incompatible';
+      handshake: HostIncompatible;
+      registration: HostRegistration;
+    }
   | { kind: 'draining'; registration: HostRegistration }
-  | { kind: 'unavailable'; reason: RuntimeHostUnavailableReason; registration?: HostRegistration };
+  | {
+      kind: 'unavailable';
+      reason: RuntimeHostUnavailableReason;
+      registration?: HostRegistration;
+    };
 
 type ConnectResolvedRuntimeHostResult =
   | ConnectRuntimeHostResult
@@ -102,12 +123,19 @@ export interface RuntimeHostConnection {
     input: SubscriptionOpenInput,
     timeoutMs?: number,
   ): Promise<RuntimeHostSessionSubscription>;
+  registerNativeProvider(
+    provider: NativeCapabilityProvider,
+    timeoutMs?: number,
+  ): Promise<NativeProviderRegistration>;
   close(): Promise<void>;
 }
 
 export type DirectRequestOperationKey = Exclude<
   OperationKey,
-  'subscription.open' | 'subscription.close'
+  | 'subscription.open'
+  | 'subscription.close'
+  | 'native.provider.register'
+  | 'native.provider.unregister'
 >;
 
 export class RuntimeHostOperationError extends Error {
@@ -138,6 +166,8 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
   readonly #pendingRequests = new Map<string, PendingRequest>();
   readonly #subscriptions = new Map<string, ClientSessionSubscription>();
   readonly #retiredSubscriptionIds = new Set<string>();
+  #nativeProviderAttachment: ClientNativeProviderAttachment | undefined;
+  #nativeProviderRegistrationReserved = false;
   #terminalError: Error | undefined;
 
   constructor(
@@ -242,6 +272,41 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
     });
   }
 
+  async registerNativeProvider(
+    provider: NativeCapabilityProvider,
+    timeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  ): Promise<NativeProviderRegistration> {
+    if (this.#terminalError) throw this.#terminalError;
+    if (this.#nativeProviderRegistrationReserved) {
+      throw new Error('Runtime Host connection already has a Native Provider registration');
+    }
+    this.#nativeProviderRegistrationReserved = true;
+    let attachment: ClientNativeProviderAttachment | undefined;
+    try {
+      attachment = await provider.attach({
+        hostEpoch: this.hostEpoch,
+        send: (frame) => this.#transport.write(frame),
+        fail: (error) => this.#fail(error),
+      });
+      if (this.#terminalError) throw this.#terminalError;
+      this.#nativeProviderAttachment = attachment;
+      return await this.#requestOperation(
+        'native.provider.register',
+        { capabilities: provider.capabilities },
+        timeoutMs,
+        (result) => this.#createNativeProviderRegistration(attachment!, result.registrationId),
+      );
+    } catch (error) {
+      if (attachment && this.#nativeProviderAttachment === attachment) {
+        this.#nativeProviderAttachment = undefined;
+      }
+      attachment?.detach();
+      await attachment?.drained;
+      this.#nativeProviderRegistrationReserved = false;
+      throw error;
+    }
+  }
+
   async close(): Promise<void> {
     this.#fail(
       new RuntimeHostTransportError('closed', 'Runtime Host connection was closed by the client'),
@@ -261,12 +326,116 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
             case 'subscription.closed':
               this.#acceptSubscriptionFrame(frame);
               continue;
+            case 'native.provider.subcall':
+              this.#acceptNativeProviderSubcall(frame);
+              continue;
+            case 'native.provider.cancel':
+              this.#acceptNativeProviderCancel(frame);
+              continue;
+            case 'native.provider.release':
+              this.#acceptNativeProviderRelease(frame);
+              continue;
+            case 'native.provider.session_release':
+              this.#acceptNativeProviderSessionRelease(frame);
+              continue;
             default:
               throw new Error('Runtime Host returned a handshake frame after acceptance');
           }
         }
         this.#acceptResponse(frame);
       }
+    } catch (error) {
+      this.#fail(asError(error));
+    }
+  }
+
+  #createNativeProviderRegistration(
+    attachment: ClientNativeProviderAttachment,
+    registrationId: string,
+  ): NativeProviderRegistration {
+    attachment.bindRegistration(registrationId);
+    let unregisterTask: Promise<void> | undefined;
+    return {
+      registrationId,
+      drained: attachment.drained,
+      unregister: (timeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS) => {
+        if (unregisterTask) return unregisterTask;
+        const task = this.#requestOperation(
+          'native.provider.unregister',
+          { registrationId },
+          timeoutMs,
+          (result) => {
+            if (result.registrationId !== registrationId) {
+              throw new Error('Runtime Host unregistered a different Native Provider');
+            }
+          },
+        ).then(async () => {
+          attachment.detach();
+          await attachment.drained;
+          if (attachment.failed) {
+            throw new Error('Native Provider attachment failed during unregister cleanup');
+          }
+          if (this.#nativeProviderAttachment === attachment) {
+            this.#nativeProviderAttachment = undefined;
+          }
+          this.#nativeProviderRegistrationReserved = false;
+        });
+        unregisterTask = task.catch((error: unknown) => {
+          unregisterTask = undefined;
+          throw asError(error);
+        });
+        return unregisterTask;
+      },
+    };
+  }
+
+  #acceptNativeProviderSubcall(frame: NativeProviderSubcallFrame): void {
+    const attachment = this.#nativeProviderAttachment;
+    if (!attachment?.canAccept(frame.capability)) {
+      this.#fail(new Error('Runtime Host returned an unmatched Native Provider subcall'));
+      return;
+    }
+    try {
+      attachment.acceptSubcall(frame);
+    } catch (error) {
+      this.#fail(asError(error));
+    }
+  }
+
+  #acceptNativeProviderCancel(frame: NativeProviderCancelFrame): void {
+    const attachment = this.#nativeProviderAttachment;
+    if (!attachment?.hasInvocation(frame.operationId)) {
+      this.#fail(new Error('Runtime Host cancelled an unmatched Native Provider subcall'));
+      return;
+    }
+    try {
+      attachment.acceptCancel(frame);
+    } catch (error) {
+      this.#fail(asError(error));
+    }
+  }
+
+  #acceptNativeProviderRelease(frame: NativeProviderReleaseFrame): void {
+    const attachment = this.#nativeProviderAttachment;
+    if (!attachment?.hasInvocation(frame.operationId)) {
+      this.#fail(new Error('Runtime Host released an unmatched Native Provider invocation'));
+      return;
+    }
+    try {
+      attachment.acceptRelease(frame);
+    } catch (error) {
+      this.#fail(asError(error));
+    }
+  }
+
+  #acceptNativeProviderSessionRelease(frame: NativeProviderSessionReleaseFrame): void {
+    const attachment = this.#nativeProviderAttachment;
+    if (!attachment) {
+      this.#fail(new Error('Runtime Host released a Session without a Native Provider attachment'));
+      return;
+    }
+    try {
+      attachment.acceptSessionRelease(frame);
     } catch (error) {
       this.#fail(asError(error));
     }
@@ -365,6 +534,8 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
   #fail(error: Error): void {
     if (this.#terminalError) return;
     this.#terminalError = error;
+    this.#nativeProviderAttachment?.detach();
+    this.#nativeProviderAttachment = undefined;
     for (const pending of this.#pendingRequests.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
@@ -399,7 +570,10 @@ export async function connectRuntimeHost(
     'handshakeTimeoutMs',
   );
   const clientInstanceId = requireClientInstanceId(input.clientInstanceId ?? randomUUID());
-  const capability = await resolveStorageRoot({ path: input.rootPath, kind: 'interactive' });
+  const capability = await resolveStorageRoot({
+    path: input.rootPath,
+    kind: 'interactive',
+  });
   const { controlDirectory } = await prepareStorageRootControlDirectory(capability);
   const result = await connectResolvedRuntimeHost({
     ...input,

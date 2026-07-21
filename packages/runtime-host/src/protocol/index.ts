@@ -9,6 +9,14 @@ import {
   type ResponseFrame,
 } from './operations.js';
 import {
+  decodeNativeProviderClientFrame,
+  decodeNativeProviderHostFrame,
+  isNativeProviderClientFrameKind,
+  isNativeProviderHostFrameKind,
+  type NativeProviderClientFrame,
+  type NativeProviderHostFrame,
+} from './native-provider.js';
+import {
   decodeSubscriptionFrame,
   isSubscriptionFrameKind,
   type SubscriptionFrame,
@@ -19,6 +27,7 @@ export * from './automation.js';
 export * from './goal.js';
 export * from './interaction.js';
 export * from './message.js';
+export * from './native-provider.js';
 export * from './operations.js';
 export * from './runtime-resource.js';
 export * from './session-continuity.js';
@@ -66,8 +75,12 @@ export interface HostDraining {
 
 export type HostHandshakeResult = HostAccepted | HostIncompatible | HostDraining;
 
-export type ClientFrame = ClientHello | RequestFrame;
-export type HostFrame = HostHandshakeResult | ResponseFrame | SubscriptionFrame;
+export type ClientFrame = ClientHello | RequestFrame | NativeProviderClientFrame;
+export type HostFrame =
+  | HostHandshakeResult
+  | ResponseFrame
+  | SubscriptionFrame
+  | NativeProviderHostFrame;
 
 export interface HostRegistration {
   kind: 'maka-runtime-host';
@@ -118,6 +131,7 @@ export function decodeClientFrame(value: unknown): ClientFrame {
       protocolMax,
     } satisfies ClientHello;
   }
+  if (isNativeProviderClientFrameKind(frame.kind)) return decodeNativeProviderClientFrame(frame);
   return decodeRequestFrame(frame);
 }
 
@@ -148,6 +162,7 @@ export function decodeHostFrame(value: unknown): HostFrame {
   if (frame.kind === 'draining') {
     return { kind: 'draining', hostEpoch: requireId(frame.hostEpoch, 'hostEpoch') };
   }
+  if (isNativeProviderHostFrameKind(frame.kind)) return decodeNativeProviderHostFrame(frame);
   if (isSubscriptionFrameKind(frame.kind)) return decodeSubscriptionFrame(frame);
   return decodeResponseFrame(frame);
 }

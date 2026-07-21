@@ -16,6 +16,10 @@ import type {
   SessionContinuityConnection,
   SessionContinuityService,
 } from './session-continuity-coordinator.js';
+import type {
+  HostNativeProviderService,
+  NativeProviderConnectionAttachment,
+} from './native-provider-coordinator.js';
 
 const MAX_IN_FLIGHT_REQUESTS = 64;
 
@@ -32,6 +36,7 @@ export interface RuntimeHostConnectionSessionOptions {
   connection: AcceptedConnectionContext;
   resolveHandlers(): OperationHandlerMap;
   resolveContinuity(): SessionContinuityService | undefined;
+  resolveNativeProvider?(): HostNativeProviderService | undefined;
   beginOperation(frame: RequestFrame): Promise<ConnectionOperationLease | HostOperationErrorCode>;
   onTeardown(): void;
   onConnectionSettled?(): Promise<void>;
@@ -43,6 +48,8 @@ export class RuntimeHostConnectionSession {
   readonly #requests = new Map<string, Promise<void>>();
   #continuityService: SessionContinuityService | undefined;
   #continuity: SessionContinuityConnection | undefined;
+  #nativeProviderService: HostNativeProviderService | undefined;
+  #nativeProvider: NativeProviderConnectionAttachment | undefined;
   #closed = false;
   #connectionSettled = false;
 
@@ -76,7 +83,18 @@ export class RuntimeHostConnectionSession {
   async #pumpInbound(): Promise<void> {
     while (!this.#closed) {
       const frame = decodeClientFrame(await this.#options.transport.read(0));
-      if ('kind' in frame) throw new Error('Unexpected handshake frame after acceptance');
+      if ('kind' in frame) {
+        if (frame.kind === 'hello') {
+          throw new Error('Unexpected handshake frame after acceptance');
+        }
+        const attachment = this.#nativeProvider;
+        if (!attachment) {
+          this.#teardown();
+          return;
+        }
+        attachment.accept(frame);
+        continue;
+      }
       if (this.#requests.has(frame.requestId) || this.#requests.size >= MAX_IN_FLIGHT_REQUESTS) {
         this.#teardown();
         return;
@@ -112,6 +130,12 @@ export class RuntimeHostConnectionSession {
 
     try {
       if (this.#closed) return;
+      if (
+        frame.operation === 'native.provider.register' ||
+        frame.operation === 'native.provider.unregister'
+      ) {
+        this.#ensureNativeProvider();
+      }
       const continuity = frame.operation.startsWith('subscription.')
         ? this.#ensureContinuity()
         : undefined;
@@ -166,9 +190,29 @@ export class RuntimeHostConnectionSession {
     return this.#continuity;
   }
 
+  #ensureNativeProvider(): NativeProviderConnectionAttachment | undefined {
+    if (this.#closed) {
+      throw new Error('Closed Runtime Host connection cannot attach a Native Provider');
+    }
+    const service = this.#options.resolveNativeProvider?.();
+    if (!service) return;
+    if (this.#nativeProviderService && this.#nativeProviderService !== service) {
+      throw new Error('Runtime Host Native Provider service changed within one connection');
+    }
+    if (!this.#nativeProvider) {
+      this.#nativeProviderService = service;
+      this.#nativeProvider = service.attachConnection(this.#options.connection.connectionId, {
+        enqueue: (frame) => this.#writer.enqueue(frame),
+        close: () => this.#teardown(),
+      });
+    }
+    return this.#nativeProvider;
+  }
+
   #teardown(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#nativeProvider?.close();
     this.#continuity?.close();
     this.#writer.close();
     this.#options.transport.destroy();

@@ -187,6 +187,7 @@ export class RootTurnCoordinator {
     private readonly interaction: HostInteractionAuthority,
     private readonly messages: HostMessageCoordinator,
     private readonly goalTurns: HostGoalTurnBoundary,
+    private readonly releaseSessionState: (sessionId: string) => void | Promise<void>,
     private readonly hooks: RootTurnCoordinatorHooks = {},
   ) {
     this.stores = authenticateExecutionStoresWriter(stores, 'interactive');
@@ -1265,6 +1266,8 @@ export class RootTurnCoordinator {
       this.#assertTurnUsable(active.ownership);
       const identity = { sessionId, turnId: active.turnId, runId: active.runId };
       await this.interaction.assertRunClosedAndNoPending(identity, lease);
+      this.#assertTurnUsable(active.ownership);
+      await this.releaseSessionState(sessionId);
       this.#assertTurnUsable(active.ownership);
       await this.continuity.publishTerminalProjection(
         sessionId,

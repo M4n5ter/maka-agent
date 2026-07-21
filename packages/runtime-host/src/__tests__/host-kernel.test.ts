@@ -44,7 +44,9 @@ import {
   type RuntimeHostCandidateOptions,
   type RuntimeHostCandidateResult,
 } from '../server/index.js';
+import { HostNativeProviderCoordinator } from '../server/native-provider-coordinator.js';
 import { createExecutionRuntimeHostComposition } from '../server/execution-composition.js';
+import { SessionContinuityCoordinator } from '../server/session-continuity-coordinator.js';
 import {
   createUnavailableDomainOperationHandlers,
   type OperationHandlerMap,
@@ -1309,6 +1311,145 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
+  test('releases ownership after a Native Provider sink close failure', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = paths.resources.trackCloseable(
+        await tryAcquireInteractiveRootOwner(capability),
+      );
+      assert.ok(owner);
+      if (!owner) return;
+
+      const sinkCloseFailure = new Error('controlled Native Provider sink close failure');
+      const host = paths.resources.trackCloseable(
+        await RuntimeHostKernel.start({
+          owner,
+          idleGraceMs: 10_000,
+          compositionFactory: async (context) => {
+            const nativeProvider = new HostNativeProviderCoordinator(
+              context.hostEpoch,
+              context.acquireResidency,
+            );
+            nativeProvider.attachConnection('throwing-sink', {
+              enqueue: () => ({ flushed: Promise.resolve() }),
+              close: () => {
+                throw sinkCloseFailure;
+              },
+            });
+            return {
+              handlers: createUnavailableDomainOperationHandlers(),
+              nativeProvider,
+              recover: async () => undefined,
+              close: async () => ({ kind: 'clean' }),
+            };
+          },
+        }),
+      );
+      const endpoint = host.endpoint;
+      const preservesSinkFailure = (error: unknown) =>
+        error instanceof AggregateError && error.errors.includes(sinkCloseFailure);
+
+      await Promise.all([
+        assert.rejects(() => host.close(), preservesSinkFailure),
+        assert.rejects(() => host.closed, preservesSinkFailure),
+      ]);
+      assert.equal(owner.closed, true);
+      await assertPathMissing(endpoint);
+      assert.equal(await readHostRegistration(owner.controlDirectory), undefined);
+
+      const successor = await retryOwner(capability, paths);
+      assert.ok(successor);
+      await successor?.close();
+    });
+  });
+
+  test('preserves fail-stop owner isolation when Native Provider close also fails', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = paths.resources.trackCloseable(
+        await tryAcquireInteractiveRootOwner(capability),
+      );
+      assert.ok(owner);
+      if (!owner) return;
+
+      const barrier = deferred<void>();
+      const barrierWaitEntered = deferred<void>();
+      const barrierCatch = barrier.promise.catch.bind(barrier.promise);
+      Object.defineProperty(barrier.promise, 'catch', {
+        value: (onRejected: (reason: unknown) => unknown) => {
+          barrierWaitEntered.resolve();
+          return barrierCatch(onRejected);
+        },
+      });
+      const compositionFailure = new Error('controlled composition fail-stop');
+      const sinkCloseFailure = new Error('controlled Native Provider sink close failure');
+      let reclaimed = false;
+      const host = paths.resources.trackCloseable(
+        await RuntimeHostKernel.start({
+          owner,
+          idleGraceMs: 10_000,
+          compositionFactory: async (context) => {
+            const nativeProvider = new HostNativeProviderCoordinator(
+              context.hostEpoch,
+              context.acquireResidency,
+            );
+            nativeProvider.attachConnection('throwing-fail-stop-sink', {
+              enqueue: () => ({ flushed: Promise.resolve() }),
+              close: () => {
+                throw sinkCloseFailure;
+              },
+            });
+            return {
+              handlers: createUnavailableDomainOperationHandlers(),
+              nativeProvider,
+              recover: async () => undefined,
+              close: async () => ({
+                kind: 'fail_stop',
+                cause: compositionFailure,
+                ownerIsolationBarrier: barrier.promise,
+                reclaimAfterOwnerIsolation: () => {
+                  reclaimed = true;
+                },
+              }),
+            };
+          },
+        }),
+      );
+      const closeOutcome = host.close().then(
+        () => ({ status: 'fulfilled' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      );
+
+      try {
+        const firstSettlement = await Promise.race([
+          barrierWaitEntered.promise.then(() => 'barrier' as const),
+          closeOutcome.then(() => 'host' as const),
+        ]);
+        assert.equal(firstSettlement, 'barrier');
+        assert.equal(owner.closed, false);
+        assert.equal(reclaimed, false);
+        assert.equal(await tryAcquireInteractiveRootOwner(capability), undefined);
+      } finally {
+        barrier.resolve();
+      }
+
+      const outcome = await closeOutcome;
+      assert.equal(outcome.status, 'rejected');
+      if (outcome.status !== 'rejected') return;
+      assert.ok(outcome.error instanceof AggregateError);
+      assert.ok(outcome.error.errors.includes(compositionFailure));
+      assert.ok(outcome.error.errors.includes(sinkCloseFailure));
+      assert.equal(owner.closed, true);
+      assert.equal(reclaimed, true);
+
+      const successor = paths.resources.trackCloseable(
+        await tryAcquireInteractiveRootOwner(capability),
+      );
+      assert.ok(successor);
+      await successor?.close();
+    });
+  });
+
   test('post-commit canonical refresh failure fail-stops the Host and isolates its Store lease', {
     timeout: 30_000,
   }, async () => {
@@ -1454,6 +1595,149 @@ describe('non-serving Runtime Host kernel', () => {
         assert.deepEqual(durable.outcome.outcome.answers, answer.answers);
       }
       await successor.close();
+    });
+  });
+
+  test('holds terminal publication and follow-up admission at Session state release', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = paths.resources.trackCloseable(
+        await tryAcquireInteractiveRootOwner(capability),
+      );
+      assert.ok(owner);
+      if (!owner) return;
+
+      const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+      const session = await stores.sessionStore.create({
+        cwd: paths.root,
+        backend: 'fake',
+        llmConnectionSlug: 'fake',
+        model: 'fake-model',
+        permissionMode: 'ask',
+      });
+      const releaseEntered = deferred<string>();
+      const releaseGate = deferred<void>();
+      let terminalPublished = false;
+      const host = paths.resources.trackCloseable(
+        await RuntimeHostKernel.start({
+          owner,
+          idleGraceMs: 10_000,
+          compositionFactory: async (context) => {
+            const composition = await createExecutionRuntimeHostComposition(context);
+            const nativeProvider = composition.nativeProvider;
+            assert.ok(nativeProvider);
+            nativeProvider.releaseSession = async (sessionId) => {
+              releaseEntered.resolve(sessionId);
+              await releaseGate.promise;
+            };
+            const continuity = composition.continuity;
+            assert.ok(continuity instanceof SessionContinuityCoordinator);
+            const publishTerminalProjection = continuity.publishTerminalProjection.bind(continuity);
+            continuity.publishTerminalProjection = async (...args) => {
+              terminalPublished = true;
+              await publishTerminalProjection(...args);
+            };
+            return composition;
+          },
+        }),
+      );
+      const connected = await connectRuntimeHost({
+        rootPath: paths.root,
+        surface: 'tui',
+        protocol: CURRENT_PROTOCOL,
+      });
+      assert.equal(connected.kind, 'connected');
+      if (connected.kind !== 'connected') return;
+      const subscription = await connected.connection.openSessionSubscription({
+        sessionId: session.id,
+      });
+      const iterator = subscription[Symbol.asyncIterator]();
+
+      try {
+        const turnId = 'session-release-terminal-turn';
+        const started = await connected.connection.startTurn({
+          sessionId: session.id,
+          turnId,
+          content: { text: FAKE_ASK_USER_QUESTION_PROMPT },
+        });
+        let pending = subscription.snapshot.interactions.pending.find(
+          (interaction) => interaction.turnId === turnId,
+        );
+        while (!pending) {
+          const next = await withTimeout(
+            iterator.next(),
+            5_000,
+            'root Turn did not publish its pending Interaction',
+          );
+          if (next.done) throw new Error('Session subscription closed before Interaction');
+          if (next.value.kind !== 'subscription.session_projection') continue;
+          pending = next.value.snapshot.interactions.pending.find(
+            (interaction) => interaction.turnId === turnId,
+          );
+        }
+        assert.equal(pending.runId, started.runId);
+
+        const queued = await connected.connection.request('turn.message.submit', {
+          originHostEpoch: host.hostEpoch,
+          sessionId: session.id,
+          messageId: 'session-release-follow-up',
+          content: { text: 'start only after Session state release' },
+          placement: 'next_turn',
+        });
+        assert.equal(queued.disposition, 'followup');
+        await connected.connection.request('interaction.answer', {
+          interactionId: pending.interactionId,
+          answer: { kind: 'question', answers: ['邀请制', '本周', '是'] },
+        });
+
+        assert.equal(
+          await withTimeout(
+            releaseEntered.promise,
+            5_000,
+            'root Turn did not enter Session state release',
+          ),
+          session.id,
+        );
+        assert.equal(terminalPublished, false);
+        const heldAdmissions = await stores.agentRunStore.listRootTurnAdmissionsForRecovery(
+          session.id,
+        );
+        assert.deepEqual(
+          heldAdmissions.map((admission) => admission.turnId),
+          [turnId],
+        );
+
+        const terminal = connected.connection.queryTurn({ sessionId: session.id, turnId });
+        releaseGate.resolve();
+        assert.equal((await terminal).status, 'completed');
+        assert.equal(terminalPublished, true);
+        const releasedAdmissions = await stores.agentRunStore.listRootTurnAdmissionsForRecovery(
+          session.id,
+        );
+        assert.equal(releasedAdmissions.length, 2);
+        const followupAdmission = releasedAdmissions[1];
+        assert.equal(followupAdmission?.previousRootTurnId, turnId);
+        assert.ok(followupAdmission);
+        const followup = await connected.connection.queryTurn({
+          sessionId: session.id,
+          turnId: followupAdmission.turnId,
+        });
+        if (
+          followup.status !== 'completed' &&
+          followup.status !== 'failed' &&
+          followup.status !== 'cancelled'
+        ) {
+          await connected.connection.stopTurn({
+            sessionId: session.id,
+            turnId: followup.turnId,
+            runId: followup.runId,
+          });
+        }
+      } finally {
+        releaseGate.resolve();
+        await Promise.allSettled([subscription.close(), connected.connection.close()]);
+        await host.close();
+      }
     });
   });
 

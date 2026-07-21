@@ -21,6 +21,7 @@
     "./automation": "./dist/automation.js",
     "./shell-run": "./dist/shell-run.js",
     "./browser": "./dist/browser.js",
+    "./computer-use": "./dist/computer-use.js",
     "./session-event-health": "./dist/session-event-health.js",
     "./permission": "./dist/permission.js",
     "./permission-profile": "./dist/permission-profile.js",

@@ -168,6 +168,11 @@ export interface MakaToolContext {
   sessionId: string;
   runId?: string;
   turnId: string;
+  /**
+   * Durable Runtime Tool operation identity. Present only after T1 commits and
+   * the real implementation is entered; it is not a separate identity.
+   */
+  readonly operationId?: string;
   /** Session working directory. */
   cwd: string;
   permissionMode?: PermissionMode;
@@ -1418,6 +1423,7 @@ export class ToolRuntime {
           sessionId: this.input.sessionId,
           turnId,
           ...(runId ? { runId } : {}),
+          ...(durableAttempt ? { operationId: durableAttempt.operationId } : {}),
           cwd: this.input.header.cwd,
           permissionMode: this.input.header.permissionMode,
           toolCallId: toolUseId,

@@ -5,6 +5,7 @@ import { filterModelVisibleTaskLedgerTasks } from '@maka/core/task-ledger';
 import {
   BackendRegistry,
   buildBuiltinTools,
+  buildComputerUseTools,
   createBuiltinSandboxManager,
   createFilesystemWorkerLaunchSpecProvider,
   createSandboxDiagnosticsProvider,
@@ -41,6 +42,8 @@ import { HostGoalCoordinator } from './goal-coordinator.js';
 import { HostInteractionAuthority } from './interaction-coordinator.js';
 import { HostMessageCoordinator, type HostMessageRootPort } from './message-coordinator.js';
 import { HostMemoryCoordinator } from './memory-coordinator.js';
+import { createHostNativeComputerUseInvocationProvider } from './native-computer-use-provider.js';
+import { HostNativeProviderCoordinator } from './native-provider-coordinator.js';
 import { combineDomainOperationHandlers } from './operation-dispatcher.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
 import {
@@ -102,6 +105,10 @@ export async function createExecutionRuntimeHostComposition(
     now: Date.now,
     acquireResidency: context.acquireResidency,
   });
+  const nativeProvider = new HostNativeProviderCoordinator(
+    context.hostEpoch,
+    context.acquireResidency,
+  );
   const sandboxManager = createBuiltinSandboxManager();
   const filesystemWorkerLaunchSpecProvider =
     process.platform === 'darwin'
@@ -129,21 +136,27 @@ export async function createExecutionRuntimeHostComposition(
       ? { getFilesystemWorkerLaunchSpec: filesystemWorkerLaunchSpecProvider }
       : {}),
   });
-  const runtimeTools = buildBuiltinTools({
-    shellRuns: resources,
-    runtimeResources: resources,
-    backgroundTasks: resources,
-    ptyControls: resources,
-    snapshotImage: createReadImageSnapshotter(artifactStore),
-    ...(sandboxManager ? { sandboxManager } : {}),
-    ...(filesystemWorker
-      ? {
-          filesystemWorker,
-          enableBashAdditionalPermissions: true,
-          enableFileToolAdditionalPermissions: true,
-        }
-      : {}),
+  const computerUseTools = buildComputerUseTools({
+    invocationProvider: createHostNativeComputerUseInvocationProvider(nativeProvider),
   });
+  const runtimeTools = [
+    ...buildBuiltinTools({
+      shellRuns: resources,
+      runtimeResources: resources,
+      backgroundTasks: resources,
+      ptyControls: resources,
+      snapshotImage: createReadImageSnapshotter(artifactStore),
+      ...(sandboxManager ? { sandboxManager } : {}),
+      ...(filesystemWorker
+        ? {
+            filesystemWorker,
+            enableBashAdditionalPermissions: true,
+            enableFileToolAdditionalPermissions: true,
+          }
+        : {}),
+    }),
+    ...computerUseTools,
+  ];
   const rootAdmissionOwner = new RootAdmissionOwner();
   let messages: HostMessageCoordinator | undefined;
   const canonicalProjection = createCanonicalSessionProjectionReader(
@@ -210,7 +223,10 @@ export async function createExecutionRuntimeHostComposition(
   const runtimeMessageAuthority = createFailStopMessageAuthority(messageCoordinator, (error) =>
     failStopHandoff(error),
   );
-  const permissionEngine = new PermissionEngine({ newId: randomUUID, now: Date.now });
+  const permissionEngine = new PermissionEngine({
+    newId: randomUUID,
+    now: Date.now,
+  });
   const backends = new BackendRegistry();
   backends.register('fake', (backendContext) => new FakeBackend(backendContext));
   backends.register('ai-sdk', (backendContext) =>
@@ -256,6 +272,10 @@ export async function createExecutionRuntimeHostComposition(
     interaction,
     messageCoordinator,
     goalTurns,
+    async (sessionId) => {
+      computerUseTools.clearSession(sessionId);
+      await nativeProvider.releaseSession(sessionId);
+    },
     options.rootTurnHooks,
   );
   coordinator = rootCoordinator;
@@ -476,8 +496,10 @@ export async function createExecutionRuntimeHostComposition(
       memory.handlers,
       usagePricing.handlers,
       resources.handlers,
+      nativeProvider.handlers,
     ),
     continuity,
+    nativeProvider,
     onConnectionSettled: (connectionId) => resources.releaseConnection(connectionId),
     beginDrain: () => {
       goalEvaluator.beginDrain();
@@ -550,13 +572,19 @@ export function createHostFilesystemWorkerLaunchSpecProvider(
   createProvider: FilesystemWorkerProviderFactory = createFilesystemWorkerLaunchSpecProvider,
 ): FilesystemWorkerLaunchSpecProvider {
   if (host.runtime === 'node') {
-    return createProvider({ runtime: 'node', resourceLocation: { kind: 'runtime' } });
+    return createProvider({
+      runtime: 'node',
+      resourceLocation: { kind: 'runtime' },
+    });
   }
 
   const packagedProvider = createProvider({
     runtime: 'electron',
     executable: host.executable,
-    resourceLocation: { kind: 'desktop-packaged', resourcesPath: host.resourcesPath },
+    resourceLocation: {
+      kind: 'desktop-packaged',
+      resourcesPath: host.resourcesPath,
+    },
   });
   let runtimeProvider: FilesystemWorkerLaunchSpecProvider | undefined;
   let resolution: ReturnType<FilesystemWorkerLaunchSpecProvider> | undefined;

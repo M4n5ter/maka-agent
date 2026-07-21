@@ -32,6 +32,7 @@ import {
   type OperationHandlerMap,
 } from './operation-dispatcher.js';
 import type { SessionContinuityService } from './session-continuity-coordinator.js';
+import type { HostNativeProviderService } from './native-provider-coordinator.js';
 
 const DEFAULT_IDLE_GRACE_MS = 30_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -88,6 +89,7 @@ export interface RuntimeHostCompositionContext {
 export interface RuntimeHostComposition {
   readonly handlers: AllDomainOperationHandlerMap;
   readonly continuity?: SessionContinuityService;
+  readonly nativeProvider?: HostNativeProviderService;
   onConnectionSettled?(connectionId: string): Promise<void>;
   /** Synchronously closes domain admission without residency or I/O. */
   beginDrain?(): void;
@@ -358,6 +360,7 @@ export class RuntimeHostKernel {
         },
         resolveHandlers: () => this.#operationHandlers,
         resolveContinuity: () => this.#composition?.continuity,
+        resolveNativeProvider: () => this.#composition?.nativeProvider,
         beginOperation: (request) => this.#beginOperation(request),
         onTeardown: releaseConnection,
         onConnectionSettled: () => connectionSettlement!.notify(),
@@ -639,17 +642,25 @@ export class RuntimeHostKernel {
     const accepted = [...this.#acceptedTransports];
     const handshaking = [...this.#handshakingTransports];
     const operationDrain = this.#waitForOperations();
-    const [operationsDrained] = await Promise.all([
+    const nativeProvider = this.#composition?.nativeProvider;
+    const nativeProviderDrain = nativeProvider
+      ? invokeAsync(() => nativeProvider.close())
+      : Promise.resolve();
+    const nativeProviderDrainSettled = nativeProviderDrain.catch((error: unknown) =>
+      pushUniqueError(errors, error),
+    );
+    const [operationsDrained, nativeProviderDrained] = await Promise.all([
       waitForBoundedCompletion(operationDrain, SHUTDOWN_OPERATION_GRACE_MS),
+      waitForBoundedCompletion(nativeProviderDrainSettled, SHUTDOWN_OPERATION_GRACE_MS),
       waitForTransportClose(handshaking, SHUTDOWN_HANDSHAKE_GRACE_MS),
     ]);
     if (this.#forcedCleanupTask) return this.#forcedCleanupTask;
-    if (!operationsDrained) {
+    if (!operationsDrained || !nativeProviderDrained) {
       destroyTransports(accepted, errors);
     }
     destroyTransports(handshaking, errors);
     try {
-      await this.#raceFailStop(operationDrain);
+      await this.#raceFailStop(Promise.all([operationDrain, nativeProviderDrainSettled]));
     } catch (error) {
       if (this.#forcedCleanupTask) return this.#forcedCleanupTask;
       throw error;
@@ -839,10 +850,21 @@ export class RuntimeHostKernel {
   #beginCompositionDrain(): void {
     if (!this.#composition || this.#compositionDrainStarted) return;
     this.#compositionDrainStarted = true;
+    const errors: unknown[] = [];
+    try {
+      this.#composition.nativeProvider?.beginDrain();
+    } catch (error) {
+      errors.push(error);
+    }
     try {
       this.#composition.beginDrain?.();
     } catch (error) {
-      this.#compositionDrainFailure = { error };
+      errors.push(error);
+    }
+    if (errors.length !== 0) {
+      this.#compositionDrainFailure = {
+        error: aggregateFailure(errors, 'Runtime Host composition drain failed'),
+      };
     }
   }
 
@@ -906,11 +928,7 @@ export class RuntimeHostKernel {
   #startCompositionClose(): Promise<RuntimeHostCompositionCloseResult> | undefined {
     if (!this.#composition) return;
     if (!this.#compositionCloseTask) {
-      try {
-        this.#compositionCloseTask = this.#composition.close();
-      } catch (error) {
-        this.#compositionCloseTask = Promise.reject(error);
-      }
+      this.#compositionCloseTask = closeComposition(this.#composition);
       observePromise(this.#compositionCloseTask);
     }
     return this.#compositionCloseTask;
@@ -987,6 +1005,52 @@ export class RuntimeHostKernel {
     if (this.#closedSettled) return;
     this.#closedSettled = true;
     this.#rejectClosed(error);
+  }
+}
+
+async function closeComposition(
+  composition: RuntimeHostComposition,
+): Promise<RuntimeHostCompositionCloseResult> {
+  const compositionClose = invokeAsync(() => composition.close());
+  const nativeProvider = composition.nativeProvider;
+  const nativeProviderClose = nativeProvider
+    ? invokeAsync(() => nativeProvider.close())
+    : Promise.resolve();
+  const [compositionResult, nativeProviderResult] = await Promise.allSettled([
+    compositionClose,
+    nativeProviderClose,
+  ]);
+  if (
+    compositionResult.status === 'fulfilled' &&
+    compositionResult.value.kind === 'fail_stop' &&
+    nativeProviderResult.status === 'rejected'
+  ) {
+    const disposition = compositionResult.value;
+    return {
+      kind: 'fail_stop',
+      cause: aggregateFailure(
+        [disposition.cause, nativeProviderResult.reason],
+        'Runtime Host fail-stop composition close failed',
+      ),
+      ownerIsolationBarrier: disposition.ownerIsolationBarrier,
+      reclaimAfterOwnerIsolation: disposition.reclaimAfterOwnerIsolation,
+    };
+  }
+  const errors: unknown[] = [];
+  if (compositionResult.status === 'rejected') errors.push(compositionResult.reason);
+  if (nativeProviderResult.status === 'rejected') errors.push(nativeProviderResult.reason);
+  if (errors.length !== 0) {
+    throw aggregateFailure(errors, 'Runtime Host composition close failed');
+  }
+  if (compositionResult.status !== 'fulfilled') throw compositionResult.reason;
+  return compositionResult.value;
+}
+
+function invokeAsync<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return operation();
+  } catch (error) {
+    return Promise.reject(error);
   }
 }
 

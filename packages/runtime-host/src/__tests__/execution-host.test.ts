@@ -14,6 +14,10 @@ import {
   type RuntimeHostSessionSubscription,
 } from '../client/index.js';
 import {
+  createComputerUseNativeProvider,
+  type ComputerUseNativeProviderBackend,
+} from '../native-provider/computer-use.js';
+import {
   type ConnectionCatalogQueryResult,
   type InteractionAnswer,
   type InteractionPendingSnapshot,
@@ -1567,6 +1571,227 @@ test('runs a real Host ai-sdk Tool loop across Clients and refreshes committed p
     });
   } finally {
     releaseFirstResponse?.();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test('advances terminal projection and follow-up after real Native Provider Session release ack', async () => {
+  const modelId = 'gpt-4o-mini-native-release';
+  const connectionSlug = 'local-native-release';
+  const apiKey = `native-release-key-${randomUUID()}`;
+  const requests: Record<string, unknown>[] = [];
+  let releaseCleanup!: () => void;
+  const cleanupGate = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
+  let markCleanupEntered!: () => void;
+  const cleanupEntered = new Promise<void>((resolve) => {
+    markCleanupEntered = resolve;
+  });
+  let markFollowupRequestReceived!: () => void;
+  const followupRequestReceived = new Promise<void>((resolve) => {
+    markFollowupRequestReceived = resolve;
+  });
+  const server = createServer((request, response) => {
+    void (async () => {
+      let body = '';
+      request.setEncoding('utf8');
+      for await (const chunk of request) body += chunk;
+      requests.push(JSON.parse(body) as Record<string, unknown>);
+      const requestNumber = requests.length;
+      if (requestNumber === 3) markFollowupRequestReceived();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const delta =
+        requestNumber === 1
+          ? {
+              role: 'assistant',
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call:native.list_apps',
+                  type: 'function',
+                  function: {
+                    name: 'maka_computer',
+                    arguments: JSON.stringify({ action: 'list_apps' }),
+                  },
+                },
+              ],
+            }
+          : {
+              role: 'assistant',
+              content: `native release response ${requestNumber}`,
+            };
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-native-release-${requestNumber}`,
+          object: 'chat.completion.chunk',
+          created: requestNumber,
+          model: modelId,
+          choices: [
+            {
+              index: 0,
+              delta,
+              finish_reason: requestNumber === 1 ? 'tool_calls' : 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+        })}\n\n`,
+      );
+      response.end('data: [DONE]\n\n');
+    })().catch((error: unknown) => response.destroy(error as Error));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    await withExecutionRoot(async (fixture) => {
+      const owner = await tryAcquireInteractiveRootOwner(fixture.capability);
+      assert.ok(owner);
+      if (!owner) return;
+      try {
+        const executionStores = await openInteractiveExecutionStoresForWrite(owner.lease);
+        const policyStores = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
+        const created = await policyStores.connectionCatalog.create({
+          expectedCatalogRevision: 0,
+          connection: {
+            slug: connectionSlug,
+            name: 'Native release model',
+            providerType: 'openai',
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            enabled: true,
+            enabledModelIds: [modelId],
+          },
+        });
+        assert.equal(created.kind, 'committed');
+        if (created.kind !== 'committed') return;
+        const connection = created.snapshot.connections[0];
+        assert.ok(connection);
+        if (!connection) return;
+        await policyStores.credentialVault.set({
+          locator: {
+            scope: 'connection',
+            connectionId: connection.connectionId,
+            kind: 'api_key',
+          },
+          expected: null,
+          secret: apiKey,
+        });
+        const fetch = await policyStores.operations.beginModelFetch(connection.connectionId);
+        assert.equal(fetch.kind, 'ready');
+        if (fetch.kind !== 'ready') return;
+        await policyStores.operations.completeModelFetch(fetch.ticket, {
+          models: [
+            {
+              id: modelId,
+              apiProtocol: 'openai-chat',
+              capabilities: { chat: true, functionCalling: true },
+            },
+          ],
+          source: 'fetched',
+          fetchedAt: Date.now(),
+        });
+        await executionStores.sessionStore.updateHeader(fixture.sessionId, {
+          backend: 'ai-sdk',
+          llmConnectionSlug: connectionSlug,
+          model: modelId,
+          permissionMode: 'bypass',
+        });
+      } finally {
+        await owner.close();
+      }
+
+      const host = await fixture.startHost();
+      const providerConnection = await connectClient(fixture.root, 'desktop');
+      const observer = await connectClient(fixture.root, 'tui');
+      const backend: ComputerUseNativeProviderBackend = {
+        async clearSession(sessionId) {
+          assert.equal(sessionId, fixture.sessionId);
+          markCleanupEntered();
+          await cleanupGate;
+        },
+        async preflight() {
+          return { accessibility: true, screenRecording: true };
+        },
+        async listApps() {
+          return [];
+        },
+        async observeApp() {
+          return {
+            observationId: 'unused',
+            appId: 'unused',
+            pid: 1,
+            windowId: 1,
+            elements: [],
+          };
+        },
+        async runSemantic() {
+          return { outcome: { ok: true, tier: 'ax', verified: true } };
+        },
+        async captureObservation() {
+          return {
+            observationId: 'unused',
+            appId: 'unused',
+            pid: 1,
+            windowId: 1,
+            elements: [],
+          };
+        },
+        async run() {
+          return { outcome: { ok: true, tier: 'ax', verified: true } };
+        },
+      };
+      const registration = await providerConnection.registerNativeProvider(
+        createComputerUseNativeProvider(backend),
+      );
+      try {
+        const firstTurnId = randomUUID();
+        await observer.startTurn({
+          sessionId: fixture.sessionId,
+          turnId: firstTurnId,
+          content: { text: 'List native apps, then finish.' },
+        });
+        const queued = await observer.request('turn.message.submit', {
+          originHostEpoch: host.hostEpoch,
+          sessionId: fixture.sessionId,
+          messageId: randomUUID(),
+          content: { text: 'Run this follow-up only after native cleanup.' },
+          placement: 'next_turn',
+        });
+        assert.equal(queued.disposition, 'followup');
+        await withTimeout(
+          cleanupEntered,
+          PROCESS_TIMEOUT_MS,
+          'Native Provider Session cleanup was not reached',
+        );
+
+        const terminal = observer.queryTurn({
+          sessionId: fixture.sessionId,
+          turnId: firstTurnId,
+        });
+        releaseCleanup();
+        assert.equal((await terminal).status, 'completed');
+        await withTimeout(
+          followupRequestReceived,
+          PROCESS_TIMEOUT_MS,
+          'follow-up did not start after Native Provider release acknowledgement',
+        );
+      } finally {
+        releaseCleanup();
+        try {
+          await registration.unregister();
+        } finally {
+          await Promise.allSettled([observer.close(), providerConnection.close()]);
+          if (host.child.exitCode === null && host.child.signalCode === null) {
+            await fixture.stopHost(host);
+          }
+        }
+      }
+    });
+  } finally {
+    releaseCleanup();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
