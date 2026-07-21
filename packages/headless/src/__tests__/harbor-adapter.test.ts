@@ -162,6 +162,8 @@ describe('Harbor adapter contract', () => {
           ...contextEnv,
           MAKA_OUTPUT_DIR: '/tmp/out',
           MAKA_STORAGE_ROOT: '/tmp/storage',
+          MAKA_STREAM_CONNECT_TIMEOUT_MS: '900000',
+          MAKA_STREAM_IDLE_TIMEOUT_MS: '900000',
         },
         'deepseek',
       );
@@ -171,6 +173,8 @@ describe('Harbor adapter contract', () => {
       }
       assert.equal(env.MAKA_OUTPUT_DIR, '/tmp/out');
       assert.equal(env.MAKA_STORAGE_ROOT, '/tmp/storage');
+      assert.equal(env.MAKA_STREAM_CONNECT_TIMEOUT_MS, '900000');
+      assert.equal(env.MAKA_STREAM_IDLE_TIMEOUT_MS, '900000');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -2861,7 +2865,6 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     environment = Environment()
     asyncio.run(agent.install(environment))
-    assert len(commands) == 1, commands
     install_command, install_env = commands[0]
     assert "sha256sum --check" in install_command, install_command
     assert "/opt/maka-codex-toolchain/bin/codex" in install_command, install_command
@@ -2869,6 +2872,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "ca-certificates" not in install_command, install_command
     assert "npm" not in install_command, install_command
     assert "curl" not in install_command, install_command
+    alias_commands = [command for command, _env in commands if "ln -sf" in command]
+    assert len(alias_commands) == 1, commands
+    assert "/opt/maka-codex-toolchain/bin/node" not in alias_commands[0], alias_commands[0]
+    assert "/usr/local/bin/node" not in alias_commands[0], alias_commands[0]
+    assert "/opt/maka-codex-toolchain/bin/codex" in alias_commands[0], alias_commands[0]
+    assert "/usr/local/bin/codex" in alias_commands[0], alias_commands[0]
 
     asyncio.run(agent.run("hi", environment, context))
     http_provider_command = next(
