@@ -61,9 +61,11 @@ describe('tool permission Interaction projection', () => {
       projectAskToolPermission('browser_navigate', {
         url: 'https://example.test/account?token=opaque-token&tab=billing',
       }),
-      projectAskToolPermission('browser_click', { ref: '#confirm' }),
+      projectAskToolPermission('browser_click', {
+        target: { kind: 'selector', value: '#confirm' },
+      }),
       projectAskToolPermission('browser_type', {
-        ref: '#password',
+        target: { kind: 'selector', value: '#password' },
         text: 'Authorization: Basic dXNlcjpwYXNz=',
         submit: true,
       }),
@@ -87,7 +89,7 @@ describe('tool permission Interaction projection', () => {
       submit: true,
     });
     assert.deepEqual(canonicalToolExecutionArgs(cases[2]!.intent), {
-      ref: '#password',
+      target: { kind: 'selector', value: '#password' },
       text: 'Authorization: Basic dXNlcjpwYXNz=',
       submit: true,
     });
@@ -243,7 +245,7 @@ describe('tool permission Interaction projection', () => {
 
   test('durable request rejects raw args and public free-text additions', () => {
     const projected = projectAskToolPermission('browser_type', {
-      ref: '#field',
+      target: { kind: 'selector', value: '#field' },
       text: 'private typed value',
     });
     assert.throws(() =>

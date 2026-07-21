@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES } from '../browser.js';
 import {
   createCanonicalToolIntent,
   preToolUse,
@@ -11,6 +12,7 @@ import {
   canonicalToolExecutionArgs,
   canonicalToolRememberScopeMaterial,
   decodePublicToolIntentReview,
+  isBrowserPermissionReviewTextRepresentable,
   projectPublicToolApprovalReview,
   projectPublicToolIntentReview,
   publicToolReviewMatchesIdentity,
@@ -85,10 +87,14 @@ const PRODUCERS: readonly {
   },
   { toolName: 'browser_navigate', args: { url: 'https://example.test' }, reviewKind: 'browser' },
   { toolName: 'browser_snapshot', args: {}, reviewKind: 'browser' },
-  { toolName: 'browser_click', args: { ref: '#save' }, reviewKind: 'browser' },
+  {
+    toolName: 'browser_click',
+    args: { target: { kind: 'selector', value: '#save' } },
+    reviewKind: 'browser',
+  },
   {
     toolName: 'browser_type',
-    args: { ref: '#name', text: 'private', submit: false },
+    args: { target: { kind: 'ref', value: '[1]' }, text: 'private', submit: false },
     reviewKind: 'browser',
   },
   { toolName: 'browser_wait', args: { selector: '#done', timeout: 15 }, reviewKind: 'browser' },
@@ -607,6 +613,62 @@ describe('closed public tool reviews', () => {
     for (const args of malformed) {
       assert.throws(
         () => projectPublicToolApprovalReview(canonical('OfficeDocumentEdit', args)),
+        InteractionPermissionProjectionError,
+      );
+    }
+  });
+
+  test('uses the canonical escaped Browser review budget for type and wait text', () => {
+    const exactBackslashes = '\\'.repeat(BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES / 2);
+    const overBackslashes = `${exactBackslashes}\\`;
+    const exactUnsafe = '\u0000'.repeat(BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES / 8);
+    const overUnsafe = `${exactUnsafe}\u0000`;
+    assert.equal(
+      isBrowserPermissionReviewTextRepresentable(exactBackslashes, { allowEmpty: true }),
+      true,
+    );
+    assert.equal(
+      isBrowserPermissionReviewTextRepresentable(overBackslashes, { allowEmpty: true }),
+      false,
+    );
+    assert.equal(isBrowserPermissionReviewTextRepresentable(exactUnsafe), true);
+    assert.equal(isBrowserPermissionReviewTextRepresentable(overUnsafe), false);
+    assert.deepEqual(
+      projectPublicToolIntentReview(
+        canonical('browser_type', {
+          target: { kind: 'selector', value: '#query' },
+          text: exactBackslashes,
+          submit: false,
+        }),
+      ),
+      {
+        kind: 'browser',
+        action: 'type',
+        ref: '#query',
+        text: '\\\\'.repeat(BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES / 2),
+        submit: false,
+      },
+    );
+    assert.deepEqual(
+      projectPublicToolIntentReview(canonical('browser_wait', { text: exactUnsafe })),
+      {
+        kind: 'browser',
+        action: 'wait',
+        condition: 'text',
+        value: '\\u{0000}'.repeat(BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES / 8),
+        timeoutSeconds: 30,
+      },
+    );
+    for (const intent of [
+      canonical('browser_type', {
+        target: { kind: 'selector', value: '#query' },
+        text: overBackslashes,
+        submit: false,
+      }),
+      canonical('browser_wait', { text: overUnsafe }),
+    ]) {
+      assert.throws(
+        () => projectPublicToolIntentReview(intent),
         InteractionPermissionProjectionError,
       );
     }

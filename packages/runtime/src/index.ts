@@ -185,7 +185,11 @@ export type {
   ProviderRequestCaptureRecorderInput,
   ProviderRequestUsage,
 } from './provider-request-telemetry.js';
-export type { MakaTool, MakaToolContext } from './tool-runtime.js';
+export type {
+  MakaTool,
+  MakaToolContext,
+  MakaToolExecutionReservation,
+} from './tool-runtime.js';
 export { buildMcpTools, mcpProxyToolName } from './mcp-tools.js';
 export type { McpToolProvider, BuildMcpToolsOptions } from './mcp-tools.js';
 export { buildAskUserQuestionTool } from './ask-user-question-tool.js';
@@ -248,6 +252,39 @@ export type {
   MakaToolContext as BuiltinMakaToolContext,
 } from './builtin-tools.js';
 export { buildComputerUseTools, adaptToCuAction, CuBackendError } from './computer-use-tools.js';
+export {
+  BrowserBackendError,
+  boundBrowserSnapshotForWire,
+  buildBrowserTools,
+  MAX_BROWSER_ADDRESS_INPUT_CHARS,
+  MAX_BROWSER_SELECTOR_CHARS,
+  MAX_BROWSER_SNAPSHOT_CHARS,
+  MAX_BROWSER_SNAPSHOT_ELEMENTS,
+  MAX_BROWSER_TYPE_TEXT_UTF8_BYTES,
+  MAX_BROWSER_URL_CHARS,
+  MAX_BROWSER_WAIT_TEXT_UTF8_BYTES,
+} from './browser-tools.js';
+export type {
+  BrowserBackend,
+  BrowserBackendOperations,
+  BrowserBackendAffinity,
+  BrowserBackendErrorCode,
+  BrowserBackendInvocation,
+  BrowserBackendInvocationAcquisition,
+  BrowserBackendInvocationProvider,
+  BrowserClickResult,
+  BrowserExtractResult,
+  BrowserInvocationContext,
+  BrowserNavigateResult,
+  BrowserSnapshotElement,
+  BrowserSnapshotResult,
+  BrowserTakeoverInfo,
+  BrowserTarget,
+  BrowserToolSet,
+  BrowserTurnIdentity,
+  BrowserTypeResult,
+  BrowserWaitCondition,
+} from './browser-tools.js';
 export {
   convertOpenAIComputerAction,
   openAIComputerActionSchema,

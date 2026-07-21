@@ -9,9 +9,9 @@ import {
   type MakaToolContext,
 } from '@maka/runtime';
 import { tryAcquireInteractiveRootOwner } from '@maka/storage/root-authority';
-import type { RuntimeHostConnection } from '../client/index.js';
+import { createNativeCapabilityProvider, type RuntimeHostConnection } from '../client/index.js';
 import {
-  createComputerUseNativeProvider,
+  createComputerUseNativeCapability,
   type ComputerUseNativeProviderBackend,
 } from '../native-provider/computer-use.js';
 import { createHostNativeComputerUseInvocationProvider } from '../server/native-computer-use-provider.js';
@@ -116,7 +116,7 @@ test('real UDS Native Provider keeps backend identities opaque and drains an acc
     try {
       client = await connectClient(fixture.root, 'desktop');
       const registration = await client.registerNativeProvider(
-        createComputerUseNativeProvider(backend),
+        createNativeCapabilityProvider([createComputerUseNativeCapability(backend)]),
       );
       const [tool] = tools;
       assert.ok(tool);

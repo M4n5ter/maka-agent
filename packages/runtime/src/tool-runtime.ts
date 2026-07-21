@@ -107,6 +107,13 @@ export interface ToolModelOutput {
   value: ToolModelOutputPart[];
 }
 
+export interface MakaToolExecutionReservation {
+  /** Enter the reserved execution slot and keep it until the real implementation settles. */
+  run<T>(execute: () => Promise<T> | T): Promise<T>;
+  /** Release a reservation that never reached the implementation. Must be idempotent. */
+  abandon(): void;
+}
+
 export interface MakaTool<P = any, R = unknown> {
   /** Canonical (Claude-SDK-style) name. Pi adapter translates to canonical. */
   name: string;
@@ -136,6 +143,15 @@ export interface MakaTool<P = any, R = unknown> {
     args: P,
     context: Pick<MakaToolContext, 'sessionId' | 'turnId' | 'toolCallId'>,
   ) => unknown;
+  /**
+   * Optional synchronous admission reservation. ToolRuntime creates it at the
+   * execute entrypoint, before persistence or permission work, then uses it to
+   * wrap only the real implementation.
+   */
+  reserveExecution?: (
+    args: P,
+    context: Pick<MakaToolContext, 'sessionId' | 'turnId' | 'toolCallId' | 'abortSignal'>,
+  ) => MakaToolExecutionReservation;
   /** Optional trusted platform sandbox availability for this tool. */
   sandbox?:
     | {
@@ -529,18 +545,28 @@ export class ToolRuntime {
       args: unknown,
       ctx: { toolCallId: string; abortSignal: AbortSignal },
     ): Promise<unknown> => {
-      this.throwIfInteractionFailed();
-      const execution = this.runSuccessorEffect('tool_execution', async () => {
-        try {
-          return await this.executeTool(tool, turnId, queue, args, ctx);
-        } catch (error) {
-          if (isRuntimeLifecycleFatal(error)) {
-            this.hostedRunControl()?.fail(error);
-          }
-          throw error;
-        }
+      const reservation = tool.reserveExecution?.(args as never, {
+        sessionId: this.input.sessionId,
+        turnId,
+        toolCallId: ctx.toolCallId,
+        abortSignal: ctx.abortSignal,
       });
-      return await execution;
+      try {
+        this.throwIfInteractionFailed();
+        const execution = this.runSuccessorEffect('tool_execution', async () => {
+          try {
+            return await this.executeTool(tool, turnId, queue, args, ctx, reservation);
+          } catch (error) {
+            if (isRuntimeLifecycleFatal(error)) {
+              this.hostedRunControl()?.fail(error);
+            }
+            throw error;
+          }
+        });
+        return await execution;
+      } finally {
+        reservation?.abandon();
+      }
     };
   }
 
@@ -631,6 +657,7 @@ export class ToolRuntime {
     queue: AsyncEventQueue<SessionEvent> | { push(event: SessionEvent): void },
     args: unknown,
     ctx: { toolCallId: string; abortSignal: AbortSignal },
+    reservation?: MakaToolExecutionReservation,
   ): Promise<unknown> {
     const toolUseId = ctx.toolCallId;
     const providerArgs = structuredClone(args);
@@ -1419,44 +1446,47 @@ export class ToolRuntime {
       pauseTarget?.pause();
       try {
         const runId = this.currentRunId();
-        const result = await tool.impl(structuredClone(executionArgs) as never, {
-          sessionId: this.input.sessionId,
-          turnId,
-          ...(runId ? { runId } : {}),
-          ...(durableAttempt ? { operationId: durableAttempt.operationId } : {}),
-          cwd: this.input.header.cwd,
-          permissionMode: this.input.header.permissionMode,
-          toolCallId: toolUseId,
-          abortSignal: ctx.abortSignal,
-          emitOutput: output.emit,
-          ...(trace
-            ? {
-                emitRunTrace: (
-                  type: 'tool_started' | 'tool_completed' | 'tool_failed',
-                  message: string,
-                  data?: Record<string, unknown>,
-                ) =>
-                  trace.emit('tool', type, message, {
-                    toolUseId,
-                    toolName: tool.name,
-                    ...(data ?? {}),
-                  }),
-              }
-            : {}),
-          ...(this.input.agentTeam ? { agentTeam: this.input.agentTeam } : {}),
-          ...(permissionContext ? { permissionContext } : {}),
-          ...(this.input.listChildAgents ? { listChildAgents: this.input.listChildAgents } : {}),
-          ...(this.input.readChildAgentOutput
-            ? { readChildAgentOutput: this.input.readChildAgentOutput }
-            : {}),
-          ...this.buildChildAgentContext({
+        const invokeImpl = () =>
+          tool.impl(structuredClone(executionArgs) as never, {
+            sessionId: this.input.sessionId,
+            turnId,
+            ...(runId ? { runId } : {}),
+            ...(durableAttempt ? { operationId: durableAttempt.operationId } : {}),
+            cwd: this.input.header.cwd,
+            permissionMode: this.input.header.permissionMode,
+            toolCallId: toolUseId,
             abortSignal: ctx.abortSignal,
-            trace,
-            toolUseId,
-            toolName: tool.name,
-          }),
-          askUserQuestion: (questions) => this.askUserQuestion(turnId, toolUseId, questions, queue),
-        });
+            emitOutput: output.emit,
+            ...(trace
+              ? {
+                  emitRunTrace: (
+                    type: 'tool_started' | 'tool_completed' | 'tool_failed',
+                    message: string,
+                    data?: Record<string, unknown>,
+                  ) =>
+                    trace.emit('tool', type, message, {
+                      toolUseId,
+                      toolName: tool.name,
+                      ...(data ?? {}),
+                    }),
+                }
+              : {}),
+            ...(this.input.agentTeam ? { agentTeam: this.input.agentTeam } : {}),
+            ...(permissionContext ? { permissionContext } : {}),
+            ...(this.input.listChildAgents ? { listChildAgents: this.input.listChildAgents } : {}),
+            ...(this.input.readChildAgentOutput
+              ? { readChildAgentOutput: this.input.readChildAgentOutput }
+              : {}),
+            ...this.buildChildAgentContext({
+              abortSignal: ctx.abortSignal,
+              trace,
+              toolUseId,
+              toolName: tool.name,
+            }),
+            askUserQuestion: (questions) =>
+              this.askUserQuestion(turnId, toolUseId, questions, queue),
+          });
+        const result = await (reservation ? reservation.run(invokeImpl) : invokeImpl());
         output.flush();
         const durationMs = this.input.now() - startedAt;
 

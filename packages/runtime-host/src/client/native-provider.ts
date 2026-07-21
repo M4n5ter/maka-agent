@@ -14,8 +14,8 @@ import {
   type NativeProviderReleaseFrame,
   type NativeProviderResultFrame,
   type NativeProviderResultPayload,
-  type NativeProviderSessionReleaseFrame,
-  type NativeProviderSessionReleasedFrame,
+  type NativeProviderTurnReleaseFrame,
+  type NativeProviderTurnReleasedFrame,
   type NativeProviderSubcallFrame,
   type NativeProviderCancelFrame,
 } from '../protocol/index.js';
@@ -32,13 +32,23 @@ export interface NativeCapabilityAttachment {
 
 export type NativeCapabilityAttachmentRef = NativeProviderAttachmentRef;
 
-export type NativeCapabilityHandlerOutcome =
+export type NativeCapabilitySubcallFrame<C extends NativeCapability> = Extract<
+  NativeProviderSubcallFrame,
+  { readonly capability: C }
+>;
+
+export type NativeCapabilityResultPayload<C extends NativeCapability> = Extract<
+  NativeProviderResultFrame,
+  { readonly capability: C; readonly ok: true }
+>['result'];
+
+export type NativeCapabilityHandlerOutcome<C extends NativeCapability> =
   | {
       readonly ok: true;
       readonly attachment?: NativeCapabilityAttachment;
       readonly complete: (
         attachment?: NativeCapabilityAttachmentRef,
-      ) => NativeProviderResultPayload;
+      ) => NativeCapabilityResultPayload<C>;
     }
   | { readonly ok: false; readonly code: NativeProviderFailureCode };
 
@@ -46,15 +56,27 @@ export interface NativeCapabilityHandlerContext {
   readonly signal: AbortSignal;
 }
 
-export type NativeCapabilityHandler = (
-  frame: NativeProviderSubcallFrame,
+export type NativeCapabilityHandler<C extends NativeCapability> = (
+  frame: NativeCapabilitySubcallFrame<C>,
   context: NativeCapabilityHandlerContext,
-) => Promise<NativeCapabilityHandlerOutcome>;
+) => Promise<NativeCapabilityHandlerOutcome<C>>;
+
+export interface NativeCapabilityImplementation<C extends NativeCapability> {
+  readonly capability: C;
+  readonly handle: NativeCapabilityHandler<C>;
+  readonly releaseTurnState: (input: TurnStateIdentity) => void | Promise<void>;
+}
+
+type NativeCapabilityImplementationUnion = {
+  [C in NativeCapability]: NativeCapabilityImplementation<C>;
+}[NativeCapability];
+
+export type NativeCapabilityImplementations = readonly [
+  NativeCapabilityImplementationUnion,
+  ...NativeCapabilityImplementationUnion[],
+];
 
 export interface NativeCapabilityProviderOptions {
-  readonly capabilities: readonly NativeCapability[];
-  readonly handle: NativeCapabilityHandler;
-  readonly releaseSession: (sessionId: string) => void | Promise<void>;
   readonly chunkBytes?: number;
 }
 
@@ -67,10 +89,7 @@ export interface NativeProviderRegistration {
 export interface NativeProviderAttachmentTransport {
   readonly hostEpoch: string;
   send(
-    frame:
-      | NativeProviderChunkFrame
-      | NativeProviderResultFrame
-      | NativeProviderSessionReleasedFrame,
+    frame: NativeProviderChunkFrame | NativeProviderResultFrame | NativeProviderTurnReleasedFrame,
   ): Promise<void>;
   fail(error: Error): void;
 }
@@ -78,6 +97,7 @@ export interface NativeProviderAttachmentTransport {
 interface Invocation {
   readonly operationId: string;
   readonly bindingId: string;
+  readonly capability: NativeCapability;
   readonly sessionId: string;
   readonly turnId: string;
   readonly toolCallId: string;
@@ -91,26 +111,40 @@ interface Invocation {
   };
 }
 
-interface SessionCleanup {
+export interface TurnStateIdentity {
+  readonly sessionId: string;
+  readonly turnId: string;
+}
+
+interface SeenTurnState extends TurnStateIdentity {
+  readonly usedCapabilities: Set<NativeCapability>;
+}
+
+interface TurnCleanup {
   readonly releaseId: string;
   readonly task: Promise<void>;
 }
 
 export class NativeCapabilityProvider {
   readonly capabilities: readonly NativeCapability[];
-  readonly #options: NativeCapabilityProviderOptions;
+  readonly #implementations: readonly NativeCapabilityImplementationUnion[];
+  readonly #chunkBytes: number;
   #current: ClientNativeProviderAttachment | undefined;
   #attachGate = Promise.resolve();
 
-  constructor(options: NativeCapabilityProviderOptions) {
-    if (options.capabilities.length === 0) {
+  constructor(
+    implementations: NativeCapabilityImplementations,
+    options: NativeCapabilityProviderOptions = {},
+  ) {
+    if (implementations.length === 0) {
       throw new RangeError('Native capability provider must offer at least one capability');
     }
-    if (options.capabilities.length > NATIVE_PROVIDER_MAX_CAPABILITIES) {
-      throw new RangeError('Native capability provider offers too many capabilities');
-    }
-    if (new Set(options.capabilities).size !== options.capabilities.length) {
+    const capabilities = implementations.map(({ capability }) => capability);
+    if (new Set(capabilities).size !== capabilities.length) {
       throw new RangeError('Native capability provider capabilities must be unique');
+    }
+    if (capabilities.length > NATIVE_PROVIDER_MAX_CAPABILITIES) {
+      throw new RangeError('Native capability provider offers too many capabilities');
     }
     const chunkBytes = options.chunkBytes ?? NATIVE_PROVIDER_DEFAULT_CHUNK_BYTES;
     if (
@@ -120,8 +154,9 @@ export class NativeCapabilityProvider {
     ) {
       throw new RangeError('Native capability provider chunkBytes must be between 1 and 32768');
     }
-    this.capabilities = Object.freeze([...options.capabilities]);
-    this.#options = { ...options, chunkBytes };
+    this.capabilities = Object.freeze(capabilities);
+    this.#implementations = Object.freeze([...implementations]);
+    this.#chunkBytes = chunkBytes;
   }
 
   get drained(): Promise<void> {
@@ -133,13 +168,14 @@ export class NativeCapabilityProvider {
       if (this.#current) {
         await this.#current.drained;
         if (this.#current.failed) {
-          throw new Error('Native capability provider attachment failed during session cleanup');
+          throw new Error('Native capability provider attachment failed during Turn cleanup');
         }
       }
       const attachment = new ClientNativeProviderAttachment(
         transport,
         this.capabilities,
-        this.#options,
+        this.#implementations,
+        this.#chunkBytes,
       );
       this.#current = attachment;
       return attachment;
@@ -152,14 +188,21 @@ export class NativeCapabilityProvider {
   }
 }
 
+export function createNativeCapabilityProvider(
+  implementations: NativeCapabilityImplementations,
+  options?: NativeCapabilityProviderOptions,
+): NativeCapabilityProvider {
+  return new NativeCapabilityProvider(implementations, options);
+}
+
 export class ClientNativeProviderAttachment {
   readonly capabilities: readonly NativeCapability[];
   readonly drained: Promise<void>;
   readonly #transport: NativeProviderAttachmentTransport;
-  readonly #options: NativeCapabilityProviderOptions;
+  readonly #implementations: readonly NativeCapabilityImplementationUnion[];
   readonly #invocations = new Map<string, Invocation>();
-  readonly #seenSessions = new Set<string>();
-  readonly #sessionCleanups = new Map<string, SessionCleanup>();
+  readonly #seenTurns = new Map<string, SeenTurnState>();
+  readonly #turnCleanups = new Map<string, TurnCleanup>();
   readonly #chunkBytes: number;
   #registrationId: string | undefined;
   #admissionOpen = true;
@@ -173,12 +216,13 @@ export class ClientNativeProviderAttachment {
   constructor(
     transport: NativeProviderAttachmentTransport,
     capabilities: readonly NativeCapability[],
-    options: NativeCapabilityProviderOptions,
+    implementations: readonly NativeCapabilityImplementationUnion[],
+    chunkBytes: number,
   ) {
     this.#transport = transport;
     this.capabilities = capabilities;
-    this.#options = options;
-    this.#chunkBytes = options.chunkBytes ?? NATIVE_PROVIDER_DEFAULT_CHUNK_BYTES;
+    this.#implementations = implementations;
+    this.#chunkBytes = chunkBytes;
     this.drained = new Promise((resolve) => {
       this.#resolveDrained = resolve;
     });
@@ -212,8 +256,9 @@ export class ClientNativeProviderAttachment {
     }
     let invocation = this.#invocations.get(frame.operationId);
     const context = frame.subcall.context;
-    if (this.#sessionCleanups.has(context.sessionId)) {
-      throw new Error('Native Provider subcall arrived while its Session is releasing');
+    const stateKey = turnStateKey(context.sessionId, context.turnId);
+    if (this.#turnCleanups.has(stateKey)) {
+      throw new Error('Native Provider subcall arrived while its Turn state is releasing');
     }
     if (!invocation) {
       if (frame.ordinal !== 1)
@@ -224,6 +269,7 @@ export class ClientNativeProviderAttachment {
       invocation = {
         operationId: frame.operationId,
         bindingId: frame.bindingId,
+        capability: frame.capability,
         sessionId: context.sessionId,
         turnId: context.turnId,
         toolCallId: context.toolCallId,
@@ -233,6 +279,7 @@ export class ClientNativeProviderAttachment {
     }
     if (
       invocation.bindingId !== frame.bindingId ||
+      invocation.capability !== frame.capability ||
       invocation.sessionId !== context.sessionId ||
       invocation.turnId !== context.turnId ||
       invocation.toolCallId !== context.toolCallId
@@ -254,7 +301,16 @@ export class ClientNativeProviderAttachment {
       ...settlement(),
     };
     invocation.active = active;
-    this.#seenSessions.add(context.sessionId);
+    let turnState = this.#seenTurns.get(stateKey);
+    if (!turnState) {
+      turnState = {
+        sessionId: context.sessionId,
+        turnId: context.turnId,
+        usedCapabilities: new Set(),
+      };
+      this.#seenTurns.set(stateKey, turnState);
+    }
+    turnState.usedCapabilities.add(frame.capability);
     setImmediate(() => void this.#run(frame, invocation!, active));
   }
 
@@ -277,24 +333,25 @@ export class ClientNativeProviderAttachment {
     this.#resolveDrainIfReady();
   }
 
-  acceptSessionRelease(frame: NativeProviderSessionReleaseFrame): void {
+  acceptTurnRelease(frame: NativeProviderTurnReleaseFrame): void {
     this.#requireEpoch(frame.hostEpoch);
     if (frame.registrationId !== this.#registrationId) {
-      throw new Error('Native Provider Session release referenced a different registration');
+      throw new Error('Native Provider Turn release referenced a different registration');
     }
-    if (!this.#sendResults) throw new Error('Native Provider Session release arrived after detach');
-    const existing = this.#sessionCleanups.get(frame.sessionId);
+    if (!this.#sendResults) throw new Error('Native Provider Turn release arrived after detach');
+    const stateKey = turnStateKey(frame.sessionId, frame.turnId);
+    const existing = this.#turnCleanups.get(stateKey);
     if (existing) {
       if (existing.releaseId !== frame.releaseId) {
-        throw new Error('Native Provider Session release identity changed during cleanup');
+        throw new Error('Native Provider Turn release identity changed during cleanup');
       }
       return;
     }
-    if (!this.#seenSessions.has(frame.sessionId)) {
-      throw new Error('Native Provider Session release referenced an unseen Session');
+    if (!this.#seenTurns.has(stateKey)) {
+      throw new Error('Native Provider Turn release referenced unseen Turn state');
     }
-    const task = this.#releaseSession(frame);
-    this.#sessionCleanups.set(frame.sessionId, {
+    const task = this.#releaseTurnState(frame);
+    this.#turnCleanups.set(stateKey, {
       releaseId: frame.releaseId,
       task,
     });
@@ -315,41 +372,57 @@ export class ClientNativeProviderAttachment {
     this.#resolveDrainIfReady();
   }
 
-  async #releaseSession(frame: NativeProviderSessionReleaseFrame): Promise<void> {
-    await this.#waitForSessionHandlers(frame.sessionId);
-    await this.#cleanupSession(frame.sessionId);
+  async #releaseTurnState(frame: NativeProviderTurnReleaseFrame): Promise<void> {
+    const stateKey = turnStateKey(frame.sessionId, frame.turnId);
+    const turnState = this.#seenTurns.get(stateKey);
+    if (!turnState) throw new Error('Native Provider Turn state disappeared during cleanup');
+    await this.#waitForTurnHandlers(frame.sessionId, frame.turnId);
+    await this.#cleanupTurnState(turnState);
     if (this.#sendResults) {
       await this.#serializeOutput(() =>
         this.#sendResults
           ? this.#sendValidated({
-              kind: 'native.provider.session_released',
-              ...sessionIdentity(frame),
+              kind: 'native.provider.turn_released',
+              ...turnReleaseIdentity(frame),
             })
           : Promise.resolve(),
       );
     }
-    this.#sessionCleanups.delete(frame.sessionId);
+    this.#turnCleanups.delete(stateKey);
     this.#resolveDrainIfReady();
   }
 
-  async #waitForSessionHandlers(sessionId: string): Promise<void> {
+  async #waitForTurnHandlers(sessionId: string, turnId: string): Promise<void> {
     for (;;) {
       const active = [...this.#invocations.values()]
-        .filter((invocation) => invocation.sessionId === sessionId)
+        .filter((invocation) => invocation.sessionId === sessionId && invocation.turnId === turnId)
         .flatMap((invocation) => (invocation.active ? [invocation.active.settled] : []));
       if (active.length === 0) return;
       await Promise.all(active);
     }
   }
 
-  async #cleanupSession(sessionId: string): Promise<void> {
-    try {
-      await this.#options.releaseSession(sessionId);
-    } catch (error) {
+  async #cleanupTurnState(turnState: SeenTurnState): Promise<void> {
+    const identity = { sessionId: turnState.sessionId, turnId: turnState.turnId };
+    const cleanupTasks = [...turnState.usedCapabilities].map((capability) =>
+      Promise.resolve().then(() => this.#releaseCapabilityTurnState(capability, identity)),
+    );
+    const outcomes = await Promise.allSettled(cleanupTasks);
+    const failure = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
+    );
+    if (failure) {
       this.#cleanupFailed = true;
-      throw error;
+      throw failure.reason;
     }
-    this.#seenSessions.delete(sessionId);
+    this.#seenTurns.delete(turnStateKey(identity.sessionId, identity.turnId));
+  }
+
+  #releaseCapabilityTurnState(
+    capability: NativeCapability,
+    identity: TurnStateIdentity,
+  ): void | Promise<void> {
+    return this.#implementation(capability).releaseTurnState(identity);
   }
 
   async #run(
@@ -358,11 +431,9 @@ export class ClientNativeProviderAttachment {
     active: NonNullable<Invocation['active']>,
   ): Promise<void> {
     try {
-      let outcome: NativeCapabilityHandlerOutcome;
+      let outcome: NativeCapabilityHandlerOutcome<NativeCapability>;
       try {
-        outcome = await this.#options.handle(frame, {
-          signal: active.controller.signal,
-        });
+        outcome = await this.#handle(frame, { signal: active.controller.signal });
       } catch {
         outcome = { ok: false, code: 'operation_failed' };
       }
@@ -377,12 +448,14 @@ export class ClientNativeProviderAttachment {
           bindingId: frame.bindingId,
         };
         if (!outcome.ok) {
-          await this.#sendValidated({
+          const resultFrame = {
             kind: 'native.provider.result',
             ...identity,
+            capability: frame.capability,
             ok: false,
             error: { code: outcome.code },
-          });
+          } as NativeProviderResultFrame;
+          await this.#sendValidated(resultFrame);
           return;
         }
         let ref: NativeCapabilityAttachmentRef | undefined;
@@ -393,12 +466,14 @@ export class ClientNativeProviderAttachment {
           throw new Error('Native capability result kind does not match the subcall');
         }
         requireMatchingAttachment(result, ref);
-        await this.#sendValidated({
+        const resultFrame = {
           kind: 'native.provider.result',
           ...identity,
+          capability: frame.capability,
           ok: true,
           result,
-        });
+        } as NativeProviderResultFrame;
+        await this.#sendValidated(resultFrame);
       });
     } catch (error) {
       if (this.#sendResults) this.#failTransport(asError(error));
@@ -410,6 +485,24 @@ export class ClientNativeProviderAttachment {
       active.resolveSettled();
       this.#resolveDrainIfReady();
     }
+  }
+
+  #handle(
+    frame: NativeProviderSubcallFrame,
+    context: NativeCapabilityHandlerContext,
+  ): Promise<NativeCapabilityHandlerOutcome<NativeCapability>> {
+    return this.#implementation(frame.capability).handle(frame, context);
+  }
+
+  #implementation<C extends NativeCapability>(capability: C): NativeCapabilityImplementation<C> {
+    const implementation = this.#implementations.find(
+      (candidate) => candidate.capability === capability,
+    );
+    if (!implementation) {
+      throw new Error('Native capability provider implementation is unavailable');
+    }
+    // The runtime equality restores the capability correlation erased by Array.find.
+    return implementation as unknown as NativeCapabilityImplementation<C>;
   }
 
   async #sendAttachment(
@@ -448,10 +541,7 @@ export class ClientNativeProviderAttachment {
   }
 
   #sendValidated(
-    frame:
-      | NativeProviderChunkFrame
-      | NativeProviderResultFrame
-      | NativeProviderSessionReleasedFrame,
+    frame: NativeProviderChunkFrame | NativeProviderResultFrame | NativeProviderTurnReleasedFrame,
   ): Promise<void> {
     return this.#transport.send(decodeNativeProviderClientFrame(frame));
   }
@@ -480,11 +570,11 @@ export class ClientNativeProviderAttachment {
     this.#drainStarted = true;
     this.#invocations.clear();
     const cleanup = (async () => {
-      const tasks = [...this.#seenSessions].map((sessionId) => {
-        const existing = this.#sessionCleanups.get(sessionId);
+      const tasks = [...this.#seenTurns.entries()].map(([stateKey, identity]) => {
+        const existing = this.#turnCleanups.get(stateKey);
         if (existing) return existing.task;
-        const task = Promise.resolve().then(() => this.#cleanupSession(sessionId));
-        this.#sessionCleanups.set(sessionId, { releaseId: '', task });
+        const task = Promise.resolve().then(() => this.#cleanupTurnState(identity));
+        this.#turnCleanups.set(stateKey, { releaseId: '', task });
         return task;
       });
       const outcomes = await Promise.allSettled(tasks);
@@ -515,13 +605,18 @@ function settlement(): Pick<NonNullable<Invocation['active']>, 'settled' | 'reso
   return { settled, resolveSettled };
 }
 
-function sessionIdentity(frame: NativeProviderSessionReleaseFrame) {
+function turnReleaseIdentity(frame: NativeProviderTurnReleaseFrame) {
   return {
     hostEpoch: frame.hostEpoch,
     registrationId: frame.registrationId,
     releaseId: frame.releaseId,
     sessionId: frame.sessionId,
+    turnId: frame.turnId,
   };
+}
+
+function turnStateKey(sessionId: string, turnId: string): string {
+  return `${sessionId}\u0000${turnId}`;
 }
 
 function requireMatchingAttachment(

@@ -4,6 +4,7 @@ import { TOOL_BOUNDARY_PROTOCOL_V1 } from '@maka/core/runtime-event';
 import { filterModelVisibleTaskLedgerTasks } from '@maka/core/task-ledger';
 import {
   BackendRegistry,
+  buildBrowserTools,
   buildBuiltinTools,
   buildComputerUseTools,
   createBuiltinSandboxManager,
@@ -42,6 +43,7 @@ import { HostGoalCoordinator } from './goal-coordinator.js';
 import { HostInteractionAuthority } from './interaction-coordinator.js';
 import { HostMessageCoordinator, type HostMessageRootPort } from './message-coordinator.js';
 import { HostMemoryCoordinator } from './memory-coordinator.js';
+import { createHostNativeBrowserInvocationProvider } from './native-browser-provider.js';
 import { createHostNativeComputerUseInvocationProvider } from './native-computer-use-provider.js';
 import { HostNativeProviderCoordinator } from './native-provider-coordinator.js';
 import { combineDomainOperationHandlers } from './operation-dispatcher.js';
@@ -139,6 +141,9 @@ export async function createExecutionRuntimeHostComposition(
   const computerUseTools = buildComputerUseTools({
     invocationProvider: createHostNativeComputerUseInvocationProvider(nativeProvider),
   });
+  const browserTools = buildBrowserTools({
+    invocationProvider: createHostNativeBrowserInvocationProvider(nativeProvider),
+  });
   const runtimeTools = [
     ...buildBuiltinTools({
       shellRuns: resources,
@@ -156,6 +161,7 @@ export async function createExecutionRuntimeHostComposition(
         : {}),
     }),
     ...computerUseTools,
+    ...browserTools,
   ];
   const rootAdmissionOwner = new RootAdmissionOwner();
   let messages: HostMessageCoordinator | undefined;
@@ -272,9 +278,10 @@ export async function createExecutionRuntimeHostComposition(
     interaction,
     messageCoordinator,
     goalTurns,
-    async (sessionId) => {
+    async ({ sessionId, turnId }) => {
       computerUseTools.clearSession(sessionId);
-      await nativeProvider.releaseSession(sessionId);
+      await browserTools.releaseTurnState({ sessionId, turnId });
+      await nativeProvider.releaseTurnState({ sessionId, turnId });
     },
     options.rootTurnHooks,
   );

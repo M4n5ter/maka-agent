@@ -21,6 +21,7 @@ import {
   TURN_MESSAGE_CONTENT_MAX_BYTES,
   TURN_MESSAGE_TEXT_MAX_BYTES,
   RuntimeHostProtocolError,
+  type RequestFrame,
 } from '../protocol/index.js';
 
 describe('Runtime Host bootstrap protocol', () => {
@@ -406,7 +407,7 @@ describe('Runtime Host bootstrap protocol', () => {
       },
     });
     const worstCaseSecret = '\0'.repeat(CREDENTIAL_SECRET_MAX_BYTES);
-    const encoded = encodeProtocolFrame(decodeClientFrame(setFrame(worstCaseSecret)));
+    const encoded = encodeProtocolFrame(decodeRequestForRoundTrip(setFrame(worstCaseSecret)));
     assert.ok(encoded.byteLength <= RUNTIME_HOST_MAX_FRAME_BYTES);
     assert.doesNotThrow(() => decodeClientFrame(setFrame(worstCaseSecret)));
     assert.throws(
@@ -840,7 +841,7 @@ describe('Runtime Host bootstrap protocol', () => {
       content: { text: 'a'.repeat(TURN_MESSAGE_TEXT_MAX_BYTES) },
       placement: 'next_turn' as const,
     };
-    const frame = decodeClientFrame({
+    const frame = decodeRequestForRoundTrip({
       requestId: 'submit-request-1',
       operation: 'turn.message.submit',
       input,
@@ -1316,6 +1317,12 @@ function sessionEventFrame(event: Record<string, unknown>) {
     runId: 'run-1',
     event,
   };
+}
+
+function decodeRequestForRoundTrip(value: unknown): RequestFrame {
+  const frame = decodeClientFrame(value);
+  if ('kind' in frame) assert.fail('Expected a Runtime Host request frame');
+  return frame;
 }
 
 function isInvalidFrame(error: unknown): boolean {

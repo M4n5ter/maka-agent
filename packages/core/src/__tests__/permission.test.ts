@@ -62,7 +62,10 @@ describe('tool classification', () => {
       canonical('ExploreAgent', { objective: 'Inspect local files' }, 'network_send').category,
       'subagent',
     );
-    assert.equal(canonical('browser_click', { ref: '#save' }, 'read').category, 'browser');
+    assert.equal(
+      canonical('browser_click', { target: { kind: 'selector', value: '#save' } }, 'read').category,
+      'browser',
+    );
     assert.equal(
       canonical('Bash', { command: 'rm obsolete.txt' }, 'read').category,
       'fs_destructive',
@@ -495,11 +498,14 @@ describe('turn-local permission memory', () => {
     });
     memory.remember(navigate.rememberScope!);
 
-    assert.deepEqual(evaluate('browser_click', { ref: '#confirm' }, 'ask', memory), {
-      kind: 'allow',
-      category: 'browser',
-      source: 'remembered',
-    });
+    assert.deepEqual(
+      evaluate('browser_click', { target: { kind: 'selector', value: '#confirm' } }, 'ask', memory),
+      {
+        kind: 'allow',
+        category: 'browser',
+        source: 'remembered',
+      },
+    );
   });
 
   test('Computer Use scope separates metadata, screenshots, and observed mutation actions', () => {
@@ -547,13 +553,13 @@ describe('turn-local permission memory', () => {
 describe('canonical intent and rule boundaries', () => {
   test('execution consumes the original private canonical values, never the public review', () => {
     const intent = canonical('browser_type', {
-      ref: '#password',
+      target: { kind: 'selector', value: '#password' },
       text: 'Authorization: Basic dXNlcjpwYXNz=',
       submit: true,
     });
 
     assert.deepEqual(canonicalToolExecutionArgs(intent), {
-      ref: '#password',
+      target: { kind: 'selector', value: '#password' },
       text: 'Authorization: Basic dXNlcjpwYXNz=',
       submit: true,
     });

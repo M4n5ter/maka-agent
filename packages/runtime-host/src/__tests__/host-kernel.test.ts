@@ -1598,7 +1598,7 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
-  test('holds terminal publication and follow-up admission at Session state release', async () => {
+  test('strictly holds terminal publication and follow-up admission at Turn state release', async () => {
     await withHostPaths(async (paths) => {
       const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
       const owner = paths.resources.trackCloseable(
@@ -1615,7 +1615,7 @@ describe('non-serving Runtime Host kernel', () => {
         model: 'fake-model',
         permissionMode: 'ask',
       });
-      const releaseEntered = deferred<string>();
+      const releaseEntered = deferred<{ sessionId: string; turnId: string }>();
       const releaseGate = deferred<void>();
       let terminalPublished = false;
       const host = paths.resources.trackCloseable(
@@ -1626,8 +1626,8 @@ describe('non-serving Runtime Host kernel', () => {
             const composition = await createExecutionRuntimeHostComposition(context);
             const nativeProvider = composition.nativeProvider;
             assert.ok(nativeProvider);
-            nativeProvider.releaseSession = async (sessionId) => {
-              releaseEntered.resolve(sessionId);
+            nativeProvider.releaseTurnState = async ({ sessionId, turnId }) => {
+              releaseEntered.resolve({ sessionId, turnId });
               await releaseGate.promise;
             };
             const continuity = composition.continuity;
@@ -1681,7 +1681,7 @@ describe('non-serving Runtime Host kernel', () => {
           originHostEpoch: host.hostEpoch,
           sessionId: session.id,
           messageId: 'session-release-follow-up',
-          content: { text: 'start only after Session state release' },
+          content: { text: 'start only after Turn state release' },
           placement: 'next_turn',
         });
         assert.equal(queued.disposition, 'followup');
@@ -1690,13 +1690,13 @@ describe('non-serving Runtime Host kernel', () => {
           answer: { kind: 'question', answers: ['邀请制', '本周', '是'] },
         });
 
-        assert.equal(
+        assert.deepEqual(
           await withTimeout(
             releaseEntered.promise,
             5_000,
-            'root Turn did not enter Session state release',
+            'root Turn did not enter Turn state release',
           ),
-          session.id,
+          { sessionId: session.id, turnId },
         );
         assert.equal(terminalPublished, false);
         const heldAdmissions = await stores.agentRunStore.listRootTurnAdmissionsForRecovery(

@@ -45,6 +45,7 @@ const allowedServerExternalImports = new Set([
   '@maka/core/task-ledger',
   '@maka/core/usage-stats/types',
   '@maka/runtime',
+  '@maka/runtime/browser-tools',
   '@maka/storage',
   '@maka/storage/artifact-stores',
   '@maka/storage/execution-stores',
@@ -64,6 +65,7 @@ const allowedExternalImports = {
   protocol: new Set([
     '@maka/core/attachments',
     '@maka/core/artifacts',
+    '@maka/core/browser',
     '@maka/core/computer-use',
     '@maka/core/events',
     '@maka/core/interaction',
@@ -75,6 +77,9 @@ const allowedExternalImports = {
     'node:util',
   ]),
 } as const;
+const nativeBrowserEntrypoint = 'native-provider/browser';
+const nativeBrowserSourcePath = join(sourceRoot, 'native-provider', 'browser.ts');
+const allowedNativeBrowserExternalImports = new Set(['@maka/runtime/browser-tools']);
 const nativeComputerUseEntrypoint = 'native-provider/computer-use';
 const nativeComputerUseSourcePath = join(sourceRoot, 'native-provider', 'computer-use.ts');
 const allowedNativeComputerUseExternalImports = new Set([
@@ -147,13 +152,15 @@ test('serving Runtime dependencies stay within server and explicit adapter bound
     const topLevelArea = localPath.split(sep)[0];
     if (topLevelArea === '__tests__') continue;
     const allowedImports =
-      path === nativeComputerUseSourcePath
-        ? allowedNativeComputerUseExternalImports
-        : topLevelArea === 'server' || localPath === 'candidate-main.ts'
-          ? allowedServerExternalImports
-          : topLevelArea === 'protocol'
-            ? allowedExternalImports.protocol
-            : allowedHostExternalImports;
+      path === nativeBrowserSourcePath
+        ? allowedNativeBrowserExternalImports
+        : path === nativeComputerUseSourcePath
+          ? allowedNativeComputerUseExternalImports
+          : topLevelArea === 'server' || localPath === 'candidate-main.ts'
+            ? allowedServerExternalImports
+            : topLevelArea === 'protocol'
+              ? allowedExternalImports.protocol
+              : allowedHostExternalImports;
     for (const specifier of moduleSpecifiers(path)) {
       if (isRelativeSpecifier(specifier)) {
         const target = sourcePathForSpecifier(path, specifier);
@@ -200,6 +207,50 @@ test('the public native Computer Use leaf stays within its exact adapter boundar
       const allowedImports =
         path === entrypoint
           ? allowedNativeComputerUseExternalImports
+          : topLevelArea === 'protocol'
+            ? allowedExternalImports.protocol
+            : allowedHostExternalImports;
+      if (!allowedImports.has(specifier)) violations.push(`${path}: ${specifier}`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});
+
+test('the public native Browser leaf stays within its exact adapter boundary', async () => {
+  assert.equal(allowedNativeBrowserExternalImports.has('@maka/runtime'), false);
+  const publicEntrypoints = await readPublicEntrypoints();
+  const entrypoint = publicEntrypoints.get(nativeBrowserEntrypoint);
+  assert.ok(entrypoint, `missing public ${nativeBrowserEntrypoint} entrypoint`);
+  assert.equal(entrypoint, nativeBrowserSourcePath);
+  const violations: string[] = [];
+  for (const path of reachableModules(entrypoint, publicEntrypoints)) {
+    const localPath = relative(sourceRoot, path);
+    const topLevelArea = localPath.split(sep)[0];
+    if (localPath === 'candidate-main.ts' || topLevelArea === 'server') {
+      violations.push(`${nativeBrowserEntrypoint} reaches ${localPath}`);
+    }
+    for (const specifier of moduleSpecifiers(path)) {
+      const target = sourcePathForLocalSpecifier(path, specifier, publicEntrypoints);
+      if (target) {
+        if (!isInside(sourceRoot, target)) {
+          violations.push(`${path}: ${specifier}`);
+          continue;
+        }
+        if (path === entrypoint) {
+          const targetArea = relative(sourceRoot, target).split(sep)[0];
+          if (targetArea !== 'client' && targetArea !== 'protocol') {
+            violations.push(`${path}: ${specifier}`);
+          }
+        }
+        continue;
+      }
+      if (isStorageWriterDependency(specifier)) {
+        violations.push(`${localPath}: ${specifier}`);
+        continue;
+      }
+      const allowedImports =
+        path === entrypoint
+          ? allowedNativeBrowserExternalImports
           : topLevelArea === 'protocol'
             ? allowedExternalImports.protocol
             : allowedHostExternalImports;
@@ -407,7 +458,13 @@ async function readPublicEntrypoints(): Promise<Map<string, string>> {
   };
   assert.equal(manifest.name, packageName);
   const entrypoints = new Map<string, string>();
-  for (const area of ['protocol', 'client', 'server', nativeComputerUseEntrypoint]) {
+  for (const area of [
+    'protocol',
+    'client',
+    'server',
+    nativeBrowserEntrypoint,
+    nativeComputerUseEntrypoint,
+  ]) {
     const target = manifest.exports?.[`./${area}`];
     if (typeof target !== 'string') throw new Error(`missing ${packageName}/${area} export`);
     assert.match(target, /^\.\/dist\/.+\.js$/, `invalid ${packageName}/${area} export target`);

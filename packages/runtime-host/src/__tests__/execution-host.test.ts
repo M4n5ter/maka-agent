@@ -8,15 +8,13 @@ import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-
 import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';
 import { tryAcquireInteractiveRootOwner } from '@maka/storage/root-authority';
 import {
+  createNativeCapabilityProvider,
   RuntimeHostOperationError,
   RuntimeHostSubscriptionError,
+  type NativeCapabilityImplementation,
   type RuntimeHostConnection,
   type RuntimeHostSessionSubscription,
 } from '../client/index.js';
-import {
-  createComputerUseNativeProvider,
-  type ComputerUseNativeProviderBackend,
-} from '../native-provider/computer-use.js';
 import {
   type ConnectionCatalogQueryResult,
   type InteractionAnswer,
@@ -1509,6 +1507,17 @@ test('runs a real Host ai-sdk Tool loop across Clients and refreshes committed p
         assert.ok(taskCreateSchema);
         assert.equal(taskCreateSchema?.type, 'function');
         assert.deepEqual(taskCreateSchema?.function?.parameters?.required, ['tasks']);
+        const toolNames = new Set(tools?.map((tool) => tool.function?.name));
+        for (const browserToolName of [
+          'browser_navigate',
+          'browser_snapshot',
+          'browser_click',
+          'browser_type',
+          'browser_wait',
+          'browser_extract',
+        ]) {
+          assert.equal(toolNames.has(browserToolName), true);
+        }
         const properties = taskCreateSchema?.function?.parameters?.properties as
           | Record<string, { type?: unknown; items?: { required?: unknown } }>
           | undefined;
@@ -1577,7 +1586,7 @@ test('runs a real Host ai-sdk Tool loop across Clients and refreshes committed p
   }
 });
 
-test('advances terminal projection and follow-up after real Native Provider Session release ack', async () => {
+test('completes the Browser child journey after provider release ack and clears old refs', async () => {
   const modelId = 'gpt-4o-mini-native-release';
   const connectionSlug = 'local-native-release';
   const apiKey = `native-release-key-${randomUUID()}`;
@@ -1594,6 +1603,10 @@ test('advances terminal projection and follow-up after real Native Provider Sess
   const followupRequestReceived = new Promise<void>((resolve) => {
     markFollowupRequestReceived = resolve;
   });
+  let markFollowupToolResultReceived!: () => void;
+  const followupToolResultReceived = new Promise<void>((resolve) => {
+    markFollowupToolResultReceived = resolve;
+  });
   const server = createServer((request, response) => {
     void (async () => {
       let body = '';
@@ -1602,19 +1615,25 @@ test('advances terminal projection and follow-up after real Native Provider Sess
       requests.push(JSON.parse(body) as Record<string, unknown>);
       const requestNumber = requests.length;
       if (requestNumber === 3) markFollowupRequestReceived();
+      if (requestNumber === 4) markFollowupToolResultReceived();
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const delta =
-        requestNumber === 1
+        requestNumber === 1 || requestNumber === 3
           ? {
               role: 'assistant',
               tool_calls: [
                 {
                   index: 0,
-                  id: 'call:native.list_apps',
+                  id:
+                    requestNumber === 1
+                      ? 'call:native.browser_snapshot'
+                      : 'call:native.stale_browser_ref',
                   type: 'function',
                   function: {
-                    name: 'maka_computer',
-                    arguments: JSON.stringify({ action: 'list_apps' }),
+                    name: requestNumber === 1 ? 'browser_snapshot' : 'browser_click',
+                    arguments: JSON.stringify(
+                      requestNumber === 1 ? {} : { target: { kind: 'ref', value: '[1]' } },
+                    ),
                   },
                 },
               ],
@@ -1633,7 +1652,7 @@ test('advances terminal projection and follow-up after real Native Provider Sess
             {
               index: 0,
               delta,
-              finish_reason: requestNumber === 1 ? 'tool_calls' : 'stop',
+              finish_reason: requestNumber === 1 || requestNumber === 3 ? 'tool_calls' : 'stop',
             },
           ],
           usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
@@ -1706,65 +1725,54 @@ test('advances terminal projection and follow-up after real Native Provider Sess
       const host = await fixture.startHost();
       const providerConnection = await connectClient(fixture.root, 'desktop');
       const observer = await connectClient(fixture.root, 'tui');
-      const backend: ComputerUseNativeProviderBackend = {
-        async clearSession(sessionId) {
+      const firstTurnId = randomUUID();
+      const browserSubcalls: string[] = [];
+      const browserCapability: NativeCapabilityImplementation<'browser'> = {
+        capability: 'browser',
+        async releaseTurnState({ sessionId, turnId }) {
           assert.equal(sessionId, fixture.sessionId);
+          assert.equal(turnId, firstTurnId);
           markCleanupEntered();
           await cleanupGate;
         },
-        async preflight() {
-          return { accessibility: true, screenRecording: true };
-        },
-        async listApps() {
-          return [];
-        },
-        async observeApp() {
+        async handle(frame) {
+          browserSubcalls.push(frame.subcall.kind);
+          if (frame.subcall.kind !== 'snapshot') {
+            return { ok: false, code: 'operation_failed' };
+          }
           return {
-            observationId: 'unused',
-            appId: 'unused',
-            pid: 1,
-            windowId: 1,
-            elements: [],
+            ok: true,
+            complete: () => ({
+              kind: 'snapshot',
+              url: 'https://example.test/',
+              elements: [{ text: '[1]<button>Old Turn</button>', ref: '[1]' }],
+              totalElements: 1,
+              takeoverReloaded: false,
+            }),
           };
-        },
-        async runSemantic() {
-          return { outcome: { ok: true, tier: 'ax', verified: true } };
-        },
-        async captureObservation() {
-          return {
-            observationId: 'unused',
-            appId: 'unused',
-            pid: 1,
-            windowId: 1,
-            elements: [],
-          };
-        },
-        async run() {
-          return { outcome: { ok: true, tier: 'ax', verified: true } };
         },
       };
       const registration = await providerConnection.registerNativeProvider(
-        createComputerUseNativeProvider(backend),
+        createNativeCapabilityProvider([browserCapability]),
       );
       try {
-        const firstTurnId = randomUUID();
         await observer.startTurn({
           sessionId: fixture.sessionId,
           turnId: firstTurnId,
-          content: { text: 'List native apps, then finish.' },
+          content: { text: 'Snapshot the browser, then finish.' },
         });
         const queued = await observer.request('turn.message.submit', {
           originHostEpoch: host.hostEpoch,
           sessionId: fixture.sessionId,
           messageId: randomUUID(),
-          content: { text: 'Run this follow-up only after native cleanup.' },
+          content: { text: 'Try the old Browser ref only after native cleanup.' },
           placement: 'next_turn',
         });
         assert.equal(queued.disposition, 'followup');
         await withTimeout(
           cleanupEntered,
           PROCESS_TIMEOUT_MS,
-          'Native Provider Session cleanup was not reached',
+          'Native Provider Turn cleanup was not reached',
         );
 
         const terminal = observer.queryTurn({
@@ -1777,6 +1785,16 @@ test('advances terminal projection and follow-up after real Native Provider Sess
           followupRequestReceived,
           PROCESS_TIMEOUT_MS,
           'follow-up did not start after Native Provider release acknowledgement',
+        );
+        await withTimeout(
+          followupToolResultReceived,
+          PROCESS_TIMEOUT_MS,
+          'follow-up did not report the cleaned Browser provenance',
+        );
+        assert.deepEqual(browserSubcalls, ['snapshot']);
+        assert.match(
+          JSON.stringify(requests[3]),
+          /requires a successful browser_snapshot in the same Turn/,
         );
       } finally {
         releaseCleanup();

@@ -3,7 +3,17 @@ import { describe, test } from 'node:test';
 import {
   decodeClientFrame,
   decodeHostFrame,
+  decodeNativeProviderClientFrame,
+  encodeProtocolFrame,
   HOST_OPERATION_SPECS,
+  NATIVE_PROVIDER_BROWSER_MAX_ADDRESS_INPUT_CHARS,
+  NATIVE_PROVIDER_BROWSER_MAX_EXTRACT_CHARS,
+  NATIVE_PROVIDER_BROWSER_MAX_RESULT_JSON_BYTES,
+  NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_CHARS,
+  NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_ELEMENTS,
+  NATIVE_PROVIDER_BROWSER_MAX_TYPE_TEXT_UTF8_BYTES,
+  NATIVE_PROVIDER_BROWSER_MAX_URL_CHARS,
+  NATIVE_PROVIDER_BROWSER_MAX_WAIT_TEXT_UTF8_BYTES,
   NATIVE_PROVIDER_ATTACHMENT_CHUNK_BYTES,
   NATIVE_PROVIDER_MAX_APPS,
   NATIVE_PROVIDER_MAX_ATTACHMENT_BYTES,
@@ -17,6 +27,8 @@ import {
   NATIVE_PROVIDER_MAX_WINDOWS,
   NATIVE_PROVIDER_MAX_WINDOWS_PER_APP,
   RuntimeHostProtocolError,
+  type BrowserSnapshotElement,
+  type ClientFrame,
 } from '../protocol/index.js';
 
 const invocationIdentity = {
@@ -273,7 +285,7 @@ describe('Native Provider protocol', () => {
           () =>
             frame.kind === 'native.provider.subcall'
               ? decodeHostFrame(missing)
-              : decodeClientFrame(missing),
+              : decodeNativeProviderClientFrame(missing),
           isInvalidFrame,
         );
       }
@@ -291,11 +303,11 @@ describe('Native Provider protocol', () => {
       ordinal: 2,
       bindingId: 'binding-2',
     } as const;
-    assert.deepEqual(decodeClientFrame(rebound), rebound);
+    assert.deepEqual(decodeNativeProviderClientFrame(rebound), rebound);
     assert.notDeepEqual(
-      identityOf(decodeClientFrame(rebound)),
+      identityOf(decodeNativeProviderClientFrame(rebound)),
       identityOf(
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'preflight',
             accessibility: true,
@@ -333,30 +345,31 @@ describe('Native Provider protocol', () => {
     }
   });
 
-  test('decodes acknowledged attachment-scoped Session release with exact identity', () => {
+  test('decodes acknowledged attachment-scoped Turn release with exact identity', () => {
     const identity = {
       hostEpoch: 'epoch-1',
       registrationId: 'registration-1',
       releaseId: 'release-1',
       sessionId: 'session-1',
+      turnId: 'turn-1',
     } as const;
     const release = {
-      kind: 'native.provider.session_release' as const,
+      kind: 'native.provider.turn_release' as const,
       ...identity,
     };
     const acknowledged = {
-      kind: 'native.provider.session_released' as const,
+      kind: 'native.provider.turn_released' as const,
       ...identity,
     };
     assert.deepEqual(decodeHostFrame(release), release);
-    assert.deepEqual(decodeClientFrame(acknowledged), acknowledged);
-    for (const field of ['hostEpoch', 'registrationId', 'releaseId', 'sessionId']) {
+    assert.deepEqual(decodeNativeProviderClientFrame(acknowledged), acknowledged);
+    for (const field of ['hostEpoch', 'registrationId', 'releaseId', 'sessionId', 'turnId']) {
       const invalidRelease = { ...release } as Record<string, unknown>;
       const invalidAcknowledgement = { ...acknowledged } as Record<string, unknown>;
       delete invalidRelease[field];
       delete invalidAcknowledgement[field];
       assert.throws(() => decodeHostFrame(invalidRelease), isInvalidFrame);
-      assert.throws(() => decodeClientFrame(invalidAcknowledgement), isInvalidFrame);
+      assert.throws(() => decodeNativeProviderClientFrame(invalidAcknowledgement), isInvalidFrame);
     }
   });
 
@@ -403,24 +416,349 @@ describe('Native Provider protocol', () => {
     ] as const;
     for (const payload of payloads) {
       const frame = resultFrame(payload);
-      assert.deepEqual(decodeClientFrame(frame), frame);
+      assert.deepEqual(decodeNativeProviderClientFrame(frame), frame);
     }
 
     const failure = {
       kind: 'native.provider.result' as const,
       ...subcallIdentity,
+      capability: 'computer_use' as const,
       ok: false as const,
       error: { code: 'outcome_unknown' as const },
     };
-    assert.deepEqual(decodeClientFrame(failure), failure);
+    assert.deepEqual(decodeNativeProviderClientFrame(failure), failure);
     assert.throws(
       () =>
-        decodeClientFrame({
+        decodeNativeProviderClientFrame({
           ...failure,
           error: { ...failure.error, message: 'raw failure' },
         }),
       isInvalidFrame,
     );
+    assert.throws(
+      () => decodeNativeProviderClientFrame({ ...failure, capability: 'future_capability' }),
+      isInvalidFrame,
+    );
+  });
+
+  test('roundtrips all six closed Browser subcalls and results', () => {
+    const browserContext = {
+      sessionId: context.sessionId,
+      turnId: context.turnId,
+      toolCallId: context.toolCallId,
+    };
+    const subcalls = [
+      { kind: 'navigate', input: { url: 'https://example.com/' }, context: browserContext },
+      { kind: 'snapshot', context: browserContext },
+      {
+        kind: 'click',
+        input: { target: { kind: 'ref', value: '[12]' } },
+        context: browserContext,
+      },
+      {
+        kind: 'type',
+        input: {
+          target: { kind: 'selector', value: '#search' },
+          text: 'query',
+          submit: true,
+        },
+        context: browserContext,
+      },
+      {
+        kind: 'wait',
+        input: { condition: { kind: 'text', value: 'Loaded', timeoutSeconds: 30 } },
+        context: browserContext,
+      },
+      {
+        kind: 'extract',
+        input: { selector: 'main', start: 0, limit: 16_000 },
+        context: browserContext,
+      },
+    ] as const;
+    const results = [
+      {
+        kind: 'navigate',
+        url: 'https://example.com/',
+        title: 'Example',
+        takeoverReloaded: false,
+      },
+      {
+        kind: 'snapshot',
+        url: 'https://example.com/',
+        elements: [{ text: '[1]<a>Home</a>', ref: '[1]' }],
+        totalElements: 3,
+        takeoverReloaded: false,
+      },
+      { kind: 'click', matches: 1, matchLevel: 'exact', takeoverReloaded: false },
+      {
+        kind: 'type',
+        verified: true,
+        actual: 'query',
+        matchLevel: 'exact',
+        takeoverReloaded: false,
+      },
+      { kind: 'wait', takeoverReloaded: true },
+      {
+        kind: 'extract',
+        url: 'https://example.com/',
+        chunk: '# Example',
+        hasMore: false,
+        nextStart: 9,
+        sourceTruncated: false,
+        takeoverReloaded: false,
+      },
+    ] as const;
+
+    for (const subcall of subcalls) {
+      const frame = browserSubcallFrame(subcall);
+      assert.deepEqual(decodeHostFrame(frame), frame);
+    }
+    for (const result of results) {
+      const frame = browserResultFrame(result);
+      assert.deepEqual(decodeNativeProviderClientFrame(frame), frame);
+    }
+  });
+
+  test('enforces Browser character, UTF-8, integer, and wire envelope bounds', () => {
+    assert.equal(NATIVE_PROVIDER_BROWSER_MAX_ADDRESS_INPUT_CHARS, 4_000);
+    assert.equal(NATIVE_PROVIDER_BROWSER_MAX_URL_CHARS, 4_009);
+    assert.equal(NATIVE_PROVIDER_BROWSER_MAX_RESULT_JSON_BYTES, 56 * 1024);
+
+    const browserContext = {
+      sessionId: context.sessionId,
+      turnId: context.turnId,
+      toolCallId: context.toolCallId,
+    };
+    const typeFrame = (text: string) =>
+      browserSubcallFrame({
+        kind: 'type',
+        input: { target: { kind: 'selector', value: '#field' }, text, submit: false },
+        context: browserContext,
+      });
+    const waitTextFrame = (text: string) =>
+      browserSubcallFrame({
+        kind: 'wait',
+        input: { condition: { kind: 'text', value: text, timeoutSeconds: 1 } },
+        context: browserContext,
+      });
+    assert.equal(NATIVE_PROVIDER_BROWSER_MAX_TYPE_TEXT_UTF8_BYTES, 8 * 1024);
+    assert.equal(
+      NATIVE_PROVIDER_BROWSER_MAX_WAIT_TEXT_UTF8_BYTES,
+      NATIVE_PROVIDER_BROWSER_MAX_TYPE_TEXT_UTF8_BYTES,
+    );
+    const exactReviewText = 'a'.repeat(NATIVE_PROVIDER_BROWSER_MAX_TYPE_TEXT_UTF8_BYTES);
+    for (const frame of [typeFrame(exactReviewText), waitTextFrame(exactReviewText)]) {
+      assert.deepEqual(decodeHostFrame(frame), frame);
+    }
+    const oversizedEmojiText = '😀'.repeat(
+      NATIVE_PROVIDER_BROWSER_MAX_TYPE_TEXT_UTF8_BYTES / 4 + 1,
+    );
+    for (const frame of [typeFrame(oversizedEmojiText), waitTextFrame(oversizedEmojiText)]) {
+      assert.throws(() => decodeHostFrame(frame), isInvalidFrame);
+    }
+
+    for (const invalid of [
+      {
+        kind: 'navigate',
+        input: { url: 'x'.repeat(NATIVE_PROVIDER_BROWSER_MAX_URL_CHARS + 1) },
+        context: browserContext,
+      },
+      {
+        kind: 'click',
+        input: { target: { kind: 'selector', value: 'x'.repeat(2_001) } },
+        context: browserContext,
+      },
+      {
+        kind: 'wait',
+        input: {
+          condition: {
+            kind: 'text',
+            value: 'x'.repeat(NATIVE_PROVIDER_BROWSER_MAX_WAIT_TEXT_UTF8_BYTES + 1),
+            timeoutSeconds: 1,
+          },
+        },
+        context: browserContext,
+      },
+      {
+        kind: 'wait',
+        input: { condition: { kind: 'time', seconds: 121 } },
+        context: browserContext,
+      },
+      {
+        kind: 'extract',
+        input: { start: -1, limit: NATIVE_PROVIDER_BROWSER_MAX_EXTRACT_CHARS },
+        context: browserContext,
+      },
+      {
+        kind: 'extract',
+        input: { start: 1.5, limit: NATIVE_PROVIDER_BROWSER_MAX_EXTRACT_CHARS },
+        context: browserContext,
+      },
+      { kind: 'extract', input: { start: 0, limit: 1.5 }, context: browserContext },
+      {
+        kind: 'extract',
+        input: { start: 0, limit: NATIVE_PROVIDER_BROWSER_MAX_EXTRACT_CHARS + 1 },
+        context: browserContext,
+      },
+    ]) {
+      assert.throws(() => decodeHostFrame(browserSubcallFrame(invalid)), isInvalidFrame);
+    }
+
+    const snapshot = (
+      elements: readonly BrowserSnapshotElement[],
+      totalElements = elements.length,
+    ) =>
+      browserResultFrame({
+        kind: 'snapshot',
+        url: '',
+        elements,
+        totalElements,
+        takeoverReloaded: false,
+      });
+    assert.deepEqual(
+      decodeNativeProviderClientFrame(
+        snapshot([{ text: 'x'.repeat(NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_CHARS) }], 201),
+      ),
+      snapshot([{ text: 'x'.repeat(NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_CHARS) }], 201),
+    );
+    for (const totalElements of [0, Number.MAX_SAFE_INTEGER]) {
+      assert.deepEqual(
+        decodeNativeProviderClientFrame(snapshot([], totalElements)),
+        snapshot([], totalElements),
+      );
+    }
+    for (const elements of [
+      Array.from({ length: NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_ELEMENTS + 1 }, () => ({
+        text: 'x',
+      })),
+      [{ text: 'x'.repeat(NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_CHARS + 1) }],
+      [{ text: 'first\nsecond' }],
+      [{ text: '😀'.repeat(NATIVE_PROVIDER_BROWSER_MAX_SNAPSHOT_CHARS) }],
+    ]) {
+      assert.throws(() => decodeNativeProviderClientFrame(snapshot(elements)), isInvalidFrame);
+    }
+    for (const invalid of [
+      snapshot([{ text: 'first' }, { text: 'second' }], 1),
+      snapshot([], -1),
+      snapshot([], 1.5),
+      snapshot([], Number.MAX_SAFE_INTEGER + 1),
+    ]) {
+      assert.throws(() => decodeNativeProviderClientFrame(invalid), isInvalidFrame);
+    }
+
+    assert.deepEqual(
+      decodeNativeProviderClientFrame(
+        snapshot([
+          { text: '  *[7]<button>Save</button>', ref: '[7]' },
+          { text: '  *|scroll[8]|<main />', ref: '[8]' },
+          { text: '[9]<x:control state="ready" />', ref: '[9]' },
+          { text: '<p>Documentation [9]</p>' },
+        ]),
+      ),
+      snapshot([
+        { text: '  *[7]<button>Save</button>', ref: '[7]' },
+        { text: '  *|scroll[8]|<main />', ref: '[8]' },
+        { text: '[9]<x:control state="ready" />', ref: '[9]' },
+        { text: '<p>Documentation [9]</p>' },
+      ]),
+    );
+    for (const elements of [
+      ['[1]<button />'],
+      [{ text: '[1]<button />', ref: '[1]', legacy: true }],
+      [{ text: '' }],
+      [{ text: '<button />', ref: '[1]' }],
+      [{ text: '[2]<button />', ref: '[1]' }],
+      [{ text: '[1] button "Save"', ref: '[1]' }],
+      [{ text: '[01]<button />', ref: '[01]' }],
+      [{ text: '[1]<button />', ref: undefined }],
+      [
+        { text: '[1]<button />', ref: '[1]' },
+        { text: '|scroll[1]|<main />', ref: '[1]' },
+      ],
+    ]) {
+      assert.throws(
+        () =>
+          decodeNativeProviderClientFrame(
+            snapshot(elements as unknown as BrowserSnapshotElement[]),
+          ),
+        isInvalidFrame,
+      );
+    }
+    assert.throws(
+      () =>
+        decodeNativeProviderClientFrame(
+          browserResultFrame({
+            kind: 'extract',
+            url: '',
+            chunk: '\u0000'.repeat(NATIVE_PROVIDER_BROWSER_MAX_EXTRACT_CHARS),
+            hasMore: false,
+            nextStart: 0,
+            sourceTruncated: false,
+            takeoverReloaded: false,
+          }),
+        ),
+      isInvalidFrame,
+    );
+  });
+
+  test('selects the advertised capability decoder before reading a result domain', () => {
+    assert.throws(
+      () =>
+        decodeNativeProviderClientFrame({
+          ...browserResultFrame({ kind: 'preflight', accessibility: true, screenRecording: true }),
+          capability: 'browser',
+        }),
+      isInvalidFrame,
+    );
+    assert.throws(
+      () =>
+        decodeNativeProviderClientFrame({
+          ...resultFrame({ kind: 'navigate', url: '', title: '', takeoverReloaded: false }),
+          capability: 'computer_use',
+        }),
+      isInvalidFrame,
+    );
+  });
+
+  test('keeps Host inbound payload opaque and outbound encoding capability-closed', () => {
+    const mismatched = {
+      ...resultFrame({
+        kind: 'snapshot',
+        url: 'https://example.com/',
+        elements: [{ text: '[1]<a>Home</a>', ref: '[1]' }],
+        totalElements: 1,
+        takeoverReloaded: false,
+      }),
+      capability: 'computer_use' as const,
+    };
+    assert.deepEqual(decodeClientFrame(mismatched), mismatched);
+    assert.throws(() => decodeNativeProviderClientFrame(mismatched), isInvalidFrame);
+    assert.throws(
+      () =>
+        decodeClientFrame({
+          ...mismatched,
+          result: { text: 'x'.repeat(NATIVE_PROVIDER_MAX_INLINE_PAYLOAD_BYTES) },
+        }),
+      isInvalidFrame,
+    );
+
+    const outbound = decodeNativeProviderClientFrame(
+      browserResultFrame({
+        kind: 'snapshot',
+        url: 'https://example.com/',
+        elements: [{ text: '[1]<a>Home</a>', ref: '[1]' }],
+        totalElements: 1,
+        takeoverReloaded: false,
+      }),
+    );
+    const closedOutbound: ClientFrame = outbound;
+    type OutboundResult = Extract<
+      Extract<ClientFrame, { kind: 'native.provider.result' }>,
+      { ok: true }
+    >['result'];
+    const outboundResultIsUnknown: unknown extends OutboundResult ? true : false = false;
+    assert.equal(outboundResultIsUnknown, false);
+    assert.deepEqual(JSON.parse(encodeProtocolFrame(closedOutbound).toString('utf8')), outbound);
   });
 
   test('rejects page identity, element tokens, raw responses, paths, secrets, and evidence text', () => {
@@ -438,7 +776,7 @@ describe('Native Provider protocol', () => {
     for (const sensitive of sensitiveObservationFields) {
       assert.throws(
         () =>
-          decodeClientFrame(
+          decodeNativeProviderClientFrame(
             resultFrame({
               kind: 'observeApp',
               observation: { ...observation, ...sensitive },
@@ -454,7 +792,7 @@ describe('Native Provider protocol', () => {
     ]) {
       assert.throws(
         () =>
-          decodeClientFrame(
+          decodeNativeProviderClientFrame(
             resultFrame({
               kind: 'observeApp',
               observation: {
@@ -474,7 +812,7 @@ describe('Native Provider protocol', () => {
       { ok: true, tier: 'ax', rawResponse: {} },
     ]) {
       assert.throws(
-        () => decodeClientFrame(resultFrame({ kind: 'run', result: { outcome } })),
+        () => decodeNativeProviderClientFrame(resultFrame({ kind: 'run', result: { outcome } })),
         isInvalidFrame,
       );
     }
@@ -528,7 +866,7 @@ describe('Native Provider protocol', () => {
     const app = { appId: 'app', pid: 1, windowCount: 0 };
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'listApps',
             apps: Array.from({ length: NATIVE_PROVIDER_MAX_APPS + 1 }, () => app),
@@ -549,10 +887,13 @@ describe('Native Provider protocol', () => {
         },
       ],
     });
-    assert.deepEqual(decodeClientFrame(maximumDeclaredWindows), maximumDeclaredWindows);
+    assert.deepEqual(
+      decodeNativeProviderClientFrame(maximumDeclaredWindows),
+      maximumDeclaredWindows,
+    );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'listApps',
             apps: [
@@ -572,7 +913,7 @@ describe('Native Provider protocol', () => {
     );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'listApps',
             apps: [
@@ -585,7 +926,7 @@ describe('Native Provider protocol', () => {
     );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'listApps',
             apps: [
@@ -601,7 +942,7 @@ describe('Native Provider protocol', () => {
     );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'observeApp',
             observation: {
@@ -617,7 +958,7 @@ describe('Native Provider protocol', () => {
     );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'observeApp',
             observation: {
@@ -633,7 +974,7 @@ describe('Native Provider protocol', () => {
     );
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'observeApp',
             observation: {
@@ -690,17 +1031,17 @@ describe('Native Provider protocol', () => {
     const oversized = Buffer.alloc(NATIVE_PROVIDER_ATTACHMENT_CHUNK_BYTES + 1, 0xa5).toString(
       'base64',
     );
-    assert.deepEqual(decodeClientFrame(chunkFrame(maximum)), chunkFrame(maximum));
-    assert.throws(() => decodeClientFrame(chunkFrame(oversized)), isInvalidFrame);
+    assert.deepEqual(decodeNativeProviderClientFrame(chunkFrame(maximum)), chunkFrame(maximum));
+    assert.throws(() => decodeNativeProviderClientFrame(chunkFrame(oversized)), isInvalidFrame);
 
     const capture = resultFrame({
       kind: 'captureObservation',
       observation: { ...observation, screenshot },
     });
-    assert.deepEqual(decodeClientFrame(capture), capture);
+    assert.deepEqual(decodeNativeProviderClientFrame(capture), capture);
     assert.throws(
       () =>
-        decodeClientFrame({
+        decodeNativeProviderClientFrame({
           ...capture,
           result: {
             ...capture.result,
@@ -721,7 +1062,7 @@ describe('Native Provider protocol', () => {
 
     assert.throws(
       () =>
-        decodeClientFrame(
+        decodeNativeProviderClientFrame(
           resultFrame({
             kind: 'run',
             result: {
@@ -765,13 +1106,34 @@ function resultFrame<T>(result: T): {
   subcallId: string;
   ordinal: number;
   bindingId: string;
+  capability: 'computer_use';
   ok: true;
   result: T;
 } {
   return {
     kind: 'native.provider.result',
     ...subcallIdentity,
+    capability: 'computer_use',
     ok: true,
+    result,
+  };
+}
+
+function browserSubcallFrame<T>(subcall: T) {
+  return {
+    kind: 'native.provider.subcall' as const,
+    ...subcallIdentity,
+    capability: 'browser' as const,
+    subcall,
+  };
+}
+
+function browserResultFrame<T>(result: T) {
+  return {
+    kind: 'native.provider.result' as const,
+    ...subcallIdentity,
+    capability: 'browser' as const,
+    ok: true as const,
     result,
   };
 }

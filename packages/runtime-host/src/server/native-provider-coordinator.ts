@@ -3,11 +3,12 @@ import type {
   NativeProviderAttachmentRef,
   NativeProviderCapability,
   NativeProviderChunkFrame,
-  NativeProviderClientFrame,
+  NativeProviderClientEnvelopeFrame,
   NativeProviderHostFrame,
-  NativeProviderResultFrame,
+  NativeProviderResultEnvelopeFrame,
   NativeProviderResultPayload,
-  NativeProviderSessionReleasedFrame,
+  NativeProviderComputerUseResultPayload,
+  NativeProviderTurnReleasedFrame,
   NativeProviderSubcall,
   OperationInput,
   OperationKey,
@@ -15,7 +16,9 @@ import type {
 } from '../protocol/index.js';
 import {
   decodeNativeProviderHostFrame,
-  nativeProviderResultAttachmentRefs,
+  decodeNativeProviderBrowserResultPayload,
+  decodeNativeProviderComputerUseResultPayload,
+  nativeProviderComputerUseResultAttachmentRefs,
   NATIVE_PROVIDER_ATTACHMENT_CHUNK_BYTES,
   NATIVE_PROVIDER_MAX_ATTACHMENT_BYTES,
   NATIVE_PROVIDER_MAX_ATTACHMENTS_PER_RESULT,
@@ -98,7 +101,7 @@ export interface NativeProviderFrameSink {
 }
 
 export interface NativeProviderConnectionAttachment {
-  accept(frame: NativeProviderClientFrame): void;
+  accept(frame: NativeProviderClientEnvelopeFrame): void;
   close(): void;
 }
 
@@ -107,10 +110,12 @@ export interface HostNativeProviderService {
   acquireInvocation(input: {
     readonly operationId: string;
     readonly sessionId: string;
+    readonly turnId: string;
+    readonly toolCallId: string;
     readonly capability: NativeProviderCapability;
     readonly affinity?: HostNativeProviderAffinity;
   }): HostNativeProviderInvocationAcquisition;
-  releaseSession(sessionId: string): Promise<void>;
+  releaseTurnState(input: { readonly sessionId: string; readonly turnId: string }): Promise<void>;
   attachConnection(
     connectionId: string,
     sink: NativeProviderFrameSink,
@@ -131,7 +136,7 @@ interface RegistrationState {
   readonly connection: ConnectionState;
   readonly capabilities: ReadonlySet<NativeProviderCapability>;
   readonly invocations: Set<InvocationState>;
-  readonly ownedSessions: Set<string>;
+  readonly ownedTurns: Set<string>;
   active: boolean;
   resolveDrained: (() => void) | undefined;
   drained: Promise<void> | undefined;
@@ -170,6 +175,8 @@ interface ActiveSubcall {
 interface InvocationState {
   readonly operationId: string;
   readonly sessionId: string;
+  readonly turnId: string;
+  readonly toolCallId: string;
   readonly binding: Readonly<FrozenBinding>;
   readonly registration: RegistrationState;
   readonly connection: ConnectionState;
@@ -182,12 +189,13 @@ interface InvocationState {
   providerStateOwned: boolean;
 }
 
-interface SessionReleaseWaiter {
+interface TurnReleaseWaiter {
   readonly hostEpoch: string;
   readonly registration: RegistrationState;
   readonly registrationId: string;
   readonly releaseId: string;
   readonly sessionId: string;
+  readonly turnId: string;
   readonly resolve: () => void;
   readonly promise: Promise<void>;
   timer: NodeJS.Timeout | undefined;
@@ -200,8 +208,8 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
   readonly #connections = new Map<string, ConnectionState>();
   readonly #registrations = new Map<string, RegistrationState>();
   readonly #invocations = new Map<string, InvocationState>();
-  readonly #sessionFences = new Set<string>();
-  readonly #releaseWaiters = new Map<string, SessionReleaseWaiter>();
+  readonly #turnFences = new Set<string>();
+  readonly #releaseWaiters = new Map<string, TurnReleaseWaiter>();
   readonly #releaseTimeoutMs: number;
   #admissionOpen = true;
   #closing = false;
@@ -255,6 +263,8 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
   acquireInvocation(input: {
     readonly operationId: string;
     readonly sessionId: string;
+    readonly turnId: string;
+    readonly toolCallId: string;
     readonly capability: NativeProviderCapability;
     readonly affinity?: HostNativeProviderAffinity;
   }): HostNativeProviderInvocationAcquisition {
@@ -264,10 +274,10 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
         'Native Provider invocation admission is closed',
       );
     }
-    if (this.#sessionFences.has(input.sessionId)) {
+    if (this.#turnFences.has(turnStateKey(input.sessionId, input.turnId))) {
       return acquisitionFailure(
         'capability_unavailable',
-        'Native Provider Session state is being released',
+        'Native Provider Turn state is being released',
       );
     }
     if (this.#invocations.has(input.operationId)) {
@@ -327,6 +337,8 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     const invocation: InvocationState = {
       operationId: input.operationId,
       sessionId: input.sessionId,
+      turnId: input.turnId,
+      toolCallId: input.toolCallId,
       binding,
       registration,
       connection: registration.connection,
@@ -356,28 +368,30 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     return { ok: true, invocation: facade };
   }
 
-  async releaseSession(sessionId: string): Promise<void> {
-    if (this.#sessionFences.has(sessionId)) {
-      throw new Error(`Native Provider Session release is already in flight: ${sessionId}`);
+  async releaseTurnState(input: {
+    readonly sessionId: string;
+    readonly turnId: string;
+  }): Promise<void> {
+    const stateKey = turnStateKey(input.sessionId, input.turnId);
+    if (this.#turnFences.has(stateKey)) {
+      throw new Error(`Native Provider Turn release is already in flight: ${input.turnId}`);
     }
-    this.#sessionFences.add(sessionId);
+    this.#turnFences.add(stateKey);
     try {
       if (
-        [...this.#invocations.values()].some((invocation) => invocation.sessionId === sessionId)
+        [...this.#invocations.values()].some(
+          (invocation) =>
+            invocation.sessionId === input.sessionId && invocation.turnId === input.turnId,
+        )
       ) {
-        throw new Error(`Native Provider Session still has an invocation: ${sessionId}`);
+        throw new Error(`Native Provider Turn still has an invocation: ${input.turnId}`);
       }
       const owners = [...this.#registrations.values()].filter(
-        (registration) =>
-          registration.active &&
-          registration.connection.attached &&
-          registration.ownedSessions.has(sessionId),
+        (registration) => registration.connection.attached && registration.ownedTurns.has(stateKey),
       );
-      await Promise.all(
-        owners.map((registration) => this.#releaseOwnedSession(registration, sessionId)),
-      );
+      await Promise.all(owners.map((registration) => this.#releaseOwnedTurn(registration, input)));
     } finally {
-      this.#sessionFences.delete(sessionId);
+      this.#turnFences.delete(stateKey);
     }
   }
 
@@ -407,14 +421,20 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
         subcallFailure('capability_lost', 'Native Provider invocation has been released'),
       );
     }
-    if (input.subcall.context.sessionId !== invocation.sessionId) {
+    const context = input.subcall.context;
+    if (
+      context.sessionId !== invocation.sessionId ||
+      context.turnId !== invocation.turnId ||
+      context.toolCallId !== invocation.toolCallId
+    ) {
       return Promise.resolve(
         subcallFailure(
           'operation_failed',
-          'Native Provider subcall Session does not match its acquired invocation',
+          'Native Provider subcall identity does not match its acquired invocation',
         ),
       );
     }
+    const stateKey = turnStateKey(invocation.sessionId, invocation.turnId);
     if (invocation.active) {
       return Promise.resolve(
         subcallFailure('operation_failed', 'Native Provider subcalls must be strictly serial'),
@@ -473,13 +493,9 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
         const receipt = invocation.connection.sink.enqueue(frame);
         active.admitted = true;
         active.enqueueInProgress = false;
-        if (
-          !invocation.providerStateOwned &&
-          invocation.registration.active &&
-          invocation.connection.attached
-        ) {
+        if (!invocation.providerStateOwned && invocation.connection.attached) {
           invocation.providerStateOwned = true;
-          invocation.registration.ownedSessions.add(invocation.sessionId);
+          invocation.registration.ownedTurns.add(stateKey);
         }
         void receipt.flushed.catch(() => this.#closeConnection(invocation.connection));
       } catch {
@@ -592,7 +608,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
       connection,
       capabilities: new Set(input.capabilities),
       invocations: new Set(),
-      ownedSessions: new Set(),
+      ownedTurns: new Set(),
       active: true,
       resolveDrained: undefined,
       drained: undefined,
@@ -610,7 +626,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     connectionId: string,
   ): Promise<OperationOutcome<'native.provider.unregister'>> {
     const registration = this.#registrations.get(input.registrationId);
-    if (!registration?.active || registration.connection.connectionId !== connectionId) {
+    if (!registration || registration.connection.connectionId !== connectionId) {
       return {
         ok: false,
         error: {
@@ -621,15 +637,16 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     }
     this.#deactivateRegistration(registration);
     await this.#registrationDrain(registration);
+    this.#removeRegistration(registration);
     return {
       ok: true,
       result: { registrationId: input.registrationId },
     } as OperationOutcome<'native.provider.unregister'>;
   }
 
-  #accept(connection: ConnectionState, frame: NativeProviderClientFrame): void {
-    if (frame.kind === 'native.provider.session_released') {
-      this.#acceptSessionReleased(connection, frame);
+  #accept(connection: ConnectionState, frame: NativeProviderClientEnvelopeFrame): void {
+    if (frame.kind === 'native.provider.turn_released') {
+      this.#acceptTurnReleased(connection, frame);
       return;
     }
     const invocation = this.#invocations.get(frame.operationId);
@@ -641,6 +658,8 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
       invocation.connection !== connection ||
       frame.hostEpoch !== invocation.binding.hostEpoch ||
       frame.bindingId !== invocation.binding.bindingId ||
+      (frame.kind === 'native.provider.result' &&
+        frame.capability !== invocation.binding.capability) ||
       frame.subcallId !== active.subcallId ||
       frame.ordinal !== active.ordinal
     ) {
@@ -654,23 +673,22 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     this.#acceptResult(connection, invocation, active, frame);
   }
 
-  #acceptSessionReleased(
-    connection: ConnectionState,
-    frame: NativeProviderSessionReleasedFrame,
-  ): void {
+  #acceptTurnReleased(connection: ConnectionState, frame: NativeProviderTurnReleasedFrame): void {
     const waiter = this.#releaseWaiters.get(frame.releaseId);
     if (
       !waiter ||
       waiter.registration.connection !== connection ||
       frame.hostEpoch !== waiter.hostEpoch ||
       frame.registrationId !== waiter.registrationId ||
-      frame.sessionId !== waiter.sessionId
+      frame.sessionId !== waiter.sessionId ||
+      frame.turnId !== waiter.turnId
     ) {
       this.#violate(connection);
       return;
     }
-    waiter.registration.ownedSessions.delete(waiter.sessionId);
+    waiter.registration.ownedTurns.delete(turnStateKey(waiter.sessionId, waiter.turnId));
     this.#settleReleaseWaiter(waiter);
+    this.#settleRegistrationDrain(waiter.registration);
   }
 
   #acceptChunk(
@@ -709,7 +727,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     connection: ConnectionState,
     invocation: InvocationState,
     active: ActiveSubcall,
-    frame: NativeProviderResultFrame,
+    frame: NativeProviderResultEnvelopeFrame,
   ): void {
     if (!frame.ok) {
       if (active.attachments.size !== 0) {
@@ -725,11 +743,25 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
       });
       return;
     }
-    if (frame.result.kind !== active.subcall.kind) {
+    let result: NativeProviderResultPayload;
+    let refs: readonly NativeProviderAttachmentRef[];
+    switch (invocation.binding.capability) {
+      case 'computer_use': {
+        result = decodeNativeProviderComputerUseResultPayload(frame.result);
+        refs = nativeProviderComputerUseResultAttachmentRefs(
+          result as NativeProviderComputerUseResultPayload,
+        );
+        break;
+      }
+      case 'browser':
+        result = decodeNativeProviderBrowserResultPayload(frame.result);
+        refs = [];
+        break;
+    }
+    if (result.kind !== active.subcall.kind) {
       this.#violate(connection);
       return;
     }
-    const refs = nativeProviderResultAttachmentRefs(frame.result);
     if (refs.length > NATIVE_PROVIDER_MAX_ATTACHMENTS_PER_RESULT) {
       this.#violate(connection);
       return;
@@ -761,7 +793,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     }
     this.#finishSubcall(invocation, active, {
       ok: true,
-      result: frame.result,
+      result,
       attachments,
     });
   }
@@ -781,32 +813,37 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     if (invocation.releaseRequested) this.#releaseInvocation(invocation, true);
   }
 
-  #releaseOwnedSession(registration: RegistrationState, sessionId: string): Promise<void> {
-    if (!registration.active || !registration.connection.attached) {
+  #releaseOwnedTurn(
+    registration: RegistrationState,
+    identity: { readonly sessionId: string; readonly turnId: string },
+  ): Promise<void> {
+    if (!registration.connection.attached) {
       return Promise.resolve();
     }
     const releaseId = randomUUID();
-    let resolve!: SessionReleaseWaiter['resolve'];
+    let resolve!: TurnReleaseWaiter['resolve'];
     const promise = new Promise<void>((settle) => {
       resolve = settle;
     });
-    const waiter: SessionReleaseWaiter = {
+    const waiter: TurnReleaseWaiter = {
       hostEpoch: this.#hostEpoch,
       registration,
       registrationId: registration.registrationId,
       releaseId,
-      sessionId,
+      sessionId: identity.sessionId,
+      turnId: identity.turnId,
       resolve,
       promise,
       timer: undefined,
     };
     this.#releaseWaiters.set(releaseId, waiter);
     const frame = decodeNativeProviderHostFrame({
-      kind: 'native.provider.session_release',
+      kind: 'native.provider.turn_release',
       hostEpoch: this.#hostEpoch,
       registrationId: registration.registrationId,
       releaseId,
-      sessionId,
+      sessionId: identity.sessionId,
+      turnId: identity.turnId,
     });
     try {
       const receipt = registration.connection.sink.enqueue(frame);
@@ -822,7 +859,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     return promise;
   }
 
-  #settleReleaseWaiter(waiter: SessionReleaseWaiter): void {
+  #settleReleaseWaiter(waiter: TurnReleaseWaiter): void {
     if (this.#releaseWaiters.get(waiter.releaseId) !== waiter) return;
     this.#releaseWaiters.delete(waiter.releaseId);
     if (waiter.timer) clearTimeout(waiter.timer);
@@ -836,7 +873,15 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
     this.#connections.delete(connection.connectionId);
     for (const registrationId of [...connection.registrationIds]) {
       const registration = this.#registrations.get(registrationId);
-      if (registration) this.#deactivateRegistration(registration);
+      if (registration) {
+        this.#deactivateRegistration(registration);
+        this.#removeRegistration(registration);
+        registration.ownedTurns.clear();
+        for (const waiter of [...this.#releaseWaiters.values()]) {
+          if (waiter.registration === registration) this.#settleReleaseWaiter(waiter);
+        }
+        this.#settleRegistrationDrain(registration);
+      }
     }
     for (const invocation of [...this.#invocations.values()]) {
       if (invocation.connection !== connection) continue;
@@ -862,19 +907,17 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
   #deactivateRegistration(registration: RegistrationState): void {
     if (!registration.active) return;
     registration.active = false;
+  }
+
+  #removeRegistration(registration: RegistrationState): void {
     this.#registrations.delete(registration.registrationId);
     registration.connection.registrationIds.delete(registration.registrationId);
-    registration.ownedSessions.clear();
-    for (const waiter of [...this.#releaseWaiters.values()]) {
-      if (waiter.registration === registration) {
-        this.#settleReleaseWaiter(waiter);
-      }
-    }
-    this.#settleRegistrationDrain(registration);
   }
 
   #registrationDrain(registration: RegistrationState): Promise<void> {
-    if (registration.invocations.size === 0) return Promise.resolve();
+    if (registration.invocations.size === 0 && registration.ownedTurns.size === 0) {
+      return Promise.resolve();
+    }
     if (!registration.drained) {
       registration.drained = new Promise<void>((resolve) => {
         registration.resolveDrained = resolve;
@@ -884,7 +927,7 @@ export class HostNativeProviderCoordinator implements HostNativeProviderService 
   }
 
   #settleRegistrationDrain(registration: RegistrationState): void {
-    if (registration.invocations.size !== 0) return;
+    if (registration.invocations.size !== 0 || registration.ownedTurns.size !== 0) return;
     registration.resolveDrained?.();
     registration.resolveDrained = undefined;
   }
@@ -958,4 +1001,8 @@ function subcallFailure(
   message: string,
 ): Extract<HostNativeProviderSubcallOutcome, { ok: false }> {
   return { ok: false, error: { code, message } };
+}
+
+function turnStateKey(sessionId: string, turnId: string): string {
+  return `${sessionId}\u0000${turnId}`;
 }

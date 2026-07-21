@@ -168,6 +168,8 @@ test('adapts all six backend methods through one frozen Host invocation', async 
     {
       operationId: 'operation-1',
       sessionId: 'session-1',
+      turnId: 'turn-1',
+      toolCallId: 'tool-1',
       capability: 'computer_use',
       affinity: 'provider-generation-7',
     },

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import {
+  decodeClientFrame,
   NATIVE_PROVIDER_MAX_PENDING_INVOCATIONS,
   type NativeProviderClientFrame,
+  type NativeProviderComputerUseResultPayload,
   type NativeProviderHostFrame,
   type NativeProviderResultPayload,
-  type NativeProviderSessionReleaseFrame,
+  type NativeProviderTurnReleaseFrame,
   type NativeProviderSubcallFrame,
 } from '../protocol/index.js';
 import {
@@ -28,12 +30,17 @@ test('acquisition freezes one registration and affinity cannot migrate', async (
   const first = attach(coordinator, 'first');
   const second = attach(coordinator, 'second');
   const firstRegistration = await register(coordinator, 'first');
-  const invocation = acquire(coordinator, 'operation', firstRegistration);
+  const invocation = acquire(coordinator, 'operation', {
+    affinity: firstRegistration,
+    toolCallId: 'frozen',
+  });
   await register(coordinator, 'second');
 
   const ambiguous = coordinator.acquireInvocation({
     operationId: 'ambiguous',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'ambiguous',
     capability: 'computer_use',
   });
   assert.equal(ambiguous.ok, false);
@@ -54,6 +61,17 @@ test('acquisition freezes one registration and affinity cannot migrate', async (
   );
   assert.equal((await pending).ok, true);
   invocation.release();
+  const releaseTask = coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
+  const release = requireTurnRelease(first.sent.at(-1));
+  first.attachment.accept({
+    kind: 'native.provider.turn_released',
+    hostEpoch: release.hostEpoch,
+    registrationId: release.registrationId,
+    releaseId: release.releaseId,
+    sessionId: release.sessionId,
+    turnId: release.turnId,
+  });
+  await releaseTask;
 
   const unregister = await coordinator.handlers['native.provider.unregister'](
     { registrationId: firstRegistration },
@@ -63,6 +81,8 @@ test('acquisition freezes one registration and affinity cannot migrate', async (
   const mismatch = coordinator.acquireInvocation({
     operationId: 'must-not-migrate',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'must-not-migrate',
     capability: 'computer_use',
     affinity: firstRegistration,
   });
@@ -81,12 +101,12 @@ test('subcalls are serial and successful admissions receive increasing ordinals'
   const invocation = acquire(coordinator, 'serial');
 
   const firstPending = invocation.call({
-    subcall: preflight('first'),
+    subcall: preflight('serial'),
     signal: signal(),
   });
   const first = requireSubcall(provider.sent[0]);
   const concurrent = await invocation.call({
-    subcall: preflight('concurrent'),
+    subcall: preflight('serial'),
     signal: signal(),
   });
   assert.equal(concurrent.ok, false);
@@ -96,7 +116,7 @@ test('subcalls are serial and successful admissions receive increasing ordinals'
   assert.equal((await firstPending).ok, true);
 
   const secondPending = invocation.call({
-    subcall: preflight('second'),
+    subcall: preflight('serial'),
     signal: signal(),
   });
   const second = requireSubcall(provider.sent[1]);
@@ -111,7 +131,7 @@ test('subcalls are serial and successful admissions receive increasing ordinals'
   await coordinator.close();
 });
 
-test('rejects a subcall whose Session differs from its acquired outer identity', async () => {
+test('rejects Session, Turn, and Tool Call mismatch before admission or ordinal growth', async () => {
   const coordinator = createCoordinator();
   const provider = attach(coordinator, 'provider');
   await register(coordinator, 'provider');
@@ -129,11 +149,93 @@ test('rejects a subcall whose Session differs from its acquired outer identity',
   if (!outcome.ok) assert.equal(outcome.error.code, 'operation_failed');
   assert.deepEqual(provider.sent, []);
 
+  const admitted = invocation.call({ subcall, signal: signal() });
+  const first = requireSubcall(provider.sent[0]);
+  provider.attachment.accept(success(first, preflightResult()));
+  await admitted;
+  for (const context of [
+    { ...subcall.context, turnId: 'different-turn' },
+    { ...subcall.context, toolCallId: 'different-tool-call' },
+  ]) {
+    const mismatch = await invocation.call({
+      subcall: { ...subcall, context },
+      signal: signal(),
+    });
+    assert.equal(mismatch.ok, false);
+    if (!mismatch.ok) assert.equal(mismatch.error.code, 'operation_failed');
+    assert.equal(provider.sent.length, 1);
+  }
+  const next = invocation.call({ subcall, signal: signal() });
+  const second = requireSubcall(provider.sent[1]);
+  assert.equal(second.ordinal, 2);
+  provider.attachment.accept(success(second, preflightResult()));
+  await next;
+
   invocation.release();
-  await coordinator.releaseSession('session');
-  await coordinator.releaseSession('different-session');
-  assert.deepEqual(provider.sent, []);
   provider.attachment.close();
+  await coordinator.close();
+});
+
+test('Turn release cannot pass an acquired invocation before its first subcall', async () => {
+  const coordinator = createCoordinator();
+  const provider = attach(coordinator, 'provider');
+  await register(coordinator, 'provider');
+  const invocation = acquire(coordinator, 'acquired-before-call');
+
+  await assert.rejects(
+    coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' }),
+    /Turn still has an invocation/,
+  );
+  assert.equal(
+    provider.sent.some((frame) => frame.kind === 'native.provider.turn_release'),
+    false,
+  );
+
+  invocation.release();
+  await coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
+  provider.attachment.close();
+  await coordinator.close();
+});
+
+test('wire envelope checks frozen capability before decoding a result domain', async () => {
+  const coordinator = createCoordinator();
+  const provider = attach(coordinator, 'provider');
+  await registerCapability(coordinator, 'provider', 'browser');
+  const acquisition = coordinator.acquireInvocation({
+    operationId: 'capability-mismatch',
+    sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'capability-mismatch',
+    capability: 'browser',
+  });
+  if (!acquisition.ok) assert.fail(acquisition.message);
+  const invocation = acquisition.invocation;
+  const pending = invocation.call({
+    subcall: {
+      kind: 'snapshot',
+      context: { sessionId: 'session', turnId: 'turn', toolCallId: 'capability-mismatch' },
+    },
+    signal: signal(),
+  });
+  const subcall = requireSubcall(provider.sent[0]);
+  provider.attachment.accept(
+    decodeProviderInbound({
+      kind: 'native.provider.result',
+      ...identity(subcall),
+      capability: 'computer_use',
+      ok: true,
+      result: {
+        kind: 'snapshot',
+        url: 'https://example.com/',
+        elements: [{ text: '[1]<a>Home</a>', ref: '[1]' }],
+        takeoverReloaded: false,
+      },
+    }),
+  );
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.error.code, 'outcome_unknown');
+  assert.equal(provider.isClosed(), true);
   await coordinator.close();
 });
 
@@ -164,8 +266,12 @@ test('abort after admission sends cancel and waits for provider terminal', async
   await coordinator.close();
 });
 
-test('unregister leaves selection immediately but acknowledges after invocation release', async () => {
-  const coordinator = createCoordinator();
+test('concurrent unregister waits for invocation drain and the real Turn cleanup ack', async () => {
+  let residencies = 0;
+  const coordinator = new HostNativeProviderCoordinator('host-epoch', () => {
+    residencies += 1;
+    return { release: () => (residencies -= 1) };
+  });
   const provider = attach(coordinator, 'provider');
   const registrationId = await register(coordinator, 'provider');
   const invocation = acquire(coordinator, 'held');
@@ -176,26 +282,97 @@ test('unregister leaves selection immediately but acknowledges after invocation 
   const subcall = requireSubcall(provider.sent[0]);
   provider.attachment.accept(success(subcall, preflightResult()));
   await pending;
-  let acknowledged = false;
+  let firstAcknowledged = false;
+  let duplicateAcknowledged = false;
 
   const unregister = coordinator.handlers['native.provider.unregister'](
     { registrationId },
     { ...CONTEXT, connectionId: 'provider' },
-  ).finally(() => (acknowledged = true));
+  ).finally(() => (firstAcknowledged = true));
+  const duplicate = coordinator.handlers['native.provider.unregister'](
+    { registrationId },
+    { ...CONTEXT, connectionId: 'provider' },
+  ).finally(() => (duplicateAcknowledged = true));
   await turn();
-  assert.equal(acknowledged, false);
+  assert.equal(firstAcknowledged, false);
+  assert.equal(duplicateAcknowledged, false);
   const unavailable = coordinator.acquireInvocation({
     operationId: 'new',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'new',
     capability: 'computer_use',
   });
   assert.equal(unavailable.ok, false);
   if (!unavailable.ok) assert.equal(unavailable.error, 'capability_unavailable');
 
   invocation.release();
-  assert.equal((await unregister).ok, true);
+  assert.equal(residencies, 0);
   assert.equal(provider.sent.at(-1)?.kind, 'native.provider.release');
+  let cleanupCompleted = false;
+  const cleanup = coordinator
+    .releaseTurnState({ sessionId: 'session', turnId: 'turn' })
+    .finally(() => (cleanupCompleted = true));
+  const release = requireTurnRelease(provider.sent.at(-1));
+  await turn();
+  assert.equal(firstAcknowledged, false);
+  assert.equal(duplicateAcknowledged, false);
+  assert.equal(cleanupCompleted, false);
+
+  provider.attachment.accept({
+    kind: 'native.provider.turn_released',
+    hostEpoch: release.hostEpoch,
+    registrationId: release.registrationId,
+    releaseId: release.releaseId,
+    sessionId: release.sessionId,
+    turnId: release.turnId,
+  });
+  const [firstOutcome, duplicateOutcome] = await Promise.all([unregister, duplicate, cleanup]);
+  assert.equal(firstOutcome.ok, true);
+  assert.equal(duplicateOutcome.ok, true);
+  assert.equal(cleanupCompleted, true);
+  assert.equal(provider.isClosed(), false);
+
+  const afterDrain = await coordinator.handlers['native.provider.unregister'](
+    { registrationId },
+    { ...CONTEXT, connectionId: 'provider' },
+  );
+  assert.equal(afterDrain.ok, false);
+  if (!afterDrain.ok) assert.equal(afterDrain.error.code, 'not_found');
   provider.attachment.close();
+  await coordinator.close();
+});
+
+test('connection eviction is the ack-free escape from an unregister Turn drain', async () => {
+  let residencies = 0;
+  const coordinator = new HostNativeProviderCoordinator('host-epoch', () => {
+    residencies += 1;
+    return { release: () => (residencies -= 1) };
+  });
+  const provider = attach(coordinator, 'provider');
+  const registrationId = await register(coordinator, 'provider');
+  const invocation = acquire(coordinator, 'evicted-unregister');
+  const pending = invocation.call({
+    subcall: preflight('evicted-unregister'),
+    signal: signal(),
+  });
+  const subcall = requireSubcall(provider.sent[0]);
+  provider.attachment.accept(success(subcall, preflightResult()));
+  await pending;
+
+  let acknowledged = false;
+  const unregister = coordinator.handlers['native.provider.unregister'](
+    { registrationId },
+    { ...CONTEXT, connectionId: 'provider' },
+  ).finally(() => (acknowledged = true));
+  invocation.release();
+  await turn();
+  assert.equal(acknowledged, false);
+  assert.equal(residencies, 0);
+
+  provider.attachment.close();
+  assert.equal((await unregister).ok, true);
+  assert.equal(acknowledged, true);
   await coordinator.close();
 });
 
@@ -203,12 +380,14 @@ test('host drain rejects new work while an admitted invocation may keep calling'
   const coordinator = createCoordinator();
   const provider = attach(coordinator, 'provider');
   await register(coordinator, 'provider');
-  const invocation = acquire(coordinator, 'during-drain');
+  const invocation = acquire(coordinator, 'during-drain', { toolCallId: 'existing' });
   coordinator.beginDrain();
 
   const rejected = coordinator.acquireInvocation({
     operationId: 'after-drain',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'after-drain',
     capability: 'computer_use',
   });
   assert.equal(rejected.ok, false);
@@ -240,7 +419,7 @@ test('disconnect makes an admitted subcall unknown and future calls lost without
   const first = attach(coordinator, 'first');
   const second = attach(coordinator, 'second');
   const affinity = await register(coordinator, 'first');
-  const invocation = acquire(coordinator, 'disconnect', affinity);
+  const invocation = acquire(coordinator, 'disconnect', { affinity });
   await register(coordinator, 'second');
   const pending = invocation.call({
     subcall: preflight('disconnect'),
@@ -271,7 +450,7 @@ test('enqueue throw is capability_lost but a post-admission disconnect is outcom
     throw new Error('closed writer');
   });
   await register(before, 'throwing');
-  const notAdmitted = acquire(before, 'not-admitted');
+  const notAdmitted = acquire(before, 'not-admitted', { toolCallId: 'lost' });
   const lost = await notAdmitted.call({
     subcall: preflight('lost'),
     signal: signal(),
@@ -292,7 +471,7 @@ test('enqueue throw is capability_lost but a post-admission disconnect is outcom
     close() {},
   });
   await register(after, 'reentrant');
-  const admitted = acquire(after, 'admitted');
+  const admitted = acquire(after, 'admitted', { toolCallId: 'unknown' });
   const unknown = await admitted.call({
     subcall: preflight('unknown'),
     signal: signal(),
@@ -314,7 +493,7 @@ test('attachment bytes are ordered and hash-checked before exposure', async () =
   const bytes = Buffer.from('verified-native-screenshot');
 
   const validPending = invocation.call({
-    subcall: capture('valid'),
+    subcall: capture('attachments'),
     signal: signal(),
   });
   const valid = requireSubcall(provider.sent[0]);
@@ -326,7 +505,7 @@ test('attachment bytes are ordered and hash-checked before exposure', async () =
   if (validOutcome.ok) assert.deepEqual(validOutcome.attachments[0]?.bytes, bytes);
 
   const invalidPending = invocation.call({
-    subcall: capture('invalid'),
+    subcall: capture('attachments'),
     signal: signal(),
   });
   const invalid = requireSubcall(provider.sent[1]);
@@ -355,6 +534,8 @@ test('invocation limit, release idempotence, and close all preserve residency ac
   const overflow = coordinator.acquireInvocation({
     operationId: 'overflow',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'overflow',
     capability: 'computer_use',
   });
   assert.equal(overflow.ok, false);
@@ -372,7 +553,7 @@ test('invocation limit, release idempotence, and close all preserve residency ac
   assert.equal(residencies, 0);
 });
 
-test('acknowledged Session release fences acquisition and forgets only the actual owner', async () => {
+test('acknowledged Turn release fences acquisition and forgets only the actual owner', async () => {
   const coordinator = createCoordinator();
   const provider = attach(coordinator, 'provider');
   await register(coordinator, 'provider');
@@ -386,35 +567,39 @@ test('acknowledged Session release fences acquisition and forgets only the actua
   await pending;
   invocation.release();
 
-  const releaseTask = coordinator.releaseSession('session');
-  const release = requireSessionRelease(provider.sent.at(-1));
+  const releaseTask = coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
+  const release = requireTurnRelease(provider.sent.at(-1));
   const fenced = coordinator.acquireInvocation({
     operationId: 'fenced',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'fenced',
     capability: 'computer_use',
   });
   assert.equal(fenced.ok, false);
+  if (!fenced.ok) assert.equal(fenced.error, 'capability_unavailable');
   provider.attachment.accept({
-    kind: 'native.provider.session_released',
+    kind: 'native.provider.turn_released',
     hostEpoch: release.hostEpoch,
     registrationId: release.registrationId,
     releaseId: release.releaseId,
     sessionId: release.sessionId,
+    turnId: release.turnId,
   });
   await releaseTask;
 
   const reopened = acquire(coordinator, 'reopened');
   reopened.release();
-  await coordinator.releaseSession('session');
+  await coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
   assert.equal(
-    provider.sent.filter((frame) => frame.kind === 'native.provider.session_release').length,
+    provider.sent.filter((frame) => frame.kind === 'native.provider.turn_release').length,
     1,
   );
   provider.attachment.close();
   await coordinator.close();
 });
 
-test('wrong Session release acknowledgement closes the registration and releases its fence', async () => {
+test('wrong Turn release acknowledgement closes the registration and releases its fence', async () => {
   const coordinator = createCoordinator();
   const provider = attach(coordinator, 'provider');
   await register(coordinator, 'provider');
@@ -428,27 +613,81 @@ test('wrong Session release acknowledgement closes the registration and releases
   await pending;
   invocation.release();
 
-  const releaseTask = coordinator.releaseSession('session');
-  const release = requireSessionRelease(provider.sent.at(-1));
+  const releaseTask = coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
+  const release = requireTurnRelease(provider.sent.at(-1));
   provider.attachment.accept({
-    kind: 'native.provider.session_released',
+    kind: 'native.provider.turn_released',
     hostEpoch: release.hostEpoch,
     registrationId: 'wrong-registration',
     releaseId: release.releaseId,
     sessionId: release.sessionId,
+    turnId: release.turnId,
   });
   await releaseTask;
   assert.equal(provider.isClosed(), true);
   const unavailable = coordinator.acquireInvocation({
     operationId: 'after-invalid-ack',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'after-invalid-ack',
     capability: 'computer_use',
   });
   assert.equal(unavailable.ok, false);
   await coordinator.close();
 });
 
-test('Session release timeout evicts the transport before releasing its fence', async () => {
+test('same-Session Turn owners are isolated and a stale ack cannot release the newer Turn', async () => {
+  const coordinator = createCoordinator();
+  const provider = attach(coordinator, 'provider');
+  await register(coordinator, 'provider');
+  for (const turnId of ['turn-a', 'turn-b']) {
+    const invocation = acquire(coordinator, `owned-${turnId}`, {
+      turnId,
+      toolCallId: `tool-${turnId}`,
+    });
+    const pending = invocation.call({
+      subcall: {
+        ...preflight(`tool-${turnId}`),
+        context: { sessionId: 'session', turnId, toolCallId: `tool-${turnId}` },
+      },
+      signal: signal(),
+    });
+    const subcall = requireSubcall(provider.sent.at(-1));
+    provider.attachment.accept(success(subcall, preflightResult()));
+    await pending;
+    invocation.release();
+  }
+
+  const releaseA = coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn-a' });
+  const frameA = requireTurnRelease(provider.sent.at(-1));
+  provider.attachment.accept({
+    kind: 'native.provider.turn_released',
+    hostEpoch: frameA.hostEpoch,
+    registrationId: frameA.registrationId,
+    releaseId: frameA.releaseId,
+    sessionId: frameA.sessionId,
+    turnId: frameA.turnId,
+  });
+  await releaseA;
+  await coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn-a' });
+
+  const releaseB = coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn-b' });
+  const frameB = requireTurnRelease(provider.sent.at(-1));
+  assert.notEqual(frameB.releaseId, frameA.releaseId);
+  provider.attachment.accept({
+    kind: 'native.provider.turn_released',
+    hostEpoch: frameA.hostEpoch,
+    registrationId: frameA.registrationId,
+    releaseId: frameA.releaseId,
+    sessionId: frameA.sessionId,
+    turnId: frameA.turnId,
+  });
+  await releaseB;
+  assert.equal(provider.isClosed(), true);
+  await coordinator.close();
+});
+
+test('Turn release timeout evicts the transport before releasing its fence', async () => {
   const coordinator = new HostNativeProviderCoordinator('host-epoch', () => ({ release() {} }), {
     releaseTimeoutMs: 5,
   });
@@ -464,11 +703,13 @@ test('Session release timeout evicts the transport before releasing its fence', 
   await pending;
   invocation.release();
 
-  await coordinator.releaseSession('session');
+  await coordinator.releaseTurnState({ sessionId: 'session', turnId: 'turn' });
   assert.equal(provider.isClosed(), true);
   const unavailable = coordinator.acquireInvocation({
     operationId: 'after-timeout',
     sessionId: 'session',
+    turnId: 'turn',
+    toolCallId: 'after-timeout',
     capability: 'computer_use',
   });
   assert.equal(unavailable.ok, false);
@@ -520,16 +761,35 @@ async function register(
   return outcome.result.registrationId;
 }
 
+async function registerCapability(
+  coordinator: HostNativeProviderCoordinator,
+  connectionId: string,
+  capability: 'computer_use' | 'browser',
+): Promise<string> {
+  const outcome = await coordinator.handlers['native.provider.register'](
+    { capabilities: [capability] },
+    { ...CONTEXT, connectionId },
+  );
+  if (!outcome.ok) assert.fail(outcome.error.message);
+  return outcome.result.registrationId;
+}
+
 function acquire(
   coordinator: HostNativeProviderCoordinator,
   operationId: string,
-  affinity?: string,
+  options: {
+    readonly affinity?: string;
+    readonly turnId?: string;
+    readonly toolCallId?: string;
+  } = {},
 ): HostNativeProviderInvocation {
   const acquisition = coordinator.acquireInvocation({
     operationId,
     sessionId: 'session',
+    turnId: options.turnId ?? 'turn',
+    toolCallId: options.toolCallId ?? operationId,
     capability: 'computer_use',
-    ...(affinity === undefined ? {} : { affinity }),
+    ...(options.affinity === undefined ? {} : { affinity: options.affinity }),
   });
   if (!acquisition.ok) assert.fail(acquisition.message);
   return acquisition.invocation;
@@ -585,19 +845,20 @@ function requireSubcall(frame: NativeProviderHostFrame | undefined): NativeProvi
   return frame;
 }
 
-function requireSessionRelease(
+function requireTurnRelease(
   frame: NativeProviderHostFrame | undefined,
-): NativeProviderSessionReleaseFrame {
-  assert.ok(frame && frame.kind === 'native.provider.session_release');
+): NativeProviderTurnReleaseFrame {
+  assert.ok(frame && frame.kind === 'native.provider.turn_release');
   return frame;
 }
 
 function success(
   call: NativeProviderSubcallFrame,
-  result: NativeProviderResultPayload,
+  result: NativeProviderComputerUseResultPayload,
 ): NativeProviderClientFrame {
   return {
     kind: 'native.provider.result',
+    capability: 'computer_use',
     ...identity(call),
     ok: true,
     result,
@@ -610,6 +871,7 @@ function failure(
 ): NativeProviderClientFrame {
   return {
     kind: 'native.provider.result',
+    capability: 'computer_use',
     ...identity(call),
     ok: false,
     error: { code },
@@ -639,6 +901,14 @@ function identity(call: NativeProviderSubcallFrame) {
     ordinal: call.ordinal,
     bindingId: call.bindingId,
   };
+}
+
+function decodeProviderInbound(value: unknown) {
+  const frame = decodeClientFrame(value);
+  if (!('kind' in frame) || frame.kind === 'hello') {
+    assert.fail('Expected a Native Provider client frame');
+  }
+  return frame;
 }
 
 function digest(bytes: Buffer): string {

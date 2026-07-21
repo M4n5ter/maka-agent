@@ -42,6 +42,8 @@ export function createHostNativeComputerUseInvocationProvider(
         acquisition = service.acquireInvocation({
           operationId: input.context.operationId,
           sessionId: input.context.sessionId,
+          turnId: input.context.turnId,
+          toolCallId: input.context.toolCallId,
           capability: 'computer_use',
           ...(input.affinity === undefined ? {} : { affinity: input.affinity }),
         });

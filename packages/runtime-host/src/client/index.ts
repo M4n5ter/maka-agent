@@ -13,16 +13,22 @@ export {
   type ConnectOrSpawnRuntimeHostResult,
 } from './connect-or-spawn.js';
 export {
+  createNativeCapabilityProvider,
   NATIVE_PROVIDER_DEFAULT_CHUNK_BYTES,
-  NativeCapabilityProvider,
   type NativeCapability,
   type NativeCapabilityAttachment,
   type NativeCapabilityAttachmentRef,
   type NativeCapabilityHandler,
   type NativeCapabilityHandlerContext,
   type NativeCapabilityHandlerOutcome,
+  type NativeCapabilityImplementation,
+  type NativeCapabilityImplementations,
+  type NativeCapabilityProvider,
   type NativeCapabilityProviderOptions,
+  type NativeCapabilityResultPayload,
+  type NativeCapabilitySubcallFrame,
   type NativeProviderRegistration,
+  type TurnStateIdentity,
 } from './native-provider.js';
 export {
   RuntimeHostSubscriptionError,

@@ -9,11 +9,12 @@ import {
   type ResponseFrame,
 } from './operations.js';
 import {
-  decodeNativeProviderClientFrame,
+  decodeNativeProviderClientEnvelopeFrame,
   decodeNativeProviderHostFrame,
   isNativeProviderClientFrameKind,
   isNativeProviderHostFrameKind,
   type NativeProviderClientFrame,
+  type NativeProviderClientEnvelopeFrame,
   type NativeProviderHostFrame,
 } from './native-provider.js';
 import {
@@ -28,6 +29,8 @@ export * from './goal.js';
 export * from './interaction.js';
 export * from './message.js';
 export * from './native-provider.js';
+export * from './native-provider-browser.js';
+export * from './native-provider-computer-use.js';
 export * from './operations.js';
 export * from './runtime-resource.js';
 export * from './session-continuity.js';
@@ -76,6 +79,8 @@ export interface HostDraining {
 export type HostHandshakeResult = HostAccepted | HostIncompatible | HostDraining;
 
 export type ClientFrame = ClientHello | RequestFrame | NativeProviderClientFrame;
+/** Host-side decode output; Native Provider results remain opaque until binding validation. */
+export type InboundClientFrame = ClientHello | RequestFrame | NativeProviderClientEnvelopeFrame;
 export type HostFrame =
   | HostHandshakeResult
   | ResponseFrame
@@ -117,7 +122,7 @@ export function requireClientInstanceId(value: unknown): string {
   return requireId(value, 'clientInstanceId');
 }
 
-export function decodeClientFrame(value: unknown): ClientFrame {
+export function decodeClientFrame(value: unknown): InboundClientFrame {
   const frame = requireRecord(value, 'client frame');
   if (frame.kind === 'hello') {
     const protocolMin = requireProtocolVersion(frame.protocolMin, 'protocolMin');
@@ -131,7 +136,9 @@ export function decodeClientFrame(value: unknown): ClientFrame {
       protocolMax,
     } satisfies ClientHello;
   }
-  if (isNativeProviderClientFrameKind(frame.kind)) return decodeNativeProviderClientFrame(frame);
+  if (isNativeProviderClientFrameKind(frame.kind)) {
+    return decodeNativeProviderClientEnvelopeFrame(frame);
+  }
   return decodeRequestFrame(frame);
 }
 

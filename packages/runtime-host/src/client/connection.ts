@@ -16,7 +16,7 @@ import {
   type HostStatusResult,
   type NativeProviderCancelFrame,
   type NativeProviderReleaseFrame,
-  type NativeProviderSessionReleaseFrame,
+  type NativeProviderTurnReleaseFrame,
   type NativeProviderSubcallFrame,
   type OperationInput,
   type OperationKey,
@@ -335,8 +335,8 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
             case 'native.provider.release':
               this.#acceptNativeProviderRelease(frame);
               continue;
-            case 'native.provider.session_release':
-              this.#acceptNativeProviderSessionRelease(frame);
+            case 'native.provider.turn_release':
+              this.#acceptNativeProviderTurnRelease(frame);
               continue;
             default:
               throw new Error('Runtime Host returned a handshake frame after acceptance');
@@ -428,14 +428,16 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
     }
   }
 
-  #acceptNativeProviderSessionRelease(frame: NativeProviderSessionReleaseFrame): void {
+  #acceptNativeProviderTurnRelease(frame: NativeProviderTurnReleaseFrame): void {
     const attachment = this.#nativeProviderAttachment;
     if (!attachment) {
-      this.#fail(new Error('Runtime Host released a Session without a Native Provider attachment'));
+      this.#fail(
+        new Error('Runtime Host released Turn state without a Native Provider attachment'),
+      );
       return;
     }
     try {
-      attachment.acceptSessionRelease(frame);
+      attachment.acceptTurnRelease(frame);
     } catch (error) {
       this.#fail(asError(error));
     }

@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import type { CuObservation, CuRunContext } from '@maka/runtime';
-import { NativeCapabilityProvider } from '../client/index.js';
+import { createNativeCapabilityProvider, type NativeCapabilityProvider } from '../client/index.js';
 import type { ClientNativeProviderAttachment } from '../client/native-provider.js';
 import {
-  createComputerUseNativeProvider,
+  createComputerUseNativeCapability,
   type ComputerUseNativeProviderBackend,
 } from '../native-provider/computer-use.js';
 import {
@@ -13,8 +13,8 @@ import {
   NATIVE_PROVIDER_ATTACHMENT_CHUNK_BYTES,
   type NativeProviderChunkFrame,
   type NativeProviderClientFrame,
-  type NativeProviderSubcall,
-  type NativeProviderSubcallFrame,
+  type NativeProviderComputerUseSubcall,
+  type NativeProviderComputerUseSubcallFrame,
 } from '../protocol/index.js';
 
 test('streams one canonical screenshot in ordered 32KiB chunks with complete identity and hash', async () => {
@@ -30,11 +30,7 @@ test('streams one canonical screenshot in ordered 32KiB chunks with complete ide
     },
   });
   const frames: NativeProviderClientFrame[] = [];
-  const attachment = await directAttachment(
-    createComputerUseNativeProvider(backend),
-    'epoch-chunks',
-    frames,
-  );
+  const attachment = await directAttachment(backendProvider(backend), 'epoch-chunks', frames);
   const frame = subcallFrame('epoch-chunks', 'operation-chunks', 1, {
     kind: 'run',
     action: { type: 'screenshot' },
@@ -151,13 +147,9 @@ test('keeps raw observation state local, restores page and element token, and ma
     },
   };
   const frames: NativeProviderClientFrame[] = [];
-  const attachment = await directAttachment(
-    createComputerUseNativeProvider(backend),
-    'epoch-adapter',
-    frames,
-  );
+  const attachment = await directAttachment(backendProvider(backend), 'epoch-adapter', frames);
   let ordinal = 1;
-  const invoke = async (subcall: NativeProviderSubcall) => {
+  const invoke = async (subcall: NativeProviderComputerUseSubcall) => {
     const frame = subcallFrame('epoch-adapter', 'operation-adapter', ordinal++, subcall);
     attachment.acceptSubcall(frame);
     return waitForResult(frames, frame.subcallId);
@@ -276,7 +268,7 @@ test('keeps raw observation state local, restores page and element token, and ma
   await attachment.drained;
 });
 
-test('Session release invalidates S1 opaque handles without clearing S2 provider state', async () => {
+test('Turn release invalidates S1 opaque handles without clearing S2 provider state', async () => {
   const cleared: string[] = [];
   const semanticSessions: string[] = [];
   const backend = completeBackend({
@@ -309,29 +301,47 @@ test('Session release invalidates S1 opaque handles without clearing S2 provider
   const s1Observation = await observe('session-1', 'operation-s1-observe');
   const s2Observation = await observe('session-2', 'operation-s2-observe');
 
-  attachment.acceptSessionRelease({
-    kind: 'native.provider.session_release',
+  attachment.acceptTurnRelease({
+    kind: 'native.provider.turn_release',
     hostEpoch: 'epoch-sessions',
     registrationId: 'registration-epoch-sessions',
     releaseId: 'release-s1',
     sessionId: 'session-1',
+    turnId: 'turn-1',
   });
-  await waitForSessionReleased(frames, 'release-s1');
+  await waitForTurnReleased(frames, 'release-s1');
   assert.deepEqual(cleared, ['session-1']);
 
-  const runSemantic = async (sessionId: string, operationId: string, observationId: string) => {
+  const runSemantic = async (
+    sessionId: string,
+    turnId: string,
+    operationId: string,
+    observationId: string,
+  ) => {
     const frame = subcallFrame('epoch-sessions', operationId, 1, {
       kind: 'runSemantic',
       action: { type: 'press_key', observationId, key: 'Enter' },
-      context: { ...context(), sessionId, backendObservationId: observationId },
+      context: {
+        ...context(),
+        sessionId,
+        turnId,
+        toolCallId: `tool-call-${operationId}`,
+        backendObservationId: observationId,
+      },
     });
     attachment.acceptSubcall(frame);
     const result = await waitForResult(frames, frame.subcallId);
     attachment.acceptRelease(releaseFrame(frame.hostEpoch, frame.operationId, frame.bindingId));
     return result;
   };
-  assert.equal((await runSemantic('session-1', 'operation-s1-old', s1Observation)).ok, false);
-  assert.equal((await runSemantic('session-2', 'operation-s2-live', s2Observation)).ok, true);
+  assert.equal(
+    (await runSemantic('session-1', 'turn-2', 'operation-s1-old', s1Observation)).ok,
+    false,
+  );
+  assert.equal(
+    (await runSemantic('session-2', 'turn-1', 'operation-s2-live', s2Observation)).ok,
+    true,
+  );
   assert.deepEqual(semanticSessions, ['session-2']);
 
   attachment.detach();
@@ -424,7 +434,7 @@ test('keeps a top-level runSemantic screenshot when its observation has no scree
 });
 
 function backendProvider(backend: ComputerUseNativeProviderBackend): NativeCapabilityProvider {
-  return createComputerUseNativeProvider(backend);
+  return createNativeCapabilityProvider([createComputerUseNativeCapability(backend)]);
 }
 
 function completeBackend(
@@ -492,8 +502,8 @@ function subcallFrame(
   hostEpoch: string,
   operationId: string,
   ordinal: number,
-  subcall: NativeProviderSubcall,
-): NativeProviderSubcallFrame {
+  subcall: NativeProviderComputerUseSubcall,
+): NativeProviderComputerUseSubcallFrame {
   return {
     kind: 'native.provider.subcall',
     hostEpoch,
@@ -554,15 +564,15 @@ async function waitForResult(frames: NativeProviderClientFrame[], subcallId: str
   throw new Error(`Timed out waiting for ${subcallId}`);
 }
 
-async function waitForSessionReleased(frames: NativeProviderClientFrame[], releaseId: string) {
+async function waitForTurnReleased(frames: NativeProviderClientFrame[], releaseId: string) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const released = frames.find(
-      (frame) => frame.kind === 'native.provider.session_released' && frame.releaseId === releaseId,
+      (frame) => frame.kind === 'native.provider.turn_released' && frame.releaseId === releaseId,
     );
     if (released) return released;
     await immediate();
   }
-  throw new Error(`Timed out waiting for Session release ${releaseId}`);
+  throw new Error(`Timed out waiting for Turn release ${releaseId}`);
 }
 
 function immediate(): Promise<void> {

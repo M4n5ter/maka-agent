@@ -8,6 +8,7 @@ import {
   type ComputerUseIntent,
   type ComputerUsePublicApprovalReview,
 } from './computer-use.js';
+import { BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES } from './browser.js';
 import {
   redactBashCommandSecretsForCriticalReview,
   redactSecretsForCriticalReview,
@@ -1042,23 +1043,23 @@ function projectBrowserReview(
     return freezeReview({ kind: 'browser', action: 'snapshot' });
   }
   if (action === 'click') {
-    requireFields(args, ['ref']);
+    requireFields(args, ['target']);
     return freezeReview({
       kind: 'browser',
       action: 'click',
-      ref: projectReviewText(propertyString(args, 'ref'), 'browser ref', REF_MAX_BYTES),
+      ref: projectReviewText(projectBrowserTarget(args.target), 'browser target', REF_MAX_BYTES),
     });
   }
   if (action === 'type') {
-    requireFields(args, ['ref', 'text'], ['submit']);
+    requireFields(args, ['target', 'text'], ['submit']);
     return freezeReview({
       kind: 'browser',
       action: 'type',
-      ref: projectReviewText(propertyString(args, 'ref'), 'browser ref', REF_MAX_BYTES),
+      ref: projectReviewText(projectBrowserTarget(args.target), 'browser target', REF_MAX_BYTES),
       text: projectReviewText(
         propertyString(args, 'text', true),
         'browser text',
-        TEXT_MAX_BYTES,
+        BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES,
         false,
         true,
       ),
@@ -1088,6 +1089,22 @@ function projectBrowserReview(
   throw new InteractionPermissionProjectionError();
 }
 
+function projectBrowserTarget(value: CanonicalToolValue | undefined): string {
+  if (value === undefined) throw new InteractionPermissionProjectionError();
+  const target = requireProjectionRecord(value);
+  requireFields(target, ['kind', 'value']);
+  const kind = propertyString(target, 'kind');
+  const targetValue = propertyString(target, 'value');
+  if (kind === 'ref') {
+    if (!/^\[(0|[1-9]\d*)\]$/.test(targetValue)) {
+      throw new InteractionPermissionProjectionError();
+    }
+    return targetValue;
+  }
+  if (kind === 'selector') return targetValue;
+  throw new InteractionPermissionProjectionError();
+}
+
 function projectBrowserWaitReview(
   args: Record<string, CanonicalToolValue>,
 ): PublicToolBrowserReview {
@@ -1108,7 +1125,7 @@ function projectBrowserWaitReview(
     kind: 'browser',
     action: 'wait',
     condition,
-    value: projectReviewText(value, `browser ${condition}`, TEXT_MAX_BYTES),
+    value: projectReviewText(value, `browser ${condition}`, BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES),
     timeoutSeconds:
       args.timeout === undefined
         ? condition === 'selector'
@@ -1546,7 +1563,12 @@ function decodeBrowserReview(record: Record<string, unknown>): PublicToolBrowser
         kind: 'browser',
         action: 'type',
         ref: requireCanonicalReviewText(record.ref, 'browser ref', REF_MAX_BYTES),
-        text: requireCanonicalReviewText(record.text, 'browser text', TEXT_MAX_BYTES, true),
+        text: requireCanonicalReviewText(
+          record.text,
+          'browser text',
+          BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES,
+          true,
+        ),
         submit: requireBoolean(record.submit, 'browser submit'),
       });
     case 'wait':
@@ -1589,7 +1611,11 @@ function decodeBrowserWaitReview(record: Record<string, unknown>): PublicToolBro
     kind: 'browser',
     action: 'wait',
     condition: record.condition,
-    value: requireCanonicalReviewText(record.value, 'browser wait value', TEXT_MAX_BYTES),
+    value: requireCanonicalReviewText(
+      record.value,
+      'browser wait value',
+      BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES,
+    ),
     timeoutSeconds: requireNumber(
       record.timeoutSeconds,
       'browser timeout',
@@ -1617,6 +1643,29 @@ function projectReviewText(
     throw new InteractionPermissionProjectionError();
   }
   return escaped;
+}
+
+/**
+ * Checks Browser text against the exact canonical public-review projection.
+ * Browser schema admission uses this before persistence or permission work.
+ */
+export function isBrowserPermissionReviewTextRepresentable(
+  value: string,
+  options: { allowEmpty?: boolean } = {},
+): boolean {
+  try {
+    projectReviewText(
+      value,
+      'browser text',
+      BROWSER_REVIEW_TEXT_MAX_UTF8_BYTES,
+      false,
+      options.allowEmpty ?? false,
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof InteractionPermissionProjectionError) return false;
+    throw error;
+  }
 }
 
 function requireCanonicalReviewText(

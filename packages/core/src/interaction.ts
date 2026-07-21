@@ -49,6 +49,7 @@ import type { UserQuestionRequest } from './user-question.js';
 
 export {
   InteractionPermissionProjectionError,
+  isBrowserPermissionReviewTextRepresentable,
   type InteractionPermissionProjectionErrorReason,
 } from './tool-intent.js';
 

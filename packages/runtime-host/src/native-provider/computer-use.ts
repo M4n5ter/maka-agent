@@ -11,9 +11,9 @@ import type {
   CuSemanticAction,
 } from '@maka/runtime';
 import {
-  NativeCapabilityProvider,
   type NativeCapabilityAttachment,
   type NativeCapabilityHandlerOutcome,
+  type NativeCapabilityImplementation,
 } from '../client/native-provider.js';
 import {
   NATIVE_PROVIDER_MAX_ATTACHMENT_BYTES,
@@ -23,11 +23,11 @@ import {
   NATIVE_PROVIDER_MAX_WINDOWS,
   NATIVE_PROVIDER_MAX_WINDOWS_PER_APP,
   type NativeProviderAppSummary,
+  type NativeProviderComputerUseResultPayload,
+  type NativeProviderComputerUseSubcallFrame,
   type NativeProviderObservation,
-  type NativeProviderResultPayload,
   type NativeProviderRunResult,
   type NativeProviderScreenshot,
-  type NativeProviderSubcallFrame,
 } from '../protocol/index.js';
 
 const MAX_RETAINED_OBSERVATIONS_PER_SESSION = 16;
@@ -56,9 +56,9 @@ interface StoredObservation {
   readonly elementsByWireId: ReadonlyMap<string, CuObservation['elements'][number]>;
 }
 
-export function createComputerUseNativeProvider(
+export function createComputerUseNativeCapability(
   backend: ComputerUseNativeProviderBackend,
-): NativeCapabilityProvider {
+): NativeCapabilityImplementation<'computer_use'> {
   const observations = new Map<string, StoredObservation>();
   const observationHandlesBySession = new Map<string, string[]>();
   const clearSession = async (sessionId: string) => {
@@ -68,9 +68,9 @@ export function createComputerUseNativeProvider(
     observationHandlesBySession.delete(sessionId);
     await backend.clearSession(sessionId);
   };
-  return new NativeCapabilityProvider({
-    capabilities: ['computer_use'],
-    releaseSession: clearSession,
+  return {
+    capability: 'computer_use',
+    releaseTurnState: ({ sessionId }) => clearSession(sessionId),
     handle: async (frame, { signal }) => {
       const { subcall } = frame;
       const context = restoreContext(subcall.context, frame.operationId, observations);
@@ -144,17 +144,19 @@ export function createComputerUseNativeProvider(
         }
       }
     },
-  });
+  };
 }
 
-function success(result: NativeProviderResultPayload): NativeCapabilityHandlerOutcome {
+function success(
+  result: NativeProviderComputerUseResultPayload,
+): NativeCapabilityHandlerOutcome<'computer_use'> {
   return { ok: true, complete: () => result };
 }
 
 function observationOutcome(
   kind: 'observeApp' | 'captureObservation',
   stored: StoredObservation,
-): NativeCapabilityHandlerOutcome {
+): NativeCapabilityHandlerOutcome<'computer_use'> {
   const { observation } = stored;
   const screenshot = observation.screenshot;
   return withScreenshot(screenshot, (wireScreenshot) => {
@@ -169,7 +171,7 @@ function runOutcome(
   kind: 'run' | 'runSemantic',
   result: CuRunResult,
   storedObservation: StoredObservation | undefined,
-): NativeCapabilityHandlerOutcome {
+): NativeCapabilityHandlerOutcome<'computer_use'> {
   const canonicalScreenshot = result.observation?.screenshot ?? result.screenshot;
   return withScreenshot(canonicalScreenshot, (wireScreenshot) => {
     const projected = projectRunResult(result, storedObservation, wireScreenshot);
@@ -181,8 +183,8 @@ function runOutcome(
 
 function withScreenshot(
   screenshot: CuScreenshot | undefined,
-  complete: (screenshot?: NativeProviderScreenshot) => NativeProviderResultPayload,
-): NativeCapabilityHandlerOutcome {
+  complete: (screenshot?: NativeProviderScreenshot) => NativeProviderComputerUseResultPayload,
+): NativeCapabilityHandlerOutcome<'computer_use'> {
   if (!screenshot) return { ok: true, complete: () => complete() };
   const bytes = Buffer.from(screenshot.base64, 'base64');
   if (
@@ -214,7 +216,7 @@ function withScreenshot(
 }
 
 function restoreContext(
-  context: NativeProviderSubcallFrame['subcall']['context'],
+  context: NativeProviderComputerUseSubcallFrame['subcall']['context'],
   operationId: string,
   observations: ReadonlyMap<string, StoredObservation>,
 ): CuRunContext {
