@@ -1131,6 +1131,7 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
         return {
           kind: 'prepared',
           turnId,
+          abandon: () => sessionActivity.release(),
           start: () => {
             try {
               return runAgentTurn({

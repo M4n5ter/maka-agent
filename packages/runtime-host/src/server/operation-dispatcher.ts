@@ -49,6 +49,7 @@ export type TaskLedgerOperationKey = Extract<OperationKey, 'task.ledger.query'>;
 export type ArtifactOperationKey = Extract<OperationKey, `artifact.${string}`>;
 export type MemoryOperationKey = Extract<OperationKey, `memory.${string}`>;
 export type AutomationOperationKey = Extract<OperationKey, `automation.${string}`>;
+export type GoalOperationKey = Extract<OperationKey, `goal.${string}`>;
 export type RuntimeResourceOperationKey = Extract<
   OperationKey,
   `resource.${string}` | `pty.${string}`
@@ -68,6 +69,7 @@ export type TaskLedgerOperationHandlerMap = Pick<OperationHandlerMap, TaskLedger
 export type ArtifactOperationHandlerMap = Pick<OperationHandlerMap, ArtifactOperationKey>;
 export type MemoryOperationHandlerMap = Pick<OperationHandlerMap, MemoryOperationKey>;
 export type AutomationOperationHandlerMap = Pick<OperationHandlerMap, AutomationOperationKey>;
+export type GoalOperationHandlerMap = Pick<OperationHandlerMap, GoalOperationKey>;
 export type RuntimeResourceOperationHandlerMap = Pick<
   OperationHandlerMap,
   RuntimeResourceOperationKey

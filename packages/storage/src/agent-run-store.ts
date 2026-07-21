@@ -39,8 +39,8 @@ import {
   type RuntimeEvent,
   type RuntimeEventStore,
   type ToolRecoveryMode,
+  type TurnOrigin,
 } from '@maka/core';
-import type { TurnOrigin } from '@maka/core/runtime-inputs';
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const EXCLUSIVE_TEMP_SUFFIX_PATTERN =
@@ -1828,22 +1828,32 @@ function normalizeRootTurnAdmission(
 
 function normalizeRootTurnOrigin(value: unknown): TurnOrigin | undefined {
   if (value === undefined) return undefined;
-  if (
-    !isPlainRecord(value) ||
-    value.kind !== 'automation' ||
-    typeof value.automationId !== 'string' ||
-    !isSafeId(value.automationId) ||
-    typeof value.fireId !== 'string' ||
-    !isSafeId(value.fireId) ||
-    !hasExactKeys(value, ['kind', 'automationId', 'fireId'])
-  ) {
-    throw new Error('Invalid root turn origin');
+  if (!isPlainRecord(value)) throw new Error('Invalid root turn origin');
+  if (value.kind === 'automation') {
+    if (
+      typeof value.automationId !== 'string' ||
+      !isSafeId(value.automationId) ||
+      typeof value.fireId !== 'string' ||
+      !isSafeId(value.fireId) ||
+      !hasExactKeys(value, ['kind', 'automationId', 'fireId'])
+    ) {
+      throw new Error('Invalid root turn origin');
+    }
+    return Object.freeze({
+      kind: 'automation' as const,
+      automationId: value.automationId,
+      fireId: value.fireId,
+    });
   }
-  return Object.freeze({
-    kind: 'automation' as const,
-    automationId: value.automationId,
-    fireId: value.fireId,
-  });
+  if (
+    value.kind === 'goal' &&
+    typeof value.goalId === 'string' &&
+    isSafeId(value.goalId) &&
+    hasExactKeys(value, ['kind', 'goalId'])
+  ) {
+    return Object.freeze({ kind: 'goal' as const, goalId: value.goalId });
+  }
+  throw new Error('Invalid root turn origin');
 }
 
 function orderRootTurnAdmissionChain(
@@ -2077,11 +2087,15 @@ function rootTurnOriginsEqual(
   left: TurnOrigin | undefined,
   right: TurnOrigin | undefined,
 ): boolean {
-  return (
-    left?.kind === right?.kind &&
-    left?.automationId === right?.automationId &&
-    left?.fireId === right?.fireId
-  );
+  if (!left || !right) return left === right;
+  if (left.kind === 'automation') {
+    return (
+      right.kind === 'automation' &&
+      left.automationId === right.automationId &&
+      left.fireId === right.fireId
+    );
+  }
+  return right.kind === 'goal' && left.goalId === right.goalId;
 }
 
 function deepFreezeRootTurnAdmission(admission: RootTurnAdmission): RootTurnAdmission {

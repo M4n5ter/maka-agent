@@ -200,6 +200,7 @@ export type {
   SessionChangedReason,
   SessionStatus,
   SessionBlockedReason,
+  TurnOrigin,
   TurnRecord,
   TurnStateMessage,
   TurnStatus,

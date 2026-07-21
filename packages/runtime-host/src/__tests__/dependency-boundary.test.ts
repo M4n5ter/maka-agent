@@ -51,6 +51,7 @@ const allowedServerExternalImports = new Set([
   '@maka/storage/task-ledger-store',
   '@maka/storage/pricing-store',
   '@maka/storage/usage-stores',
+  'ai',
   'node:async_hooks',
   'node:fs',
   'node:os',

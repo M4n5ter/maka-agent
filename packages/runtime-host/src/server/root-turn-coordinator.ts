@@ -8,6 +8,11 @@ import {
 } from '@maka/core/events';
 import type { SessionHeader, StoredMessage } from '@maka/core/session';
 import {
+  type GoalExternalTurnSettler,
+  type GoalExternalTurnStart,
+  type GoalTurnAdmission,
+  type GoalTurnIdentity,
+  type GoalTurnOutcome,
   type RuntimeInteractionFailStopError,
   RuntimeInteractionInvariantError,
   type SessionManager,
@@ -54,6 +59,7 @@ interface ActiveRootTurn {
   ownership: OwnedRootTurn;
   stopRequested: boolean;
   messageTransitionCommitted: boolean;
+  externalSettler?: GoalExternalTurnSettler;
 }
 
 interface OwnedRootTurn {
@@ -94,9 +100,11 @@ interface Deferred {
 }
 
 interface RecoverySessionPlan {
+  session: SessionHeader;
   sessionId: string;
   admissions: readonly RootTurnAdmission[];
   missingMessages: readonly RecoveryUserMessage[];
+  unstartedGoalAdmission?: RootTurnAdmission;
 }
 
 type RootTurnOrigin = Exclude<RootTurnAdmission['origin'], undefined>;
@@ -106,6 +114,24 @@ interface RootTurnExecutionInput {
   readonly turnId: string;
   readonly content: MessageContent;
   readonly origin?: RootTurnOrigin;
+  readonly coordinatorOwned?: boolean;
+}
+
+export interface HostGoalTurnBoundary {
+  beginExternalTurn(sessionId: string, turnId: string): GoalExternalTurnStart;
+}
+
+export interface GoalAdmissionDurableCommit {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly runId: string;
+  readonly goalId: string;
+}
+
+export interface RootTurnCoordinatorHooks {
+  readonly afterGoalAdmissionDurableCommit?: (
+    admission: GoalAdmissionDurableCommit,
+  ) => void | Promise<void>;
 }
 
 export interface HostAutomationTurnInput {
@@ -154,6 +180,8 @@ export class RootTurnCoordinator {
     private readonly sessionAdmission: SessionAdmissionGate,
     private readonly interaction: HostInteractionAuthority,
     private readonly messages: HostMessageCoordinator,
+    private readonly goalTurns: HostGoalTurnBoundary,
+    private readonly hooks: RootTurnCoordinatorHooks = {},
   ) {
     this.stores = authenticateExecutionStoresWriter(stores, 'interactive');
   }
@@ -198,6 +226,11 @@ export class RootTurnCoordinator {
             throw new Error(`Admitted Turn ${admission.turnId} has a UserMessage but no Run`);
           }
           pending.push(admission);
+          if (admission.origin?.kind === 'goal') {
+            const recoveredMessage = recoveryUserMessage(admission);
+            missingMessages.push(recoveredMessage);
+            indexRecoveryMessage(messageIndex, recoveredMessage);
+          }
           continue;
         }
         if (run.turnId !== admission.turnId) {
@@ -223,14 +256,7 @@ export class RootTurnCoordinator {
         if (messageIdOwner) {
           throw new Error(`Admitted Turn ${admission.turnId} reuses another message identity`);
         }
-        const recoveredMessage = {
-          type: 'user',
-          id: admission.userMessageId,
-          turnId: admission.turnId,
-          ts: admission.admittedAt,
-          ...normalizeMessageContent(admission.normalizedInput),
-          ...(admission.origin ? { origin: admission.origin } : {}),
-        } satisfies RecoveryUserMessage;
+        const recoveredMessage = recoveryUserMessage(admission);
         missingMessages.push(recoveredMessage);
         indexRecoveryMessage(messageIndex, recoveredMessage);
       }
@@ -242,13 +268,19 @@ export class RootTurnCoordinator {
         throw new Error(`Archived Session ${session.id} has an admitted Turn without a Run`);
       }
       plans.push({
+        session,
         sessionId: session.id,
         admissions,
         missingMessages,
+        ...(admission?.origin?.kind === 'goal' ? { unstartedGoalAdmission: admission } : {}),
       });
     }
 
     for (const plan of plans) {
+      if (plan.unstartedGoalAdmission) {
+        await this.#materializeUnstartedGoalRun(plan.session, plan.unstartedGoalAdmission);
+        this.#throwIfPoisoned();
+      }
       for (const message of plan.missingMessages) {
         await this.stores.sessionStore.appendMessage(plan.sessionId, message);
         this.#throwIfPoisoned();
@@ -427,6 +459,128 @@ export class RootTurnCoordinator {
       throw new RuntimeInteractionInvariantError('Fresh message Turn did not enter execution');
     }
     return { turnId };
+  }
+
+  async admitGoalTurn(
+    sessionId: string,
+    text: string,
+    identity: GoalTurnIdentity,
+  ): Promise<GoalTurnAdmission> {
+    this.#throwIfPoisoned();
+    const offered = deferredValue<GoalTurnAdmission>();
+    const handshakeFinished = deferredValue<void>();
+    const handshake = this.sessionAdmission.run(sessionId, async (lease) => {
+      this.#throwIfPoisoned();
+      let header: SessionHeader;
+      try {
+        header = await this.stores.sessionStore.readHeaderSnapshot(sessionId);
+        this.#throwIfPoisoned();
+      } catch (error) {
+        this.#throwIfPoisoned();
+        if (isMissingFile(error)) {
+          offered.resolve({ kind: 'unavailable', reason: 'Session does not exist.' });
+          return;
+        }
+        throw error;
+      }
+      if (header.status === 'archived') {
+        offered.resolve({ kind: 'unavailable', reason: 'Session is archived.' });
+        return;
+      }
+
+      const active = this.#activeBySession.get(sessionId);
+      if (active) {
+        offered.resolve({ kind: 'busy', whenIdle: alwaysResolve(active.done.promise) });
+        return;
+      }
+
+      const turnId = randomUUID();
+      const runId = randomUUID();
+      const userMessageId = randomUUID();
+      const content = normalizeMessageContent({ text });
+      const origin = Object.freeze({ kind: 'goal' as const, goalId: identity.goalId });
+      const decision = deferredValue<'start' | 'abandon'>();
+      const completion = deferredValue<GoalTurnOutcome>();
+      let selected: 'start' | 'abandon' | undefined;
+      const start = (): Promise<GoalTurnOutcome> => {
+        if (!selected) {
+          selected = 'start';
+          decision.resolve('start');
+        }
+        return completion.promise;
+      };
+      const abandon = (): Promise<void> => {
+        if (!selected) {
+          selected = 'abandon';
+          completion.resolve({
+            kind: 'errored',
+            turnId,
+            reason: 'Goal-owned Turn was abandoned before start.',
+          });
+          decision.resolve('abandon');
+        }
+        return handshakeFinished.promise;
+      };
+      const prepared: Extract<GoalTurnAdmission, { kind: 'prepared' }> & {
+        abandon: () => Promise<void>;
+      } = { kind: 'prepared', turnId, start, abandon };
+      offered.resolve(prepared);
+
+      if ((await decision.promise) === 'abandon') return;
+
+      try {
+        this.#throwIfPoisoned();
+        const previousRootTurnId =
+          this.rootAdmissionWriter.previousRootTurnIdForNextAdmission(sessionId);
+        const admitted = await this.stores.agentRunStore.admitRootTurn({
+          sessionId,
+          turnId,
+          proposedRunId: runId,
+          proposedUserMessageId: userMessageId,
+          previousRootTurnId,
+          normalizedInput: content,
+          sourceMessages: [],
+          origin,
+          admittedAt: Date.now(),
+        });
+        this.#throwIfPoisoned();
+        if (admitted.kind !== 'admitted') {
+          throw new RuntimeInteractionInvariantError('Fresh Goal Turn identity already existed');
+        }
+        await this.hooks.afterGoalAdmissionDurableCommit?.({
+          sessionId: admitted.admission.sessionId,
+          turnId: admitted.admission.turnId,
+          runId: admitted.admission.runId,
+          goalId: origin.goalId,
+        });
+        this.#throwIfPoisoned();
+        this.rootAdmissionWriter.record(admitted.admission);
+        const disposition = await this.prepareAdmittedTurn(
+          { sessionId, turnId, content, origin, coordinatorOwned: true },
+          admitted.admission,
+          this.acquireRecoveryResidency,
+          lease,
+        );
+        if (disposition.kind !== 'await_start') {
+          throw new RuntimeInteractionInvariantError('Fresh Goal Turn did not enter execution');
+        }
+        this.#completeGoalTurn(sessionId, disposition.active, completion);
+      } catch (error) {
+        completion.resolve(erroredGoalOutcome(turnId, error));
+        throw error;
+      }
+    });
+    void handshake
+      .then(
+        () => handshakeFinished.resolve(undefined),
+        (error) => {
+          handshakeFinished.resolve(undefined);
+          offered.reject(error);
+          if (!this.#poisoned) this.requestHostDrain();
+        },
+      )
+      .catch(() => undefined);
+    return offered.promise;
   }
 
   async startAutomationTurn(
@@ -793,6 +947,11 @@ export class RootTurnCoordinator {
     if (admission.sessionId !== input.sessionId || admission.turnId !== input.turnId) {
       throw new Error('Root Turn admission identity does not match its input');
     }
+    if (!turnOriginsEqual(admission.origin, input.origin)) {
+      return completedStart(
+        operationConflict('Turn identity was already admitted with a different origin'),
+      );
+    }
     const { runId } = admission;
     const existingRun = await this.readRunIfPresent(input.sessionId, runId);
     this.#throwIfPoisoned();
@@ -852,6 +1011,16 @@ export class RootTurnCoordinator {
     }
 
     const started = deferred();
+    let externalSettler: GoalExternalTurnSettler | undefined;
+    try {
+      if (!input.coordinatorOwned) {
+        externalSettler = this.#beginExternalTurn(input.sessionId, input.turnId);
+      }
+    } catch (error) {
+      this.messages.abandonRootReservation(messageIdentity);
+      this.#releaseOwnedTurn(ownership);
+      throw error;
+    }
     const entry: ActiveRootTurn = {
       turnId: input.turnId,
       runId,
@@ -861,6 +1030,7 @@ export class RootTurnCoordinator {
       ownership,
       stopRequested: false,
       messageTransitionCommitted: false,
+      ...(externalSettler ? { externalSettler } : {}),
     };
     this.#assertTurnUsable(ownership);
     this.#activeBySession.set(input.sessionId, entry);
@@ -985,6 +1155,7 @@ export class RootTurnCoordinator {
       }
       terminalCutStarted = true;
       await this.releaseActiveAndPublishTerminal(input.sessionId, active);
+      this.#settleExternalTurn(active, goalOutcomeFromTerminalSnapshot(snapshot));
       completion = { kind: 'completed' };
     } catch (error) {
       if (active.ownership.poisoned || this.#poisoned) {
@@ -1000,6 +1171,7 @@ export class RootTurnCoordinator {
           if (isTerminalSnapshot(snapshot)) {
             terminalCutStarted = true;
             await this.releaseActiveAndPublishTerminal(input.sessionId, active);
+            this.#settleExternalTurn(active, goalOutcomeFromTerminalSnapshot(snapshot));
             completion = { kind: 'completed' };
           }
         } catch {
@@ -1035,6 +1207,9 @@ export class RootTurnCoordinator {
             completion = { kind: 'failed', error };
             this.requestHostDrain();
           }
+        }
+        if (completion?.kind === 'failed') {
+          this.#settleExternalTurn(active, erroredGoalOutcome(active.turnId, completion.error));
         }
         try {
           this.#releaseOwnedTurn(active.ownership, active);
@@ -1169,6 +1344,82 @@ export class RootTurnCoordinator {
     return snapshot;
   }
 
+  async #materializeUnstartedGoalRun(
+    session: SessionHeader,
+    admission: RootTurnAdmission,
+  ): Promise<void> {
+    if (admission.origin?.kind !== 'goal') {
+      throw new RuntimeInteractionInvariantError(
+        `Unstarted Turn ${admission.turnId} is not Goal-owned`,
+      );
+    }
+    await this.stores.agentRunStore.createRun(
+      {
+        runId: admission.runId,
+        invocationId: admission.runId,
+        sessionId: admission.sessionId,
+        turnId: admission.turnId,
+        status: 'created',
+        backendKind: session.backend,
+        llmConnectionSlug: session.llmConnectionSlug,
+        modelId: session.model,
+        cwd: session.cwd,
+        permissionMode: session.permissionMode,
+        createdAt: admission.admittedAt,
+        updatedAt: admission.admittedAt,
+      },
+      { durable: true },
+    );
+  }
+
+  #completeGoalTurn(
+    sessionId: string,
+    active: ActiveRootTurn,
+    completion: DeferredValue<GoalTurnOutcome>,
+  ): void {
+    const task = (async () => {
+      try {
+        await active.done.promise;
+        this.#throwIfPoisoned();
+        const snapshot = await this.readCanonicalSnapshot(sessionId, active.turnId, active.runId);
+        if (!isTerminalSnapshot(snapshot)) {
+          throw new RuntimeInteractionInvariantError(
+            `Goal Turn ${active.turnId} completed without a terminal snapshot`,
+          );
+        }
+        completion.resolve(goalOutcomeFromTerminalSnapshot(snapshot));
+      } catch (error) {
+        completion.resolve(erroredGoalOutcome(active.turnId, error));
+      }
+    })();
+    void task.catch(() => undefined);
+  }
+
+  #beginExternalTurn(sessionId: string, turnId: string): GoalExternalTurnSettler {
+    let registration: GoalExternalTurnStart;
+    try {
+      registration = this.goalTurns.beginExternalTurn(sessionId, turnId);
+    } catch (error) {
+      throw new RuntimeInteractionInvariantError(
+        `Goal boundary threw while registering root Turn ${turnId}`,
+        { cause: error },
+      );
+    }
+    if (registration.kind === 'registered') return registration.settle;
+    throw new RuntimeInteractionInvariantError(
+      `Goal boundary rejected root Turn ${turnId}: ${registration.reason}`,
+    );
+  }
+
+  #settleExternalTurn(active: ActiveRootTurn, outcome: GoalTurnOutcome): void {
+    const settle = active.externalSettler;
+    if (!settle) return;
+    active.externalSettler = undefined;
+    void Promise.resolve()
+      .then(() => settle(outcome))
+      .catch(() => undefined);
+  }
+
   async #deliverRuntimeStop(sessionId: string, active: ActiveRootTurn): Promise<void> {
     try {
       await active.started.promise;
@@ -1277,17 +1528,30 @@ export class RootTurnCoordinator {
 
 type RecoveryUserMessage = Extract<StoredMessage, { type: 'user' }>;
 
+function recoveryUserMessage(admission: RootTurnAdmission): RecoveryUserMessage {
+  return {
+    type: 'user',
+    id: admission.userMessageId,
+    turnId: admission.turnId,
+    ts: admission.admittedAt,
+    ...normalizeMessageContent(admission.normalizedInput),
+    ...(admission.origin ? { origin: admission.origin } : {}),
+  };
+}
+
 function turnOriginsEqual(
-  left:
-    | { readonly kind: 'automation'; readonly automationId: string; readonly fireId?: string }
-    | undefined,
+  left: RootTurnOrigin | undefined,
   right: RootTurnOrigin | undefined,
 ): boolean {
-  return (
-    left?.kind === right?.kind &&
-    left?.automationId === right?.automationId &&
-    left?.fireId === right?.fireId
-  );
+  if (!left || !right) return left === right;
+  if (left.kind === 'automation') {
+    return (
+      right.kind === 'automation' &&
+      left.automationId === right.automationId &&
+      left.fireId === right.fireId
+    );
+  }
+  return right.kind === 'goal' && left.goalId === right.goalId;
 }
 
 function isAssistantDeltaEvent(event: { type: string }): event is AcceptedAssistantDeltaEvent {
@@ -1305,6 +1569,13 @@ function isTerminalSessionEvent(event: { type: string }): boolean {
 interface RecoveryMessageIndex {
   userMessagesByTurnId: Map<string, RecoveryUserMessage[]>;
   messagesById: Map<string, StoredMessage[]>;
+}
+
+interface DeferredValue<T> {
+  readonly promise: Promise<T>;
+  readonly settled: boolean;
+  resolve(value: T): void;
+  reject(error: unknown): void;
 }
 
 function indexRecoveryMessages(messages: readonly StoredMessage[]): RecoveryMessageIndex {
@@ -1353,6 +1624,63 @@ function deferred(): Deferred {
       settled = true;
       rejectPromise(error);
     },
+  };
+}
+
+function deferredValue<T>(): DeferredValue<T> {
+  let settled = false;
+  let resolvePromise!: (value: T) => void;
+  let rejectPromise!: (error: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  void promise.catch(() => undefined);
+  return {
+    promise,
+    get settled() {
+      return settled;
+    },
+    resolve: (value) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(value);
+    },
+    reject: (error) => {
+      if (settled) return;
+      settled = true;
+      rejectPromise(error);
+    },
+  };
+}
+
+function alwaysResolve(promise: Promise<unknown>): Promise<void> {
+  return promise.then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+function goalOutcomeFromTerminalSnapshot(snapshot: TurnSnapshot): GoalTurnOutcome {
+  switch (snapshot.status) {
+    case 'completed':
+      return { kind: 'completed', turnId: snapshot.turnId };
+    case 'cancelled':
+      return { kind: 'aborted', turnId: snapshot.turnId };
+    case 'failed':
+      return { kind: 'errored', turnId: snapshot.turnId, reason: snapshot.failureClass };
+    default:
+      throw new RuntimeInteractionInvariantError(
+        `Turn ${snapshot.turnId} does not have a terminal Goal outcome`,
+      );
+  }
+}
+
+function erroredGoalOutcome(turnId: string, error: unknown): GoalTurnOutcome {
+  return {
+    kind: 'errored',
+    turnId,
+    reason: error instanceof Error ? error.message : String(error),
   };
 }
 

@@ -1307,6 +1307,7 @@ export {
   buildGoalEvaluationPrompt,
   parseGoalEvaluation,
   DEFAULT_EVALUATOR_TIMEOUT_MS,
+  GoalEvaluatorFatalError,
 } from './goal-evaluator.js';
 export type { GoalEvaluation, GoalEvaluatorDeps } from './goal-evaluator.js';
 export {
@@ -1333,6 +1334,7 @@ export type {
   GoalTaskGateDeps,
   GoalTaskGateTrace,
   GoalTurnAdmission,
+  GoalTurnIdentity,
   GoalTurnOutcome,
 } from './goal-continuation.js';
 export {

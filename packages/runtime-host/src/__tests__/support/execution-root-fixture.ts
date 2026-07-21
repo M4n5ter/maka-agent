@@ -452,7 +452,12 @@ export class ExecutionFixture {
   }
 
   async startHost(
-    options: { frozenNow?: number; steppingNow?: number; idleGraceMs?: number } = {},
+    options: {
+      frozenNow?: number;
+      steppingNow?: number;
+      idleGraceMs?: number;
+      goalAdmissionCommitFailpoint?: boolean;
+    } = {},
   ): Promise<ExecutionHostHandle> {
     let execArgv: string[] | undefined;
     if (options.frozenNow !== undefined || options.steppingNow !== undefined) {
@@ -464,7 +469,12 @@ export class ExecutionFixture {
       await writeFile(preloadPath, source, 'utf8');
       execArgv = [...process.execArgv, '--require', preloadPath];
     }
-    const child = this.spawnHost('inherit', execArgv, options.idleGraceMs);
+    const child = this.spawnHost(
+      'inherit',
+      execArgv,
+      options.idleGraceMs,
+      options.goalAdmissionCommitFailpoint === true,
+    );
     const ready = await waitForHostReady(child);
     return { child, ...ready };
   }
@@ -544,6 +554,40 @@ export class ExecutionFixture {
       'execution Host survived SIGKILL',
     );
     this.#children.delete(host.child);
+  }
+
+  waitForGoalAdmissionCommit(host: ExecutionHostHandle): Promise<{
+    turnId: string;
+    runId: string;
+    goalId: string;
+  }> {
+    return withTimeout(
+      new Promise((resolve, reject) => {
+        const cleanup = () => {
+          host.child.off('error', onError);
+          host.child.off('exit', onExit);
+          host.child.off('message', onMessage);
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          cleanup();
+          reject(new Error(`execution Host exited before Goal admission gate: ${code ?? signal}`));
+        };
+        const onMessage = (message: unknown) => {
+          if (!isGoalAdmissionCommittedMessage(message)) return;
+          cleanup();
+          resolve({ turnId: message.turnId, runId: message.runId, goalId: message.goalId });
+        };
+        host.child.once('error', onError);
+        host.child.once('exit', onExit);
+        host.child.on('message', onMessage);
+      }),
+      PROCESS_TIMEOUT_MS,
+      'execution Host did not reach the Goal admission commit gate',
+    );
   }
 
   async waitForHostExit(host: ExecutionHostHandle): Promise<void> {
@@ -627,6 +671,7 @@ export class ExecutionFixture {
     stderr: 'inherit' | 'ignore',
     execArgv?: readonly string[],
     idleGraceMs = 60_000,
+    goalAdmissionCommitFailpoint = false,
   ): ChildProcess {
     const child = fork(
       new URL('../fixtures/execution-host.js', import.meta.url),
@@ -637,6 +682,9 @@ export class ExecutionFixture {
           ...process.env,
           HOME: join(this.base, 'home'),
           USERPROFILE: join(this.base, 'home'),
+          ...(goalAdmissionCommitFailpoint
+            ? { MAKA_RUNTIME_HOST_GOAL_ADMISSION_FAILPOINT: 'after_durable_commit' }
+            : {}),
         },
         ...(execArgv ? { execArgv: [...execArgv] } : {}),
       },
@@ -809,6 +857,22 @@ function isHostReadyMessage(
     message.type === 'ready' &&
     typeof message.hostEpoch === 'string' &&
     typeof message.endpoint === 'string'
+  );
+}
+
+function isGoalAdmissionCommittedMessage(value: unknown): value is {
+  type: 'goal_admission_committed';
+  turnId: string;
+  runId: string;
+  goalId: string;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const message = value as Record<string, unknown>;
+  return (
+    message.type === 'goal_admission_committed' &&
+    typeof message.turnId === 'string' &&
+    typeof message.runId === 'string' &&
+    typeof message.goalId === 'string'
   );
 }
 

@@ -62,11 +62,14 @@ interface HandshakeAdmission {
   readonly connectionSettlement?: AcceptedConnectionSettlement;
 }
 
+/** Kernel-issued residency whose release is synchronous, idempotent, and no-throw. */
 export type RuntimeHostResidency = OperationResidency;
 
 export interface RuntimeHostFailStopDisposition {
   readonly kind: 'fail_stop';
   readonly cause: unknown;
+  /** Must settle before the root owner may begin isolation. */
+  readonly ownerIsolationBarrier: Promise<void>;
   readonly reclaimAfterOwnerIsolation: () => void;
 }
 
@@ -254,7 +257,6 @@ export class RuntimeHostKernel {
     this.#state = 'draining';
     this.#cancelIdle();
     this.#beginCompositionDrain();
-    this.#beginOwnerClose();
     this.#resolveFailStopSignal();
     this.#startCompositionClose();
     this.#closeServerOnce();
@@ -789,9 +791,6 @@ export class RuntimeHostKernel {
   ): Promise<void> {
     const errors: unknown[] = [disposition.cause];
     for (const error of synchronousFailures) pushUniqueError(errors, error);
-    if (this.#ownerBeginCloseFailure) {
-      pushUniqueError(errors, this.#ownerBeginCloseFailure.error);
-    }
     if (this.#compositionDrainFailure) {
       pushUniqueError(errors, this.#compositionDrainFailure.error);
     }
@@ -801,6 +800,13 @@ export class RuntimeHostKernel {
     await this.#waitForRegistrationWrites();
     for (const error of this.#registrationWriteFailures) pushUniqueError(errors, error);
     await this.#removeRegistrationOnce().catch((error: unknown) => pushUniqueError(errors, error));
+    await disposition.ownerIsolationBarrier.catch((error: unknown) =>
+      pushUniqueError(errors, error),
+    );
+    this.#beginOwnerClose();
+    if (this.#ownerBeginCloseFailure) {
+      pushUniqueError(errors, this.#ownerBeginCloseFailure.error);
+    }
     let ownerIsolated = false;
     const ownerClose = this.#closeOwnerOnce();
     try {

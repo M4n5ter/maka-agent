@@ -422,6 +422,7 @@ const goalWiring = createMainGoalWiring({
     return {
       kind: 'prepared',
       turnId,
+      abandon: () => reservation.release(),
       start: async (): Promise<GoalTurnOutcome> => {
         try {
           await ensureSessionCanSend(sessionId);

@@ -2,6 +2,7 @@ import { ARTIFACT_OPERATION_SPECS } from './artifact.js';
 import { AUTOMATION_OPERATION_SPECS } from './automation.js';
 import { requireExactRecord, requireId, requireRecord, requireString } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
+import { GOAL_OPERATION_SPECS } from './goal.js';
 import { HOST_STATUS_OPERATION_SPECS } from './host-status.js';
 import { INTERACTION_OPERATION_SPECS } from './interaction.js';
 import { MESSAGE_OPERATION_SPECS } from './message.js';
@@ -35,6 +36,14 @@ export {
   MEMORY_TITLE_MAX_BYTES,
 } from './memory.js';
 
+export type {
+  GoalClearInput,
+  GoalClearResult,
+  GoalProjection,
+  GoalQueryInput,
+  GoalQueryResult,
+  GoalStatus,
+} from './goal.js';
 export type {
   AutomationCatalogRevision,
   AutomationCurrentFireSummary,
@@ -194,6 +203,17 @@ export type {
   UsageLogProjection,
 } from './usage-pricing.js';
 export {
+  decodeGoalClearInput,
+  decodeGoalClearResult,
+  decodeGoalQueryInput,
+  decodeGoalQueryResult,
+  encodeGoalClearResult,
+  encodeGoalQueryResult,
+  GOAL_CONDITION_MAX_BYTES,
+  GOAL_REASON_MAX_BYTES,
+  GOAL_RESULT_MAX_BYTES,
+} from './goal.js';
+export {
   AUTOMATION_CRON_EXPRESSION_MAX_BYTES,
   AUTOMATION_CURSOR_MAX_BYTES,
   AUTOMATION_CWD_MAX_BYTES,
@@ -343,13 +363,18 @@ const HOST_MEMORY_AND_AUTOMATION_OPERATION_SPECS = composeOperationSpecMaps(
   AUTOMATION_OPERATION_SPECS,
 );
 
-const HOST_AUTOMATION_AND_RESOURCE_OPERATION_SPECS = composeOperationSpecMaps(
+const HOST_AUTOMATION_AND_GOAL_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_MEMORY_AND_AUTOMATION_OPERATION_SPECS,
+  GOAL_OPERATION_SPECS,
+);
+
+const HOST_GOAL_AND_RESOURCE_OPERATION_SPECS = composeOperationSpecMaps(
+  HOST_AUTOMATION_AND_GOAL_OPERATION_SPECS,
   RUNTIME_RESOURCE_OPERATION_SPECS,
 );
 
 export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
-  HOST_AUTOMATION_AND_RESOURCE_OPERATION_SPECS,
+  HOST_GOAL_AND_RESOURCE_OPERATION_SPECS,
   USAGE_PRICING_OPERATION_SPECS,
 );
 

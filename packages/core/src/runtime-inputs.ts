@@ -3,7 +3,7 @@
  */
 
 import type { MessageContent, QuoteRef } from './events.js';
-import type { BackendKind, SessionBlockedReason, SessionStatus } from './session.js';
+import type { BackendKind, SessionBlockedReason, SessionStatus, TurnOrigin } from './session.js';
 import type { PermissionMode } from './permission.js';
 import type { ThinkingLevel } from './model-thinking.js';
 import type { CollaborationMode } from './collaboration.js';
@@ -63,14 +63,6 @@ export interface UserMessageInput extends MessageContent {
    *  distinguish an automation-triggered run from a hand-typed one. */
   origin?: TurnOrigin;
 }
-
-/** Non-user trigger source for a turn (e.g. a scheduled automation fire). */
-export type TurnOrigin = {
-  kind: 'automation';
-  automationId: string;
-  /** Present when the caller has durably admitted a specific fire. */
-  fireId?: string;
-};
 
 export interface AgentSpec {
   id: string;

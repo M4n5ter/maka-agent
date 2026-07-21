@@ -1503,6 +1503,7 @@ describe('non-serving Runtime Host kernel', () => {
           Object.freeze({
             kind: 'fail_stop',
             cause: failure,
+            ownerIsolationBarrier: Promise.resolve(),
             reclaimAfterOwnerIsolation: () => {
               reclaim.state = 'reclaimed';
             },
@@ -1560,6 +1561,67 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
+  test('fail-stop waits for its owner-isolation barrier and aggregates barrier rejection', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = paths.resources.trackCloseable(
+        await tryAcquireInteractiveRootOwner(capability),
+      );
+      assert.ok(owner);
+      if (!owner) return;
+
+      let requestFailStop!: Parameters<
+        NonNullable<Parameters<typeof RuntimeHostKernel.start>[0]['compositionFactory']>
+      >[0]['requestFailStop'];
+      const barrier = deferred<void>();
+      const observedBarrier = barrier.promise.catch(() => undefined);
+      const reclaimed = deferred<void>();
+      const host = await RuntimeHostKernel.start({
+        owner,
+        idleGraceMs: 10_000,
+        compositionFactory: async (context) => {
+          requestFailStop = context.requestFailStop;
+          return {
+            handlers: createUnavailableDomainOperationHandlers(),
+            recover: async () => undefined,
+            close: async () => ({ kind: 'clean' }),
+          };
+        },
+      });
+      const endpoint = host.endpoint;
+      const failure = new Error('controlled fail-stop');
+      const barrierFailure = new Error('post-cut effect failed');
+      requestFailStop({
+        kind: 'fail_stop',
+        cause: failure,
+        ownerIsolationBarrier: barrier.promise,
+        reclaimAfterOwnerIsolation: () => reclaimed.resolve(),
+      });
+
+      await withTimeout(
+        waitForPathMissing(endpoint),
+        2_000,
+        'fail-stop did not reach its owner-isolation barrier',
+      );
+      assert.equal(owner.closed, false);
+      assert.equal(await tryAcquireInteractiveRootOwner(capability), undefined);
+      barrier.reject(barrierFailure);
+      await observedBarrier;
+      await assert.rejects(
+        () => withTimeout(host.closed, 2_000, 'fail-stop did not settle after barrier rejection'),
+        (error: unknown) =>
+          error instanceof AggregateError &&
+          error.errors.includes(failure) &&
+          error.errors.includes(barrierFailure),
+      );
+      assert.equal(owner.closed, true);
+      await reclaimed.promise;
+      const successor = await retryOwner(capability, paths);
+      assert.ok(successor);
+      await successor?.close();
+    });
+  });
+
   test('fail-stop bounds root owner close and never reclaims before owner isolation', async () => {
     await withHostPaths(async (paths) => {
       const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
@@ -1603,6 +1665,7 @@ describe('non-serving Runtime Host kernel', () => {
           Object.freeze({
             kind: 'fail_stop',
             cause: failure,
+            ownerIsolationBarrier: Promise.resolve(),
             reclaimAfterOwnerIsolation: () => {
               reclaim.state = 'reclaimed';
             },
@@ -2372,4 +2435,22 @@ async function assertPathMissing(path: string): Promise<void> {
       'code' in error &&
       (error as NodeJS.ErrnoException).code === 'ENOENT',
   );
+}
+
+async function waitForPathMissing(path: string): Promise<void> {
+  while (true) {
+    try {
+      await lstat(path);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        return;
+      }
+      throw error;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }

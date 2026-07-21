@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { defaultLocalMemoryMarkdown } from '@maka/core/local-memory';
 import { TOOL_BOUNDARY_PROTOCOL_V1 } from '@maka/core/runtime-event';
+import { filterModelVisibleTaskLedgerTasks } from '@maka/core/task-ledger';
 import {
   BackendRegistry,
   buildBuiltinTools,
@@ -26,7 +27,7 @@ import { openInteractiveShellRunStoreForWrite } from '@maka/storage/shell-run-st
 import { openInteractiveTaskLedgerStoreForWrite } from '@maka/storage/task-ledger-store';
 import { openInteractiveUsageStoresForWrite } from '@maka/storage/usage-stores';
 import { createCanonicalSessionProjectionReader } from './canonical-session-projection.js';
-import { createHostAiSdkBackend } from './execution-model-composition.js';
+import { createHostAiSdkBackend, createHostGoalEvaluator } from './execution-model-composition.js';
 import type {
   RuntimeHostComposition,
   RuntimeHostCompositionCloseResult,
@@ -35,12 +36,17 @@ import type {
 } from './host-kernel.js';
 import { HostArtifactCoordinator } from './artifact-coordinator.js';
 import { HostAutomationCoordinator } from './automation-coordinator.js';
+import { HostGoalCoordinator } from './goal-coordinator.js';
 import { HostInteractionAuthority } from './interaction-coordinator.js';
 import { HostMessageCoordinator, type HostMessageRootPort } from './message-coordinator.js';
 import { HostMemoryCoordinator } from './memory-coordinator.js';
 import { combineDomainOperationHandlers } from './operation-dispatcher.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
-import { RootTurnCoordinator } from './root-turn-coordinator.js';
+import {
+  type HostGoalTurnBoundary,
+  RootTurnCoordinator,
+  type RootTurnCoordinatorHooks,
+} from './root-turn-coordinator.js';
 import { HostRuntimePolicyCoordinator } from './runtime-policy-coordinator.js';
 import { HostRuntimeResourceCoordinator } from './runtime-resource-coordinator.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
@@ -50,8 +56,13 @@ import { HostSkillCatalogFilesystem } from './skill-catalog-filesystem.js';
 import { HostTaskLedgerCoordinator } from './task-ledger-coordinator.js';
 import { HostUsagePricingCoordinator } from './usage-pricing-coordinator.js';
 
+export interface ExecutionRuntimeHostCompositionOptions {
+  readonly rootTurnHooks?: RootTurnCoordinatorHooks;
+}
+
 export async function createExecutionRuntimeHostComposition(
   context: RuntimeHostCompositionContext,
+  options: ExecutionRuntimeHostCompositionOptions = {},
 ): Promise<RuntimeHostComposition> {
   const stores = await openInteractiveExecutionStoresForWrite(context.owner.lease);
   const runtimePolicyStores = await openInteractiveRuntimePolicyStoresForWrite(context.owner.lease);
@@ -67,12 +78,12 @@ export async function createExecutionRuntimeHostComposition(
     try {
       await manager.refreshIdleBackends();
     } catch (error) {
-      failStopHandoff(
-        new RuntimeInteractionFailStopError(
-          'Could not invalidate Runtime Host backend snapshots after a committed policy change',
-          error,
-        ),
+      const fatal = new RuntimeInteractionFailStopError(
+        'Could not invalidate Runtime Host backend snapshots after a committed policy change',
+        error,
       );
+      failStopHandoff(fatal);
+      throw fatal;
     }
   };
   const runtimePolicy = new HostRuntimePolicyCoordinator(runtimePolicyStores, refreshBackends);
@@ -143,7 +154,12 @@ export async function createExecutionRuntimeHostComposition(
     (error) => failStopHandoff(error),
   );
   let coordinator: RootTurnCoordinator | undefined;
+  let goals: HostGoalCoordinator | undefined;
   let automation: HostAutomationCoordinator | undefined;
+  const goalTurns: HostGoalTurnBoundary = {
+    beginExternalTurn: (sessionId, turnId) =>
+      requireGoalCoordinator(goals).beginExternalTurn(sessionId, turnId),
+  };
   const rootPort: HostMessageRootPort = {
     readSessionHeader: (sessionId) =>
       requireRootCoordinator(coordinator).readSessionHeader(sessionId),
@@ -197,7 +213,7 @@ export async function createExecutionRuntimeHostComposition(
       artifacts: artifactStore,
       usage: usageStores,
       permissionEngine,
-      runtimeTools,
+      runtimeTools: [...runtimeTools, ...requireGoalCoordinator(goals).tools],
       runtimeCommitSink: stores.runtimeEventStore,
       onCredentialRefreshed: refreshBackends,
     }),
@@ -227,8 +243,74 @@ export async function createExecutionRuntimeHostComposition(
     sessionAdmission,
     interaction,
     messageCoordinator,
+    goalTurns,
+    options.rootTurnHooks,
   );
   coordinator = rootCoordinator;
+  const goalEvaluator = createHostGoalEvaluator({
+    sessions: stores.sessionStore,
+    runtimePolicy: runtimePolicyStores,
+    onCredentialRefreshed: refreshBackends,
+    acquireResidency: context.acquireResidency,
+    onFatal: (error) =>
+      failStopHandoff(
+        new RuntimeInteractionFailStopError('Runtime Host Goal evaluator entered fail-stop', error),
+      ),
+  });
+  goals = new HostGoalCoordinator({
+    root: rootCoordinator,
+    evaluate: goalEvaluator.evaluate,
+    waitForEvaluatorPostCutEffects: goalEvaluator.whenCurrentPostCutEffectsSettled,
+    readEvaluationContext: async (sessionId) => {
+      const messages = await stores.sessionStore.readMessages(sessionId);
+      let tokenCount = 0;
+      for (const message of messages) {
+        if (message.type === 'token_usage') {
+          tokenCount += message.total ?? message.input + message.output;
+        }
+      }
+      const recentContext = messages
+        .slice(-10)
+        .filter((message) => message.type === 'user' || message.type === 'assistant')
+        .slice(-6)
+        .map((message) => `[${message.type}]: ${message.text.slice(0, 500)}`)
+        .join('\n');
+      return { recentContext, tokenCount };
+    },
+    taskGate: {
+      listActionableTaskKeys: async (sessionId) =>
+        filterModelVisibleTaskLedgerTasks(
+          await taskLedgerStore.listCanonical(sessionId, {
+            classifyResumeTrust: true,
+            includeArchived: false,
+          }),
+        )
+          .filter((task) => task.status === 'pending' || task.status === 'in_progress')
+          .map((task) => task.key),
+      recordDecision: async (trace) => {
+        const admission = await stores.agentRunStore.readRootTurnAdmission(
+          trace.sessionId,
+          trace.turnId,
+        );
+        if (!admission) return;
+        await stores.agentRunStore.appendEvent(trace.sessionId, admission.runId, {
+          type: 'task_gate_decided',
+          id: randomUUID(),
+          runId: admission.runId,
+          sessionId: trace.sessionId,
+          turnId: trace.turnId,
+          ts: Date.now(),
+          data: {
+            goalId: trace.goalId,
+            decision: trace.decision,
+            taskKeys: trace.taskKeys,
+          },
+        });
+      },
+    },
+    acquireResidency: context.acquireResidency,
+    requestDrain: context.requestDrain,
+  });
   automation = new HostAutomationCoordinator({
     store: automationStore,
     executionStores: stores,
@@ -259,6 +341,8 @@ export async function createExecutionRuntimeHostComposition(
     return memoryDrain;
   };
   const beginRuntimeDrain = () => {
+    goalEvaluator.beginDrain();
+    goals.beginDrain();
     automation.beginDrain();
     beginArtifactDrain();
     beginMemoryDrain();
@@ -275,7 +359,23 @@ export async function createExecutionRuntimeHostComposition(
   failStopHandoff = (error) => {
     if (failStopDisposition) return;
     const handoffFailures: unknown[] = [];
+    let goalEvaluatorFailStop = {
+      ownerIsolationBarrier: Promise.resolve(),
+      reclaimAfterOwnerIsolation: () => {},
+    };
+    let runtimeOwnerIsolationBarrier: Promise<unknown> = Promise.resolve();
+    let reclaimGoals = () => {};
     let reclaimAutomation = () => {};
+    try {
+      goalEvaluatorFailStop = goalEvaluator.prepareFailStop();
+    } catch (handoffFailure) {
+      handoffFailures.push(handoffFailure);
+    }
+    try {
+      reclaimGoals = goals.prepareFailStopReclaim();
+    } catch (handoffFailure) {
+      handoffFailures.push(handoffFailure);
+    }
     try {
       reclaimAutomation = automation.prepareFailStopReclaim();
     } catch (handoffFailure) {
@@ -287,6 +387,7 @@ export async function createExecutionRuntimeHostComposition(
       beginUsageDrain();
       skills.beginDrain();
       const runtimeFailStop = manager.installInteractionFailStop(error);
+      runtimeOwnerIsolationBarrier = runtimeFailStop.ownerIsolationDrain;
       resources.beginDrain();
       observe(runtimeFailStop.ownerIsolationDrain);
       observe(runtimeFailStop.reclaimDrain);
@@ -329,10 +430,16 @@ export async function createExecutionRuntimeHostComposition(
     const disposition: RuntimeHostFailStopDisposition = Object.freeze({
       kind: 'fail_stop' as const,
       cause,
+      ownerIsolationBarrier: settleOwnerIsolationBarriers(
+        runtimeOwnerIsolationBarrier,
+        goalEvaluatorFailStop.ownerIsolationBarrier,
+      ),
       reclaimAfterOwnerIsolation: () => {
         if (reclaimed) return;
         reclaimed = true;
         interaction.reclaimAfterOwnerIsolation();
+        goalEvaluatorFailStop.reclaimAfterOwnerIsolation();
+        reclaimGoals();
         reclaimAutomation();
         reclaimMessages();
         reclaimRoot();
@@ -345,6 +452,7 @@ export async function createExecutionRuntimeHostComposition(
   return {
     handlers: combineDomainOperationHandlers(
       rootCoordinator.handlers,
+      goals.handlers,
       automation.handlers,
       messageCoordinator.handlers,
       interaction.handlers,
@@ -360,6 +468,8 @@ export async function createExecutionRuntimeHostComposition(
     continuity,
     onConnectionSettled: (connectionId) => resources.releaseConnection(connectionId),
     beginDrain: () => {
+      goalEvaluator.beginDrain();
+      goals.beginDrain();
       automation.beginDrain();
       beginArtifactDrain();
       beginMemoryDrain();
@@ -396,6 +506,8 @@ export async function createExecutionRuntimeHostComposition(
       const drain = beginRuntimeDrain();
       closeTask ??= closeComposition(
         rootCoordinator,
+        goalEvaluator,
+        goals,
         automation,
         messageCoordinator,
         interaction,
@@ -455,6 +567,8 @@ export function createHostFilesystemWorkerLaunchSpecProvider(
 
 async function closeComposition(
   coordinator: RootTurnCoordinator,
+  goalEvaluator: ReturnType<typeof createHostGoalEvaluator>,
+  goals: HostGoalCoordinator,
   automation: HostAutomationCoordinator,
   messages: HostMessageCoordinator,
   interaction: HostInteractionAuthority,
@@ -475,6 +589,8 @@ async function closeComposition(
 
   const normalClose = closeNormally(
     coordinator,
+    goalEvaluator,
+    goals,
     automation,
     messages,
     interaction,
@@ -509,6 +625,8 @@ async function closeComposition(
 
 async function closeNormally(
   coordinator: RootTurnCoordinator,
+  goalEvaluator: ReturnType<typeof createHostGoalEvaluator>,
+  goals: HostGoalCoordinator,
   automation: HostAutomationCoordinator,
   messages: HostMessageCoordinator,
   interaction: HostInteractionAuthority,
@@ -524,6 +642,8 @@ async function closeNormally(
   try {
     const outcomes = await Promise.allSettled([
       coordinator.close(),
+      goalEvaluator.close(),
+      goals.close(),
       automation.close(),
       runtimeDrain.ownerIsolationDrain,
       runtimeDrain.reclaimDrain,
@@ -552,6 +672,20 @@ function observe(task: Promise<unknown>): void {
   void task.catch(() => undefined);
 }
 
+async function settleOwnerIsolationBarriers(
+  runtimeBarrier: Promise<unknown>,
+  goalBarrier: Promise<unknown>,
+): Promise<void> {
+  const outcomes = await Promise.allSettled([runtimeBarrier, goalBarrier]);
+  const errors = outcomes.flatMap((outcome) =>
+    outcome.status === 'rejected' ? [outcome.reason] : [],
+  );
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Runtime Host owner isolation barriers failed');
+  }
+}
+
 function requireFailStopDisposition(
   disposition: RuntimeHostFailStopDisposition | undefined,
 ): RuntimeHostFailStopDisposition {
@@ -571,6 +705,11 @@ function requireAutomationCoordinator(
 ): HostAutomationCoordinator {
   if (!automation) throw new Error('Runtime Host Automation coordinator is not bound');
   return automation;
+}
+
+function requireGoalCoordinator(goals: HostGoalCoordinator | undefined): HostGoalCoordinator {
+  if (!goals) throw new Error('Runtime Host Goal coordinator is not bound');
+  return goals;
 }
 
 function requireRootCoordinator(coordinator: RootTurnCoordinator | undefined): RootTurnCoordinator {

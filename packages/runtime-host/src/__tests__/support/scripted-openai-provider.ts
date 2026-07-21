@@ -8,6 +8,23 @@ export interface ScriptedOpenAiRequest {
   readonly body: Record<string, unknown>;
 }
 
+export type ScriptedOpenAiResponse =
+  | {
+      readonly kind: 'stream';
+      readonly modelId: string;
+      readonly id: string;
+      readonly delta: Record<string, unknown>;
+      readonly finishReason: 'tool_calls' | 'stop';
+      readonly beforeRespond?: Promise<void>;
+    }
+  | {
+      readonly kind: 'json';
+      readonly modelId: string;
+      readonly id: string;
+      readonly text: string;
+      readonly beforeRespond?: Promise<void>;
+    };
+
 export interface ScriptedOpenAiProvider {
   readonly baseUrl: string;
   readonly requests: ScriptedOpenAiRequest[];
@@ -15,13 +32,18 @@ export interface ScriptedOpenAiProvider {
   close(): Promise<void>;
 }
 
-export async function startScriptedOpenAiProvider(input: {
+type LegacyScript = {
   readonly modelId: string;
   readonly toolCallId: string;
   readonly toolName: string;
   readonly toolArgs: unknown;
   readonly finalText: string;
-}): Promise<ScriptedOpenAiProvider> {
+};
+
+export async function startScriptedOpenAiProvider(
+  input: { readonly responses: readonly ScriptedOpenAiResponse[] } | LegacyScript,
+): Promise<ScriptedOpenAiProvider> {
+  const responses = 'responses' in input ? [...input.responses] : legacyResponses(input);
   const requests: ScriptedOpenAiRequest[] = [];
   const handlerErrors: unknown[] = [];
   const server = createServer((request, response) => {
@@ -34,36 +56,14 @@ export async function startScriptedOpenAiProvider(input: {
           path: request.url,
           body,
         });
-        if (requests.length === 1) {
-          respondStream(
-            response,
-            input.modelId,
-            'scripted-tool-call',
-            {
-              role: 'assistant',
-              tool_calls: [
-                {
-                  index: 0,
-                  id: input.toolCallId,
-                  type: 'function',
-                  function: {
-                    name: input.toolName,
-                    arguments: JSON.stringify(input.toolArgs),
-                  },
-                },
-              ],
-            },
-            'tool_calls',
-          );
-          return;
+        const scripted = responses.shift();
+        assert.ok(scripted, `Unexpected OpenAI request ${requests.length}`);
+        await scripted.beforeRespond;
+        if (scripted.kind === 'stream') {
+          respondStream(response, scripted);
+        } else {
+          respondJson(response, scripted);
         }
-        respondStream(
-          response,
-          input.modelId,
-          `scripted-final-${requests.length}`,
-          { role: 'assistant', content: input.finalText },
-          'stop',
-        );
       } catch (error) {
         handlerErrors.push(error);
         response.destroy(error as Error);
@@ -84,6 +84,38 @@ export async function startScriptedOpenAiProvider(input: {
   };
 }
 
+function legacyResponses(input: LegacyScript): ScriptedOpenAiResponse[] {
+  return [
+    {
+      kind: 'stream',
+      modelId: input.modelId,
+      id: 'scripted-tool-call',
+      delta: {
+        role: 'assistant',
+        tool_calls: [
+          {
+            index: 0,
+            id: input.toolCallId,
+            type: 'function',
+            function: {
+              name: input.toolName,
+              arguments: JSON.stringify(input.toolArgs),
+            },
+          },
+        ],
+      },
+      finishReason: 'tool_calls',
+    },
+    {
+      kind: 'stream',
+      modelId: input.modelId,
+      id: 'scripted-final',
+      delta: { role: 'assistant', content: input.finalText },
+      finishReason: 'stop',
+    },
+  ];
+}
+
 function readRequestBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -98,21 +130,41 @@ function readRequestBody(request: IncomingMessage): Promise<string> {
 
 function respondStream(
   response: ServerResponse,
-  modelId: string,
-  id: string,
-  delta: Record<string, unknown>,
-  finishReason: 'tool_calls' | 'stop',
+  scripted: Extract<ScriptedOpenAiResponse, { kind: 'stream' }>,
 ): void {
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   response.write(
     `data: ${JSON.stringify({
-      id,
+      id: scripted.id,
       object: 'chat.completion.chunk',
       created: Date.now(),
-      model: modelId,
-      choices: [{ index: 0, delta, finish_reason: finishReason }],
+      model: scripted.modelId,
+      choices: [{ index: 0, delta: scripted.delta, finish_reason: scripted.finishReason }],
       usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
     })}\n\n`,
   );
   response.end('data: [DONE]\n\n');
+}
+
+function respondJson(
+  response: ServerResponse,
+  scripted: Extract<ScriptedOpenAiResponse, { kind: 'json' }>,
+): void {
+  response.writeHead(200, { 'content-type': 'application/json' });
+  response.end(
+    JSON.stringify({
+      id: scripted.id,
+      object: 'chat.completion',
+      created: Date.now(),
+      model: scripted.modelId,
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: scripted.text },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+    }),
+  );
 }

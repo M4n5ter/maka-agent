@@ -16,6 +16,7 @@ import {
 
 export { RuntimeHostProtocolError } from './errors.js';
 export * from './automation.js';
+export * from './goal.js';
 export * from './interaction.js';
 export * from './message.js';
 export * from './operations.js';

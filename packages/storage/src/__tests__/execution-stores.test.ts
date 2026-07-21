@@ -412,6 +412,57 @@ describe('execution stores', () => {
     });
   });
 
+  test('binds an admitted root Turn to one durable Goal generation identity', async () => {
+    await withRoot(async ({ root }) => {
+      const store = createAgentRunStore(root);
+      const input = {
+        sessionId: 'goal-session',
+        turnId: 'goal-turn',
+        proposedRunId: 'goal-run',
+        proposedUserMessageId: 'goal-message',
+        previousRootTurnId: null,
+        normalizedInput: { text: 'continue the Goal' },
+        sourceMessages: [],
+        origin: { kind: 'goal' as const, goalId: 'goal-1' },
+        admittedAt: 10,
+      };
+
+      const admitted = await store.admitRootTurn(input);
+      assert.equal(admitted.kind, 'admitted');
+      assert.deepEqual(admitted.admission.origin, input.origin);
+      assert.equal(Object.isFrozen(admitted.admission.origin), true);
+      assert.deepEqual(
+        (await store.readRootTurnAdmission(input.sessionId, input.turnId))?.origin,
+        input.origin,
+      );
+
+      const retry = await store.admitRootTurn({
+        ...input,
+        proposedRunId: 'unused-goal-run',
+        proposedUserMessageId: 'unused-goal-message',
+      });
+      assert.equal(retry.kind, 'existing');
+
+      const conflict = await store.admitRootTurn({
+        ...input,
+        origin: { kind: 'goal', goalId: 'goal-2' },
+      });
+      assert.equal(conflict.kind, 'conflict');
+
+      await assert.rejects(
+        () =>
+          store.admitRootTurn({
+            ...input,
+            turnId: 'invalid-goal-turn',
+            proposedRunId: 'invalid-goal-run',
+            proposedUserMessageId: 'invalid-goal-message',
+            origin: { kind: 'goal', goalId: 'not/a/safe/id' },
+          }),
+        /Invalid root turn origin/,
+      );
+    });
+  });
+
   test('bounds source receipts and fails closed on duplicate or ambiguous message identity', async () => {
     await withRoot(async ({ root }) => {
       const store = createAgentRunStore(root);

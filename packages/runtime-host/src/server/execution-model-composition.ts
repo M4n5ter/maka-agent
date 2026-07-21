@@ -18,6 +18,7 @@ import {
   createProviderRequestCaptureRecorder,
   createProxiedFetchTransport,
   getAIModel,
+  GoalEvaluatorFatalError,
   isModelExplicitlyUnsupportedForChat,
   isOAuthSubscriptionProvider,
   loadHistoryCompactBlocksFromArtifacts,
@@ -30,8 +31,9 @@ import {
   serializeOAuthSubscriptionTokens,
   SKILL_TOOL_NAME,
   TOKEN_REFRESH_SKEW_MS,
-  type BackendFactoryContext,
   type AutomationToolService,
+  type BackendFactoryContext,
+  type GoalEvaluatorDeps,
   type MakaTool,
   type PermissionEngine,
   type ProxiedFetchProxy,
@@ -41,12 +43,14 @@ import {
 import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import { resolveModelVisionSupport } from '@maka/core/model-metadata';
 import type { RuntimePolicy } from '@maka/core/runtime-policy';
+import type { SessionHeader } from '@maka/core/session';
 import {
   filterModelVisibleTaskLedgerTasks,
   renderTaskLedgerPromptText,
 } from '@maka/core/task-ledger';
 import { createAttachmentByteReader, persistProviderRequestCaptureArtifact } from '@maka/storage';
 import type { InteractiveArtifactStoreWriter } from '@maka/storage/artifact-stores';
+import type { ExecutionSessionWriter } from '@maka/storage/execution-stores';
 import {
   authenticateInteractiveTaskLedgerWriter,
   type InteractiveTaskLedgerWriterFacade,
@@ -56,6 +60,7 @@ import type {
   RuntimePolicyStoresWriter,
 } from '@maka/storage/runtime-policy-stores';
 import type { InteractiveUsageStoresWriter } from '@maka/storage/usage-stores';
+import type { RuntimeHostResidency } from './host-kernel.js';
 import type { HostMemoryCoordinator } from './memory-coordinator.js';
 import type { HostSkillCatalogCoordinator } from './skill-catalog-coordinator.js';
 
@@ -152,20 +157,18 @@ export interface HostAiSdkBackendInput {
 
 /** Builds the one Host-owned real model backend from canonical root state. */
 export async function createHostAiSdkBackend(input: HostAiSdkBackendInput): Promise<AiSdkBackend> {
-  const target = await resolveExecutionTarget(input);
+  const target = await resolveExecutionTarget({
+    header: input.context.header,
+    runtimePolicyOperations: input.runtimePolicy.operations,
+    onCredentialRefreshed: input.onCredentialRefreshed,
+    onFatal: (fatal) => {
+      throw fatal.fatalCause;
+    },
+  });
   const modelTransport = createProxiedFetchTransport(
     toProxySettings(target.networkProxy, target.proxySecret),
   );
-  const modelFetch =
-    buildSubscriptionModelFetch({
-      connection: target.connection,
-      sessionId: input.context.sessionId,
-      modelId: target.model,
-      fetchFn: modelTransport.fetch,
-      ...(target.connection.providerType === 'claude-subscription'
-        ? { claude: { cloakEnabled: false, deviceId: '', accountUuid: '' } }
-        : {}),
-    }) ?? modelTransport.fetch;
+  const modelFetch = buildHostModelFetch(target, input.context.sessionId, modelTransport.fetch);
   const providerOptions = buildProviderOptions(
     target.connection,
     target.model,
@@ -279,6 +282,177 @@ export async function createHostAiSdkBackend(input: HostAiSdkBackendInput): Prom
   }
 }
 
+export interface HostGoalEvaluatorInput {
+  readonly sessions: Pick<ExecutionSessionWriter, 'readHeader'>;
+  readonly runtimePolicy: RuntimePolicyStoresWriter;
+  readonly onCredentialRefreshed: () => Promise<void>;
+  readonly acquireResidency: () => RuntimeHostResidency;
+  readonly onFatal: (error: GoalEvaluatorFatalError) => void;
+  readonly refreshOAuthTokens?: typeof refreshOAuthSubscriptionTokens;
+}
+
+interface HostGoalEvaluatorFailStop {
+  readonly ownerIsolationBarrier: Promise<void>;
+  readonly reclaimAfterOwnerIsolation: () => void;
+}
+
+export interface HostGoalEvaluator extends GoalEvaluatorDeps {
+  whenCurrentPostCutEffectsSettled(): Promise<void>;
+  beginDrain(): void;
+  close(): Promise<void>;
+  prepareFailStop(): HostGoalEvaluatorFailStop;
+}
+
+/** Builds the Host-owned Goal judge against each Session's canonical model selection. */
+export function createHostGoalEvaluator(input: HostGoalEvaluatorInput): HostGoalEvaluator {
+  const lifecycle = new HostGoalEvaluatorLifecycleOwner(input.acquireResidency);
+  return {
+    async evaluate(prompt: string, sessionId: string, signal?: AbortSignal): Promise<string> {
+      throwIfGoalEvaluationAborted(signal);
+      const header = await input.sessions.readHeader(sessionId);
+      throwIfGoalEvaluationAborted(signal);
+      if (header.isArchived || header.status === 'archived') {
+        throw new Error('Runtime Host cannot evaluate a Goal for an archived Session');
+      }
+      throwIfGoalEvaluationAborted(signal);
+      const target = await resolveExecutionTarget({
+        header,
+        runtimePolicyOperations: input.runtimePolicy.operations,
+        onCredentialRefreshed: input.onCredentialRefreshed,
+        admitRefreshEffect: () => lifecycle.admit(),
+        onFatal: input.onFatal,
+        refreshOAuthTokens: input.refreshOAuthTokens,
+        signal,
+      });
+      throwIfGoalEvaluationAborted(signal);
+      const modelTransport = createProxiedFetchTransport(
+        toProxySettings(target.networkProxy, target.proxySecret),
+      );
+      try {
+        throwIfGoalEvaluationAborted(signal);
+        const modelFetch = buildHostModelFetch(target, sessionId, modelTransport.fetch);
+        throwIfGoalEvaluationAborted(signal);
+        const ai = (await import('ai')) as unknown as {
+          generateText(options: Record<string, unknown>): Promise<{ text: string }>;
+        };
+        throwIfGoalEvaluationAborted(signal);
+        const result = await ai.generateText({
+          model: getAIModel({
+            connection: target.connection,
+            apiKey: target.apiKey,
+            modelId: target.model,
+            fetch: modelFetch,
+          }),
+          prompt,
+          providerOptions: buildProviderOptions(
+            target.connection,
+            target.model,
+            header.thinkingLevel,
+          ),
+          maxOutputTokens: 1024,
+          abortSignal: signal,
+        });
+        throwIfGoalEvaluationAborted(signal);
+        return result.text;
+      } finally {
+        await modelTransport.close();
+      }
+    },
+    whenCurrentPostCutEffectsSettled: () => lifecycle.whenCurrentEffectsSettled(),
+    beginDrain: () => lifecycle.beginDrain(),
+    close: () => lifecycle.close(),
+    prepareFailStop: () => lifecycle.prepareFailStop(),
+  };
+}
+
+interface HostGoalRefreshEffect {
+  settle(): void;
+}
+
+interface HostGoalRefreshEffectState {
+  readonly residency: RuntimeHostResidency;
+  readonly settlement: Promise<void>;
+  readonly resolveSettlement: () => void;
+  settled: boolean;
+}
+
+class HostGoalEvaluatorLifecycleOwner {
+  readonly #active = new Set<HostGoalRefreshEffectState>();
+  readonly #failStopResidencies = new Set<RuntimeHostResidency>();
+  #admissionClosed = false;
+  #closeTask: Promise<void> | undefined;
+  #failStop: HostGoalEvaluatorFailStop | undefined;
+
+  constructor(private readonly acquireResidency: () => RuntimeHostResidency) {}
+
+  admit(): HostGoalRefreshEffect {
+    if (this.#admissionClosed) throw goalEvaluatorDrainingError();
+    const residency = this.acquireResidency();
+    let resolveSettlement!: () => void;
+    const settlement = new Promise<void>((resolve) => {
+      resolveSettlement = resolve;
+    });
+    const state: HostGoalRefreshEffectState = {
+      residency,
+      settlement,
+      resolveSettlement,
+      settled: false,
+    };
+    this.#active.add(state);
+    return { settle: () => this.#settle(state) };
+  }
+
+  whenCurrentEffectsSettled(): Promise<void> {
+    const current = [...this.#active];
+    return current.length === 0
+      ? Promise.resolve()
+      : Promise.all(current.map((state) => state.settlement)).then(() => undefined);
+  }
+
+  beginDrain(): void {
+    this.#admissionClosed = true;
+  }
+
+  close(): Promise<void> {
+    this.#closeTask ??= this.#closeOnce();
+    return this.#closeTask;
+  }
+
+  prepareFailStop(): HostGoalEvaluatorFailStop {
+    if (this.#failStop) return this.#failStop;
+    this.beginDrain();
+    for (const state of this.#active) this.#failStopResidencies.add(state.residency);
+    let reclaimed = false;
+    this.#failStop = Object.freeze({
+      ownerIsolationBarrier: this.whenCurrentEffectsSettled(),
+      reclaimAfterOwnerIsolation: () => {
+        if (reclaimed) return;
+        reclaimed = true;
+        for (const residency of this.#failStopResidencies) residency.release();
+        this.#failStopResidencies.clear();
+      },
+    });
+    return this.#failStop;
+  }
+
+  async #closeOnce(): Promise<void> {
+    this.beginDrain();
+    await this.whenCurrentEffectsSettled();
+  }
+
+  #settle(state: HostGoalRefreshEffectState): void {
+    if (state.settled) return;
+    state.settled = true;
+    if (!this.#active.delete(state)) return;
+    if (!this.#failStop) state.residency.release();
+    state.resolveSettlement();
+  }
+}
+
+function goalEvaluatorDrainingError(): Error {
+  return new Error('Runtime Host Goal evaluator refresh admission is closed');
+}
+
 class HostAiSdkBackend extends AiSdkBackend {
   constructor(
     input: ConstructorParameters<typeof AiSdkBackend>[0],
@@ -304,16 +478,28 @@ interface ResolvedExecutionTarget {
   readonly proxySecret?: string;
 }
 
+interface ResolveExecutionTargetInput {
+  readonly header: Pick<SessionHeader, 'llmConnectionSlug' | 'model'>;
+  readonly runtimePolicyOperations: RuntimePolicyStoresWriter['operations'];
+  readonly onCredentialRefreshed: () => Promise<void>;
+  readonly admitRefreshEffect?: () => HostGoalRefreshEffect;
+  readonly onFatal: (error: GoalEvaluatorFatalError) => void;
+  readonly refreshOAuthTokens?: typeof refreshOAuthSubscriptionTokens;
+  readonly signal?: AbortSignal;
+}
+
 async function resolveExecutionTarget(
-  input: HostAiSdkBackendInput,
+  input: ResolveExecutionTargetInput,
 ): Promise<ResolvedExecutionTarget> {
-  const resolved = await input.runtimePolicy.operations.resolveExecutionConnection(
-    input.context.header.llmConnectionSlug,
+  throwIfGoalEvaluationAborted(input.signal);
+  const resolved = await input.runtimePolicyOperations.resolveExecutionConnection(
+    input.header.llmConnectionSlug,
   );
+  throwIfGoalEvaluationAborted(input.signal);
   if (resolved.kind !== 'ready') {
     throw new Error(`Runtime Host model connection is not ready: ${resolved.kind}`);
   }
-  const model = input.context.header.model.trim();
+  const model = input.header.model.trim();
   const modelInfo = resolved.connection.models.find((candidate) => candidate.id === model);
   if (!model || !resolved.connection.enabledModelIds.includes(model) || !modelInfo) {
     throw new Error('Runtime Host Session model is not enabled by its canonical connection');
@@ -347,36 +533,67 @@ async function resolveExecutionTarget(
   let proxySecret = resolved.secretMaterial.networkProxy?.secret;
   if (!tokens) throw new Error('Runtime Host stored OAuth credential is invalid');
   if (tokens.expires_at - Date.now() <= TOKEN_REFRESH_SKEW_MS) {
-    const refresh = await input.runtimePolicy.operations.beginStoredOAuthRefresh(
+    throwIfGoalEvaluationAborted(input.signal);
+    const refresh = await input.runtimePolicyOperations.beginStoredOAuthRefresh(
       resolved.connection.connectionId,
     );
+    throwIfGoalEvaluationAborted(input.signal);
     if (refresh.kind !== 'ready') {
       throw new Error(`Runtime Host OAuth credential cannot refresh: ${refresh.kind}`);
     }
     const current = parseOAuthSubscriptionTokens(refresh.secretMaterial.connection.secret);
     if (!current) throw new Error('Runtime Host stored OAuth credential is invalid');
-    const refreshTransport = createProxiedFetchTransport(
-      toProxySettings(refresh.networkProxy, refresh.secretMaterial.networkProxy?.secret),
-    );
+    // This is the final cancellation cut. Admission atomically acquires Host
+    // residency; once admitted, refresh, commit, and invalidation must finish.
+    throwIfGoalEvaluationAborted(input.signal);
+    const effect = input.admitRefreshEffect?.();
     try {
-      tokens = await refreshOAuthSubscriptionTokens({
-        providerType: connection.providerType,
-        tokens: current,
-        fetchFn: refreshTransport.fetch,
-      });
+      try {
+        const refreshTransport = createProxiedFetchTransport(
+          toProxySettings(refresh.networkProxy, refresh.secretMaterial.networkProxy?.secret),
+        );
+        let refreshTransportCloseFailure: { readonly error: unknown } | undefined;
+        try {
+          tokens = await (input.refreshOAuthTokens ?? refreshOAuthSubscriptionTokens)({
+            providerType: connection.providerType,
+            tokens: current,
+            fetchFn: refreshTransport.fetch,
+          });
+        } finally {
+          try {
+            await refreshTransport.close();
+          } catch (error) {
+            refreshTransportCloseFailure = { error };
+          }
+        }
+        // Once admitted, Store completion is not cancellable. The outer evaluator
+        // waits only its cleanup grace while this residency blocks idle shutdown.
+        const completion = await input.runtimePolicyOperations.completeStoredOAuthRefresh(
+          refresh.ticket,
+          { secret: serializeOAuthSubscriptionTokens(tokens) },
+        );
+        if (completion.kind !== 'committed') {
+          throw new Error(`Runtime Host OAuth refresh did not commit: ${completion.kind}`);
+        }
+        await input.onCredentialRefreshed();
+        if (refreshTransportCloseFailure) throw refreshTransportCloseFailure.error;
+        networkProxy = refresh.networkProxy;
+        proxySecret = refresh.secretMaterial.networkProxy?.secret;
+      } catch (error) {
+        const fatal = new GoalEvaluatorFatalError(
+          'Runtime Host Goal OAuth refresh entered fail-stop',
+          error,
+        );
+        input.onFatal(fatal);
+        throw fatal;
+      }
+      const abortReason = input.signal?.aborted
+        ? (input.signal.reason ?? new Error('Runtime Host Goal evaluation aborted'))
+        : undefined;
+      if (abortReason !== undefined) throw abortReason;
     } finally {
-      await refreshTransport.close();
+      effect?.settle();
     }
-    const completion = await input.runtimePolicy.operations.completeStoredOAuthRefresh(
-      refresh.ticket,
-      { secret: serializeOAuthSubscriptionTokens(tokens) },
-    );
-    if (completion.kind !== 'committed') {
-      throw new Error(`Runtime Host OAuth refresh did not commit: ${completion.kind}`);
-    }
-    await input.onCredentialRefreshed();
-    networkProxy = refresh.networkProxy;
-    proxySecret = refresh.secretMaterial.networkProxy?.secret;
   }
 
   return {
@@ -386,6 +603,28 @@ async function resolveExecutionTarget(
     networkProxy,
     ...(proxySecret === undefined ? {} : { proxySecret }),
   };
+}
+
+function throwIfGoalEvaluationAborted(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
+}
+
+function buildHostModelFetch(
+  target: ResolvedExecutionTarget,
+  sessionId: string,
+  fetchFn: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  return (
+    buildSubscriptionModelFetch({
+      connection: target.connection,
+      sessionId,
+      modelId: target.model,
+      fetchFn,
+      ...(target.connection.providerType === 'claude-subscription'
+        ? { claude: { cloakEnabled: false, deviceId: '', accountUuid: '' } }
+        : {}),
+    }) ?? fetchFn
+  );
 }
 
 function toProxySettings(

@@ -89,6 +89,20 @@ export type SessionOrigin = {
   fireId: string;
 };
 
+/** Non-user trigger source durably associated with a turn. */
+export type TurnOrigin =
+  | {
+      kind: 'automation';
+      automationId: string;
+      /** Present when the caller has durably admitted a specific fire. */
+      fireId?: string;
+    }
+  | {
+      kind: 'goal';
+      /** Stable identity of the in-memory Goal generation that admitted this turn. */
+      goalId: string;
+    };
+
 export interface SessionHeader {
   // Identity
   id: string;
@@ -238,9 +252,8 @@ export interface UserMessage extends MessageContent {
   ts: number;
   /** Inline quoted excerpts carried into this message; rendered as chips. */
   quotes?: QuoteRef[];
-  /** Non-user trigger source (automation fire). Lets the chat mark turns the
-   *  user did not hand-type. Mirrors TurnOrigin in runtime-inputs. */
-  origin?: { kind: 'automation'; automationId: string; fireId?: string };
+  /** Non-user trigger source. Lets the chat mark turns the user did not hand-type. */
+  origin?: TurnOrigin;
 }
 
 /** Prefer the human-facing view of a user message when one was stored. */
@@ -471,11 +484,13 @@ const SYSTEM_NOTE_MESSAGE_SHAPE = defineObjectShape<SystemNoteMessage>()(
 );
 type AssistantThinking = NonNullable<AssistantMessage['thinking']>;
 const ASSISTANT_THINKING_SHAPE = defineObjectShape<AssistantThinking>()(['text'], ['signature']);
-type AutomationOrigin = NonNullable<UserMessage['origin']>;
+type AutomationOrigin = Extract<NonNullable<UserMessage['origin']>, { kind: 'automation' }>;
 const AUTOMATION_ORIGIN_SHAPE = defineObjectShape<AutomationOrigin>()(
   ['kind', 'automationId'],
   ['fireId'],
 );
+type GoalOrigin = Extract<NonNullable<UserMessage['origin']>, { kind: 'goal' }>;
+const GOAL_ORIGIN_SHAPE = defineObjectShape<GoalOrigin>()(['kind', 'goalId'], []);
 
 const SYSTEM_NOTE_KINDS = new Set([
   'session_start',
@@ -512,7 +527,7 @@ function decodeStoredMessage(
         isOptionalString(message.displayText) &&
         (message.attachments === undefined ||
           (Array.isArray(message.attachments) && message.attachments.every(isAttachmentRef))) &&
-        (message.origin === undefined || isAutomationOrigin(message.origin))
+        (message.origin === undefined || isTurnOrigin(message.origin))
       ) {
         const { displayText, attachments, ...envelope } = message;
         return {
@@ -648,6 +663,19 @@ function isAutomationOrigin(value: unknown): value is AutomationOrigin {
     typeof value.automationId === 'string' &&
     isOptionalString(value.fireId)
   );
+}
+
+function isGoalOrigin(value: unknown): value is GoalOrigin {
+  return (
+    isRecord(value) &&
+    hasExactShape(value, GOAL_ORIGIN_SHAPE) &&
+    value.kind === 'goal' &&
+    typeof value.goalId === 'string'
+  );
+}
+
+function isTurnOrigin(value: unknown): value is TurnOrigin {
+  return isAutomationOrigin(value) || isGoalOrigin(value);
 }
 
 function isOptionalFiniteDuration(value: unknown): boolean {
