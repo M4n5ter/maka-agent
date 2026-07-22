@@ -6,12 +6,14 @@ import {
   type RuntimeHostedRootAuthority,
 } from '@maka/runtime';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
+import { CanonicalSessionProjectionReader } from './canonical-session-projection.js';
 import type { RuntimeHostComposition, RuntimeHostCompositionContext } from './host-kernel.js';
 import { type HostMessageRootPort, HostMessageCoordinator } from './message-coordinator.js';
 import type { AllDomainOperationHandlerMap } from './operation-dispatcher.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
 import { RootTurnCoordinator } from './root-turn-coordinator.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
+import { SessionContinuityCoordinator } from './session-continuity-coordinator.js';
 
 export async function createExecutionRuntimeHostComposition(
   context: RuntimeHostCompositionContext,
@@ -22,11 +24,13 @@ export async function createExecutionRuntimeHostComposition(
   backends.register('fake', (backendContext) => new FakeBackend(backendContext));
   const sessionAdmission = new SessionAdmissionGate();
   let rootCoordinator: RootTurnCoordinator | undefined;
+  let continuity: SessionContinuityCoordinator | undefined;
   const rootPort: HostMessageRootPort = {
     readSessionHeader: (sessionId) =>
       requireRootCoordinator(rootCoordinator).readSessionHeader(sessionId),
     readRootState: (sessionId) => requireRootCoordinator(rootCoordinator).readRootState(sessionId),
-    startFromMessage: (input) => requireRootCoordinator(rootCoordinator).startFromMessage(input),
+    startFromMessage: (input, admission) =>
+      requireRootCoordinator(rootCoordinator).startFromMessage(input, admission),
     claimStop: (input, commitQueueFence) =>
       requireRootCoordinator(rootCoordinator).claimStop(input, commitQueueFence),
   };
@@ -43,7 +47,22 @@ export async function createExecutionRuntimeHostComposition(
     sessionAdmission,
     acquireResidency: context.acquireResidency,
     requestDrain: context.requestDrain,
+    onProjectionChanged: (sessionId) =>
+      requireContinuity(continuity).enqueueCanonicalRefresh(sessionId),
   });
+  const rootAdmissionOwner = new RootAdmissionOwner(stores.agentRunStore);
+  const canonicalProjection = new CanonicalSessionProjectionReader({
+    stores,
+    rootAdmissions: rootAdmissionOwner,
+    messages,
+  });
+  continuity = new SessionContinuityCoordinator(
+    context.hostEpoch,
+    (sessionId) => canonicalProjection.read(sessionId),
+    sessionAdmission,
+    context.requestDrain,
+  );
+  const continuityCoordinator = continuity;
   const runtimeAuthority: RuntimeHostedRootAuthority = {
     bindRun: (identity) => messages.bindRun(identity),
     executeRoot: (input) => requireRootCoordinator(rootCoordinator).executeRoot(input),
@@ -61,13 +80,13 @@ export async function createExecutionRuntimeHostComposition(
     now: Date.now,
     messageAuthority: runtimeAuthority,
   });
-  const rootAdmissionOwner = new RootAdmissionOwner(stores.agentRunStore);
   rootCoordinator = new RootTurnCoordinator(
     manager,
     stores,
     sessionAdmission,
     rootAdmissionOwner,
     messages,
+    continuityCoordinator,
     context.acquireResidency,
     context.requestDrain,
   );
@@ -75,9 +94,11 @@ export async function createExecutionRuntimeHostComposition(
   const handlers = {
     ...coordinator.handlers,
     ...messages.handlers,
+    ...continuityCoordinator.handlers,
   } satisfies AllDomainOperationHandlerMap;
   return {
     handlers,
+    continuity: continuityCoordinator,
     recover: async () => {
       const sessions = await stores.sessionStore.listForRecovery();
       for (const session of sessions) {
@@ -100,6 +121,7 @@ export async function createExecutionRuntimeHostComposition(
       } catch (error) {
         errors.push(error);
       }
+      continuityCoordinator.close();
       try {
         await stores.sessionStore.close?.();
       } catch (error) {
@@ -115,4 +137,11 @@ export async function createExecutionRuntimeHostComposition(
 function requireRootCoordinator(coordinator: RootTurnCoordinator | undefined): RootTurnCoordinator {
   if (!coordinator) throw new Error('Runtime Host root coordinator is not composed');
   return coordinator;
+}
+
+function requireContinuity(
+  continuity: SessionContinuityCoordinator | undefined,
+): SessionContinuityCoordinator {
+  if (!continuity) throw new Error('Runtime Host continuity coordinator is not composed');
+  return continuity;
 }
