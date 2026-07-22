@@ -16,13 +16,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from harbor.agents.installed.base import BaseInstalledAgent, CliFlag, with_prompt_template
-from harbor.environments.base import BaseEnvironment
-from harbor.models.agent.context import AgentContext
-from harbor.models.trajectories import Agent, FinalMetrics, Step, Trajectory
-from harbor.models.trial.paths import EnvironmentPaths
-from harbor.utils.trajectory_utils import format_trajectory_json
-
+# harness_compat picks the harbor.* tree under plain Harbor 0.13.2 and the
+# pier.* tree under Pier, whose parallel classes are type-incompatible with
+# harbor's (Pier's TrialResult only accepts Pier's AgentInfo).
+from harness_compat import (
+    Agent,
+    AgentContext,
+    BaseEnvironment,
+    BaseInstalledAgent,
+    CliFlag,
+    EnvironmentPaths,
+    FinalMetrics,
+    NetworkAllowlist as _NetworkAllowlist,
+    Step,
+    Trajectory,
+    format_trajectory_json,
+    with_prompt_template,
+)
 from process_scope import (
     COMMAND_SCOPE_ENV as _COMMAND_SCOPE_ENV,
     COMMAND_SCOPE_ROOT as _COMMAND_SCOPE_ROOT,
@@ -159,6 +169,47 @@ class MakaAgent(BaseInstalledAgent):
     def name() -> str:
         return "maka"
 
+    def install_spec(self) -> None:
+        # Maka installs at runtime inside install()/setup() (host-side Node, or
+        # the in-container Node bootstrap), not via a Pier build-time install
+        # spec. Pier declares this abstract on BaseInstalledAgent; returning
+        # None keeps the runtime-install path unchanged (Pier runs install()
+        # when no spec is preinstalled).
+        return None
+
+    def network_allowlist(self) -> _NetworkAllowlist | None:
+        # Called only under Pier; plain Harbor never calls it and harness_compat
+        # exports NetworkAllowlist = None there.
+        if _NetworkAllowlist is None:
+            return None
+        # The empty allowlist keeps a non-internet Pier task fully offline,
+        # which is correct exactly when the container makes no model calls. A
+        # configuration whose cell would call the provider from inside the
+        # container would hit opaque in-container network errors, so fail at
+        # environment creation with the fixes spelled out.
+        if self._container_makes_model_calls():
+            raise RuntimeError(
+                "MakaAgent under Pier keeps the task container offline; enable "
+                "host-side provider configuration (MAKA_HOST_API_KEY_FILE, "
+                "MAKA_HOST_API_KEY, or MAKA_HOST_NO_AUTH=true), use "
+                "backend=fake, or run MAKA_HARBOR_MODE=task-run"
+            )
+        return _NetworkAllowlist()
+
+    def _container_makes_model_calls(self) -> bool:
+        """True only when the in-container cell itself calls the model provider.
+
+        task-run mode and host-side LLM mode run the model on the host and only
+        bridge tool commands into the container via environment.exec, and
+        backend=fake makes no model calls at all; only a cell-mode ai-sdk run
+        without host-side configuration needs in-container egress.
+        """
+        return (
+            self._harbor_mode() == "cell"
+            and self._harbor_backend() != "fake"
+            and not self._host_side_llm_enabled()
+        )
+
     def _harbor_mode(self) -> str:
         """cell (default) runs a RuntimeRunner cell; task-run runs the full
         task-run controller on the host and bridges tool execution into the
@@ -202,27 +253,46 @@ class MakaAgent(BaseInstalledAgent):
                 ),
             )
             return
+        # The bootstrap downloads (apt/yum/apk packages, the nvm installer, the
+        # node tarball) are this adapter's only container-side network
+        # dependency. It cannot see the task's allow_internet setting, so an
+        # offline container (every Pier non-internet task) surfaces here as
+        # obscure curl/apt errors; name the cause and the ways out at the point
+        # of failure instead.
+        node_bootstrap = (
+            "if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; "
+            "elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates; "
+            "elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates; "
+            "fi; "
+            "export NVM_DIR=\"/usr/local/nvm\"; "
+            "mkdir -p \"$NVM_DIR\"; "
+            "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | PROFILE=/dev/null bash; "
+            ". \"$NVM_DIR/nvm.sh\"; "
+            "nvm install 22; "
+            "nvm alias default 22; "
+            "chmod -R a+rX \"$NVM_DIR\"; "
+            "for bin in node npm npx; do "
+            "  BIN_PATH=\"$(. \"$NVM_DIR/nvm.sh\" && which \"$bin\")\"; "
+            "  ln -sf \"$BIN_PATH\" \"/usr/local/bin/$bin\"; "
+            "done"
+        )
+        bootstrap_failed = (
+            "Maka Node >= 22 bootstrap failed. It downloads packages and nvm, "
+            "which needs container network access; under Pier non-internet "
+            "tasks the container is offline. Use a task image with Node >= 22 "
+            "preinstalled or host-side LLM mode."
+        )
         await self.exec_as_root(
             environment,
             command=(
                 "set -euo pipefail; "
                 "NODE_MAJOR=$(node -p 'process.versions.node.split(\".\")[0]' 2>/dev/null || echo 0); "
                 "if [ \"$NODE_MAJOR\" -lt 22 ]; then "
-                "  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; "
-                "  elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates; "
-                "  elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates; "
-                "  fi; "
-                "  export NVM_DIR=\"/usr/local/nvm\"; "
-                "  mkdir -p \"$NVM_DIR\"; "
-                "  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | PROFILE=/dev/null bash; "
-                "  . \"$NVM_DIR/nvm.sh\"; "
-                "  nvm install 22; "
-                "  nvm alias default 22; "
-                "  chmod -R a+rX \"$NVM_DIR\"; "
-                "  for bin in node npm npx; do "
-                "    BIN_PATH=\"$(. \"$NVM_DIR/nvm.sh\" && which \"$bin\")\"; "
-                "    ln -sf \"$BIN_PATH\" \"/usr/local/bin/$bin\"; "
-                "  done; "
+                # A child shell keeps first-failure abort semantics (`||` on the
+                # same shell would suppress set -e inside the guarded commands)
+                # and lets any failure collapse into one clear diagnostic.
+                f"bash -euo pipefail -c {shlex.quote(node_bootstrap)} || "
+                f"{{ echo {shlex.quote(bootstrap_failed)} >&2; exit 1; }}; "
                 "fi"
             ),
         )
