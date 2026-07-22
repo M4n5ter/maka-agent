@@ -484,6 +484,10 @@ export class RootTurnCoordinator {
     const handshakeFinished = deferredValue<void>();
     const handshake = this.sessionAdmission.run(sessionId, async (lease) => {
       this.#throwIfPoisoned();
+      if (!this.sessionAdmission.isNewWorkAdmitted(sessionId, lease)) {
+        offered.resolve({ kind: 'busy', whenIdle: Promise.resolve() });
+        return;
+      }
       let header: SessionHeader;
       try {
         header = await this.stores.sessionStore.readHeaderSnapshot(sessionId);
@@ -626,6 +630,9 @@ export class RootTurnCoordinator {
         );
         this.#throwIfPoisoned();
         if (!admission) {
+          if (!this.sessionAdmission.isNewWorkAdmitted(input.sessionId, admissionLease)) {
+            return { kind: 'blocked', reason: 'session_busy' };
+          }
           let header: SessionHeader;
           try {
             header = await this.stores.sessionStore.readHeaderSnapshot(input.sessionId);
@@ -789,6 +796,10 @@ export class RootTurnCoordinator {
           );
         }
 
+        if (!this.sessionAdmission.isNewWorkAdmitted(input.sessionId, lease)) {
+          return completedStart(sessionBusy('Session lifecycle is closing'));
+        }
+
         let header: SessionHeader;
         try {
           header = await this.stores.sessionStore.readHeaderSnapshot(input.sessionId);
@@ -797,7 +808,7 @@ export class RootTurnCoordinator {
           if (isMissingFile(error)) return completedStart(notFound('Session does not exist'));
           throw error;
         }
-        if (header.status === 'archived') {
+        if (header.status === 'archived' || header.isArchived) {
           return completedStart(sessionArchived('Cannot start a new Turn in an archived Session'));
         }
         const unavailableReason = unsupportedSessionModeReason(header);

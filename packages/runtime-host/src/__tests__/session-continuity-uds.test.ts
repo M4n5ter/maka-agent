@@ -17,6 +17,7 @@ import {
   RUNTIME_HOST_PROTOCOL_VERSION,
   SESSION_LIVE_DELTA_MAX_BYTES,
   type HostStatusResult,
+  type SubscriptionFrame,
   type SubscriptionOpenResult,
   type TurnSnapshot,
 } from '../protocol/index.js';
@@ -431,7 +432,93 @@ test('a paused UDS subscriber does not block another client', async () => {
   });
 });
 
+test('retiring a Session sends an ordered terminal frame to its subscriber', async () => {
+  await withContinuityHost('session', async ({ admission, continuity, endpoint }) => {
+    const transport = await openAcceptedTransport(endpoint, 'retired-session-client');
+    try {
+      const opened = await openSubscription(transport, 'session');
+      await continuity.acceptAssistantDelta('session', 'run-turn', {
+        type: 'text_delta',
+        turnId: 'turn',
+        messageId: 'message',
+        text: 'before removal',
+      });
+      const retiring = admission.run('session', (lease) =>
+        continuity.retireSession('session', lease),
+      );
+      const preceding = decodeHostFrame(await transport.read(1_000));
+      if (!('kind' in preceding) || preceding.kind !== 'subscription.session_delta') {
+        assert.fail('Expected the frame preceding Session removal');
+      }
+      assert.equal(preceding.sequence, opened.nextSequence);
+      assert.equal(preceding.delta.text, 'before removal');
+      const frame = decodeHostFrame(await transport.read(1_000));
+      await retiring;
+      if (!('kind' in frame) || frame.kind !== 'subscription.closed') {
+        assert.fail('Expected a subscription terminal frame');
+      }
+      assert.equal(frame.subscriptionId, opened.subscriptionId);
+      assert.equal(frame.sequence, opened.nextSequence + 1);
+      assert.equal(frame.reason, 'session_removed');
+    } finally {
+      transport.destroy();
+    }
+  });
+});
+
+test('Session removal uses reserved terminal headroom after 31 ordered frames', async () => {
+  const admission = new SessionAdmissionGate();
+  const continuity = createContinuity('epoch-headroom', 'session', admission);
+  const releaseFirstSend = deferred();
+  const terminalSent = deferred();
+  const sent: SubscriptionFrame[] = [];
+  const connection = continuity.attachConnection('headroom-connection', {
+    send: async (frame) => {
+      sent.push(frame);
+      if (sent.length === 32) terminalSent.resolve();
+      if (sent.length === 1) await releaseFirstSend.promise;
+    },
+    close: () => undefined,
+  });
+  try {
+    const opened = await continuity.handlers['subscription.open'](
+      { sessionId: 'session' },
+      operationContext('headroom-connection', 'epoch-headroom'),
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) assert.fail('Subscription did not open');
+    connection.activate(opened.result.subscriptionId);
+
+    for (let sequence = 1; sequence <= 31; sequence += 1) {
+      await continuity.acceptAssistantDelta('session', 'run-turn', {
+        type: 'text_delta',
+        turnId: 'turn',
+        messageId: 'message',
+        text: `frame-${sequence}`,
+      });
+    }
+    await admission.run('session', (lease) => continuity.retireSession('session', lease));
+    releaseFirstSend.resolve();
+    await withTimeout(terminalSent.promise, 1_000, 'Session removal terminal was not flushed');
+
+    assert.deepEqual(
+      sent.map((frame) => frame.sequence),
+      Array.from({ length: 32 }, (_, index) => index + 1),
+    );
+    const terminal = sent.at(-1);
+    assert.equal(terminal?.kind, 'subscription.closed');
+    if (terminal?.kind === 'subscription.closed') {
+      assert.equal(terminal.reason, 'session_removed');
+    }
+  } finally {
+    releaseFirstSend.resolve();
+    connection.close();
+    continuity.close();
+  }
+});
+
 interface ContinuityHostFixture {
+  admission: SessionAdmissionGate;
   continuity: SessionContinuityCoordinator;
   endpoint: string;
   hostEpoch: string;
@@ -455,17 +542,15 @@ async function withContinuityHost(
   const owner = await tryAcquireInteractiveRootOwner(capability);
   assert.ok(owner);
   let continuity: SessionContinuityCoordinator | undefined;
+  let admission: SessionAdmissionGate | undefined;
   const host = await RuntimeHostKernel.start({
     owner,
     idleGraceMs: 10_000,
     compositionFactory: async (context) => {
+      admission = new SessionAdmissionGate();
       continuity = config.readCanonical
-        ? new SessionContinuityCoordinator(
-            context.hostEpoch,
-            config.readCanonical,
-            new SessionAdmissionGate(),
-          )
-        : createContinuity(context.hostEpoch, sessionId);
+        ? new SessionContinuityCoordinator(context.hostEpoch, config.readCanonical, admission)
+        : createContinuity(context.hostEpoch, sessionId, admission);
       return {
         handlers: combineDomainOperationHandlers({
           ...createUnavailableDomainOperationHandlers(),
@@ -482,8 +567,9 @@ async function withContinuityHost(
     },
   });
   assert.ok(continuity);
+  assert.ok(admission);
   try {
-    await run({ continuity, endpoint: host.endpoint, hostEpoch: host.hostEpoch });
+    await run({ admission, continuity, endpoint: host.endpoint, hostEpoch: host.hostEpoch });
   } finally {
     await host.close();
     await rm(join(resolveRootControlNamespace(), capability.rootId), {
@@ -494,12 +580,16 @@ async function withContinuityHost(
   }
 }
 
-function createContinuity(hostEpoch: string, sessionId: string): SessionContinuityCoordinator {
+function createContinuity(
+  hostEpoch: string,
+  sessionId: string,
+  admission = new SessionAdmissionGate(),
+): SessionContinuityCoordinator {
   return new SessionContinuityCoordinator(
     hostEpoch,
     async (requestedSessionId) =>
       requestedSessionId === sessionId ? canonicalProjection(hostEpoch, sessionId, 1) : null,
-    new SessionAdmissionGate(),
+    admission,
   );
 }
 
@@ -541,6 +631,16 @@ function createTurnHandlers(): TurnOperationHandlerMap {
       ok: true,
       result: runningSnapshot(input.sessionId, input.turnId),
     }),
+  };
+}
+
+function operationContext(connectionId: string, hostEpoch: string) {
+  return {
+    hostEpoch,
+    connectionId,
+    surface: 'tui' as const,
+    principal: 'local_os_user' as const,
+    acquireResidency: () => ({ release: () => undefined }),
   };
 }
 

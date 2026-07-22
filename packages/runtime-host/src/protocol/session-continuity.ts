@@ -141,7 +141,7 @@ export interface SessionEventFrame extends SubscriptionEnvelope {
 
 export interface SubscriptionClosedFrame extends SubscriptionEnvelope {
   kind: 'subscription.closed';
-  reason: 'slow_consumer';
+  reason: 'slow_consumer' | 'session_removed';
 }
 
 export type SubscriptionFrame =
@@ -269,7 +269,7 @@ export function decodeSubscriptionFrame(value: unknown): SubscriptionFrame {
       'sequence',
       'reason',
     ]);
-    if (record.reason !== 'slow_consumer') {
+    if (record.reason !== 'slow_consumer' && record.reason !== 'session_removed') {
       throw invalidProtocolFrame('Invalid subscription close reason');
     }
     return { kind: record.kind, ...envelope, reason: record.reason };

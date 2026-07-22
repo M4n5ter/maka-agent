@@ -35,6 +35,7 @@ export * from './oauth.js';
 export * from './operations.js';
 export * from './runtime-resource.js';
 export * from './session-continuity.js';
+export * from './session-management.js';
 
 export const RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;

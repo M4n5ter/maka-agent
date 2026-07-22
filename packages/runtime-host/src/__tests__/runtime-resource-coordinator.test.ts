@@ -442,6 +442,68 @@ test('beginDrain closes admission, terminates live work, and releases residency'
   await waitForResource(fixture.coordinator, run.ref, (status) => status !== 'running');
 });
 
+test('Session close prepare can rollback after settling and committed resume does not revive work', async () => {
+  const fixture = await createFixture();
+  const run = await fixture.coordinator.runBackgroundBash(
+    shellInput(fixture.root, nodeCommand('setInterval(() => {}, 1000);')),
+  );
+
+  const rolledBack = fixture.coordinator.beginSessionClose('session-1');
+  assert.throws(
+    () =>
+      fixture.coordinator.runForegroundBash(
+        shellInput(fixture.root, nodeCommand("process.stdout.write('blocked')")),
+      ),
+    /lifecycle is closing/,
+  );
+  await rolledBack.settled;
+  await rolledBack.rollback();
+  await fixture.coordinator.runForegroundBash(
+    shellInput(fixture.root, nodeCommand("process.stdout.write('reopened')")),
+  );
+
+  const committed = fixture.coordinator.beginSessionClose('session-1');
+  await committed.settled;
+  await committed.commit();
+  assert.throws(
+    () =>
+      fixture.coordinator.runForegroundBash(
+        shellInput(fixture.root, nodeCommand("process.stdout.write('still blocked')")),
+      ),
+    /lifecycle is closing/,
+  );
+  fixture.coordinator.resumeSession('session-1');
+  await waitForResource(fixture.coordinator, run.ref, (status) => status !== 'running');
+  await fixture.coordinator.runForegroundBash(
+    shellInput(fixture.root, nodeCommand("process.stdout.write('resumed')")),
+  );
+  await fixture.coordinator.close();
+});
+
+test('resume releases only committed Session close fences while another close is pending', async () => {
+  const fixture = await createFixture();
+  const committed = fixture.coordinator.beginSessionClose('session-1');
+  await committed.settled;
+  await committed.commit();
+
+  const pending = fixture.coordinator.beginSessionClose('session-1');
+  await pending.settled;
+  fixture.coordinator.resumeSession('session-1');
+  assert.throws(
+    () =>
+      fixture.coordinator.runForegroundBash(
+        shellInput(fixture.root, nodeCommand("process.stdout.write('still pending')")),
+      ),
+    /lifecycle is closing/,
+  );
+
+  await pending.rollback();
+  await fixture.coordinator.runForegroundBash(
+    shellInput(fixture.root, nodeCommand("process.stdout.write('pending released')")),
+  );
+  await fixture.coordinator.close();
+});
+
 async function createFixture(
   options: { decorateStore?: (backing: ShellRunStore) => ShellRunStore } = {},
 ) {

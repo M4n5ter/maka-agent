@@ -46,6 +46,7 @@ const PIPE_TRUNCATION_MARKER_HEADROOM_BYTES = 1024;
 type ShellRunSettlementEvent = Parameters<
   NonNullable<ShellRunProcessManagerInput['onShellRunSettled']>
 >[0];
+type ShellRunSessionCloseLease = Awaited<ReturnType<ShellRunProcessManager['terminateSession']>>;
 
 interface ResidencyToken {
   release(): void;
@@ -62,11 +63,22 @@ interface PtyController {
   readonly controllerId: string;
 }
 
+interface SessionCloseState {
+  pending: number;
+  readonly committed: Set<ShellRunSessionCloseLease>;
+}
+
 export interface HostRuntimeResourceCoordinatorOptions
   extends Omit<ShellRunProcessManagerInput, 'onShellRunSettled' | 'onShellRunUpdate'> {
   readonly acquireResidency: () => ResidencyToken;
   readonly onShellRunSettled?: (event: ShellRunSettlementEvent) => void;
   readonly onShellRunUpdate?: (update: ShellRunUpdate) => void;
+}
+
+export interface HostRuntimeSessionCloseHandle {
+  readonly settled: Promise<void>;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 /** Owns Host-local ShellRun processes, wire projections, and PTY controller leases. */
@@ -89,6 +101,7 @@ export class HostRuntimeResourceCoordinator
   readonly #pendingLaunchResidencies = new Map<string, Set<BackgroundResidency>>();
   readonly #pendingLaunchSettlements = new Set<Promise<void>>();
   readonly #controllers = new Map<string, PtyController>();
+  readonly #sessionCloseStates = new Map<string, SessionCloseState>();
   readonly #resourceQueues = new Map<string, Promise<void>>();
   readonly #terminalizationFailures = new Set<Error>();
   #draining = false;
@@ -115,17 +128,64 @@ export class HostRuntimeResourceCoordinator
     return this.#manager;
   }
 
+  beginSessionClose(sessionId: string): HostRuntimeSessionCloseHandle {
+    const state = this.#sessionCloseState(sessionId);
+    state.pending += 1;
+    const prefix = `${sessionId}\u0000`;
+    for (const key of this.#controllers.keys()) {
+      if (key.startsWith(prefix)) this.#controllers.delete(key);
+    }
+
+    const lease = this.#manager.terminateSession(sessionId);
+    const settled = lease.then(() => undefined);
+    void settled.catch(() => undefined);
+    let finalization: Promise<void> | undefined;
+    return {
+      settled,
+      commit: () => {
+        finalization ??= (async () => {
+          const prepared = await lease;
+          await this.#manager.commitSessionClose(prepared);
+          state.pending -= 1;
+          state.committed.add(prepared);
+        })();
+        return finalization;
+      },
+      rollback: () => {
+        finalization ??= (async () => {
+          try {
+            this.#manager.rollbackSessionClose(await lease);
+          } finally {
+            state.pending -= 1;
+            this.#deleteInactiveSessionCloseState(sessionId, state);
+          }
+        })();
+        return finalization;
+      },
+    };
+  }
+
+  resumeSession(sessionId: string): void {
+    const state = this.#sessionCloseStates.get(sessionId);
+    if (!state) return;
+    for (const lease of state.committed) {
+      this.#manager.rollbackSessionClose(lease);
+    }
+    state.committed.clear();
+    this.#deleteInactiveSessionCloseState(sessionId, state);
+  }
+
   runForegroundBash(
     input: ShellRunBashInput,
   ): Promise<Extract<ToolResultContent, { kind: 'terminal' }>> {
-    this.#assertLaunchAdmission();
+    this.#assertLaunchAdmission(input.sessionId);
     return this.#manager.runForegroundBash(input);
   }
 
   async runBackgroundBash(
     input: ShellRunBashInput,
   ): Promise<Extract<ToolResultContent, { kind: 'shell_run' }>> {
-    this.#assertLaunchAdmission();
+    this.#assertLaunchAdmission(input.sessionId);
     const residency: BackgroundResidency = {
       token: this.#acquireResidency(),
       terminal: false,
@@ -505,8 +565,26 @@ export class HostRuntimeResourceCoordinator
     residency.token.release();
   }
 
-  #assertLaunchAdmission(): void {
+  #assertLaunchAdmission(sessionId: string): void {
     if (this.#draining) throw new Error('Runtime Host is draining');
+    if (this.#sessionCloseStates.has(sessionId)) {
+      throw new Error('Session lifecycle is closing');
+    }
+  }
+
+  #sessionCloseState(sessionId: string): SessionCloseState {
+    let state = this.#sessionCloseStates.get(sessionId);
+    if (!state) {
+      state = { pending: 0, committed: new Set() };
+      this.#sessionCloseStates.set(sessionId, state);
+    }
+    return state;
+  }
+
+  #deleteInactiveSessionCloseState(sessionId: string, state: SessionCloseState): void {
+    if (state.pending === 0 && state.committed.size === 0) {
+      this.#sessionCloseStates.delete(sessionId);
+    }
   }
 
   #inResourceQueue<T>(key: string, operation: () => Promise<T>): Promise<T> {

@@ -182,6 +182,7 @@ export class ShellRunProcessManager
   private readonly live = new Map<string, LiveShellRun>();
   private readonly sessionCloseLeases = new Map<string, Set<symbol>>();
   private readonly sessionTerminationEpochs = new Map<string, number>();
+  private readonly pendingStartups = new Map<string, Set<Promise<void>>>();
   private readonly maxLiveShellRuns: number;
   private readonly maxLivePtyRuns: number;
   private readonly flushIntervalMs: number;
@@ -209,39 +210,43 @@ export class ShellRunProcessManager
   }
 
   async runBackgroundBash(input: ShellRunBashInput): Promise<ShellRunToolResult> {
-    if (input.abortSignal?.aborted)
-      throw abortError('Command aborted before shell process started');
-    const mode: ShellMode = input.pty ? 'pty' : 'pipes';
-    const timeoutMs = normalizeBackgroundTimeoutMs(input.timeoutMs);
-    const live = await this.start(input, mode, timeoutMs, false);
-    const record = await this.persistObservation(live);
-    if (input.abortSignal?.aborted) {
-      this.requestForcedTermination(live, 'cancel');
-      return shellRunContent(await this.markObserved(await live.finished.join()));
-    }
-    live.visibleRef = true;
-    let handoffRecord =
-      live.record && live.record.revision >= record.revision ? live.record : record;
-    if (isTerminalShellRunStatus(handoffRecord.status)) {
-      handoffRecord = await this.markObserved(handoffRecord);
-    }
-    this.notifyShellRunUpdate(handoffRecord);
-    return isTerminalShellRunStatus(handoffRecord.status)
-      ? shellRunContent(handoffRecord)
-      : compactShellRunContent(handoffRecord);
+    return this.withPendingStartup(input.sessionId, async () => {
+      if (input.abortSignal?.aborted)
+        throw abortError('Command aborted before shell process started');
+      const mode: ShellMode = input.pty ? 'pty' : 'pipes';
+      const timeoutMs = normalizeBackgroundTimeoutMs(input.timeoutMs);
+      const live = await this.start(input, mode, timeoutMs, false);
+      const record = await this.persistObservation(live);
+      if (input.abortSignal?.aborted) {
+        this.requestForcedTermination(live, 'cancel');
+        return shellRunContent(await this.markObserved(await live.finished.join()));
+      }
+      live.visibleRef = true;
+      let handoffRecord =
+        live.record && live.record.revision >= record.revision ? live.record : record;
+      if (isTerminalShellRunStatus(handoffRecord.status)) {
+        handoffRecord = await this.markObserved(handoffRecord);
+      }
+      this.notifyShellRunUpdate(handoffRecord);
+      return isTerminalShellRunStatus(handoffRecord.status)
+        ? shellRunContent(handoffRecord)
+        : compactShellRunContent(handoffRecord);
+    });
   }
 
   async runForegroundBash(input: ShellRunBashInput): Promise<TerminalToolResult> {
-    if (input.pty)
-      throw new Error('Foreground Bash does not support PTY mode; set run_in_background=true');
-    if (input.abortSignal?.aborted)
-      throw abortError('Command aborted before shell process started');
-    const timeoutMs = normalizeForegroundTimeoutMs(input.timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
-    const live = await this.start(input, 'pipes', timeoutMs, true);
-    if ((await live.finished.waitFor(input.abortSignal)) === 'abort') {
-      this.requestForcedTermination(live, 'cancel');
-    }
-    return this.markObservedAndReturnTerminal(await live.finished.join());
+    return this.withPendingStartup(input.sessionId, async () => {
+      if (input.pty)
+        throw new Error('Foreground Bash does not support PTY mode; set run_in_background=true');
+      if (input.abortSignal?.aborted)
+        throw abortError('Command aborted before shell process started');
+      const timeoutMs = normalizeForegroundTimeoutMs(input.timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
+      const live = await this.start(input, 'pipes', timeoutMs, true);
+      if ((await live.finished.waitFor(input.abortSignal)) === 'abort') {
+        this.requestForcedTermination(live, 'cancel');
+      }
+      return this.markObservedAndReturnTerminal(await live.finished.join());
+    });
   }
 
   async writeStdin(input: ShellRunWriteInput): Promise<ShellRunToolResult> {
@@ -520,9 +525,13 @@ export class ShellRunProcessManager
     const lease = { sessionId, token: Symbol('session-close') };
     this.holdSessionClose(lease);
     this.sessionTerminationEpochs.set(sessionId, this.sessionTerminationEpoch(sessionId) + 1);
-    const targets = [...this.live.values()].filter((live) => live.sessionId === sessionId);
-    await this.terminateLives(targets, 'shutdown');
-    return lease;
+    try {
+      await this.settleSessionLives(sessionId);
+      return lease;
+    } catch (error) {
+      this.rollbackSessionClose(lease);
+      throw error;
+    }
   }
 
   async commitSessionClose(lease: SessionCloseLease): Promise<void> {
@@ -533,8 +542,7 @@ export class ShellRunProcessManager
       lease.sessionId,
       this.sessionTerminationEpoch(lease.sessionId) + 1,
     );
-    const targets = [...this.live.values()].filter((live) => live.sessionId === lease.sessionId);
-    await this.terminateLives(targets, 'shutdown');
+    await this.settleSessionLives(lease.sessionId);
   }
 
   rollbackSessionClose(lease: SessionCloseLease): void {
@@ -550,7 +558,17 @@ export class ShellRunProcessManager
 
   async terminateAll(): Promise<void> {
     this.shuttingDown = true;
-    await this.terminateLives([...this.live.values()], 'shutdown');
+    const failures: unknown[] = [];
+    await this.captureTerminationFailure(
+      this.terminateLives([...this.live.values()], 'shutdown'),
+      failures,
+    );
+    await Promise.all([...this.pendingStartups.values()].flatMap((startups) => [...startups]));
+    await this.captureTerminationFailure(
+      this.terminateLives([...this.live.values()], 'shutdown'),
+      failures,
+    );
+    if (failures.length > 0) throw failures[0];
   }
 
   liveCount(): number {
@@ -1603,6 +1621,49 @@ export class ShellRunProcessManager
 
   private sessionTerminationEpoch(sessionId: string): number {
     return this.sessionTerminationEpochs.get(sessionId) ?? 0;
+  }
+
+  private async withPendingStartup<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    let resolveStartup!: () => void;
+    const startup = new Promise<void>((resolve) => {
+      resolveStartup = resolve;
+    });
+    const startups = this.pendingStartups.get(sessionId) ?? new Set<Promise<void>>();
+    startups.add(startup);
+    this.pendingStartups.set(sessionId, startups);
+    try {
+      return await operation();
+    } finally {
+      startups.delete(startup);
+      if (startups.size === 0) this.pendingStartups.delete(sessionId);
+      resolveStartup();
+    }
+  }
+
+  private async awaitSessionStartups(sessionId: string): Promise<void> {
+    const startups = this.pendingStartups.get(sessionId);
+    if (startups) await Promise.all([...startups]);
+  }
+
+  private async settleSessionLives(sessionId: string): Promise<void> {
+    const failures: unknown[] = [];
+    const sessionLives = () =>
+      [...this.live.values()].filter((live) => live.sessionId === sessionId);
+    await this.captureTerminationFailure(this.terminateLives(sessionLives(), 'shutdown'), failures);
+    await this.awaitSessionStartups(sessionId);
+    await this.captureTerminationFailure(this.terminateLives(sessionLives(), 'shutdown'), failures);
+    if (failures.length > 0) throw failures[0];
+  }
+
+  private async captureTerminationFailure(
+    termination: Promise<void>,
+    failures: unknown[],
+  ): Promise<void> {
+    try {
+      await termination;
+    } catch (error) {
+      failures.push(error);
+    }
   }
 
   private holdSessionClose(lease: SessionCloseLease): void {

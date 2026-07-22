@@ -234,6 +234,148 @@ test('run release closes message admission before the terminal transition', asyn
   fixture.coordinator.completeIdle(batch);
 });
 
+test('pending Session lifecycle rejects message admission and close reuses the root stop fence', async () => {
+  const fixture = createFixture();
+  fixture.coordinator.reserveRootTurn(ROOT);
+  fixture.coordinator.bindRun(ROOT);
+  const accepted = await submit(fixture, 'steer-close', 'stop now', 'current_turn');
+  await submit(fixture, 'follow-close', 'do not follow up', 'next_turn');
+
+  const lifecycle = fixture.sessionAdmission.beginSessionLifecycle(ROOT.sessionId);
+  assert.deepEqual(await submit(fixture, 'steer-close', 'stop now', 'current_turn'), accepted);
+  const rejected = await submit(fixture, 'late-message', 'too late', 'current_turn');
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.error.code, 'session_busy');
+
+  const close = await fixture.sessionAdmission.run(ROOT.sessionId, (lease) =>
+    fixture.coordinator.beginSessionClose(ROOT.sessionId, lease),
+  );
+  assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId).steering, []);
+  assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId).followup, []);
+  assert.equal(fixture.liveResidencies(), 0);
+
+  await close.deliverStop();
+  await fixture.stopClaimed.promise;
+  const terminal: TurnSnapshot = {
+    ...ROOT,
+    status: 'cancelled',
+    terminalEventId: 'terminal-close',
+    abortSource: 'user_interrupt',
+  };
+  fixture.resolveTerminal(terminal);
+  assert.deepEqual(await close.terminal, terminal);
+  lifecycle.release();
+});
+
+test('a Message submit queued before the Session lifecycle fence retains admission', async () => {
+  const fixture = createFixture();
+  fixture.setRootState({ kind: 'idle' });
+  const blockerEntered = deferred<void>();
+  const releaseBlocker = deferred<void>();
+  const order: string[] = [];
+  const blocker = fixture.sessionAdmission.run(ROOT.sessionId, async () => {
+    order.push('blocker:start');
+    blockerEntered.resolve();
+    await releaseBlocker.promise;
+    order.push('blocker:end');
+  });
+  await blockerEntered.promise;
+
+  const preFence = submit(fixture, 'pre-fence-message', 'already queued', 'next_turn').then(
+    (outcome) => {
+      order.push('pre-fence');
+      return outcome;
+    },
+  );
+  const lifecycle = fixture.sessionAdmission.beginSessionLifecycle(ROOT.sessionId);
+  const postFence = submit(fixture, 'post-fence-message', 'new work', 'next_turn').then(
+    (outcome) => {
+      order.push('post-fence');
+      return outcome;
+    },
+  );
+
+  releaseBlocker.resolve();
+  const admitted = await preFence;
+  assert.equal(admitted.ok, true);
+  if (admitted.ok) assert.equal(admitted.result.disposition, 'turn_started');
+  const rejected = await postFence;
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.error.code, 'session_busy');
+  await blocker;
+  lifecycle.release();
+  assert.deepEqual(order, ['blocker:start', 'blocker:end', 'pre-fence', 'post-fence']);
+});
+
+test('an idle Session close can resume message admission without restoring retracted entries', async () => {
+  const fixture = createFixture();
+  fixture.setRootState({ kind: 'idle' });
+  const lifecycle = fixture.sessionAdmission.beginSessionLifecycle(ROOT.sessionId);
+  const close = await fixture.sessionAdmission.run(ROOT.sessionId, (lease) =>
+    fixture.coordinator.beginSessionClose(ROOT.sessionId, lease),
+  );
+  assert.equal(await close.terminal, undefined);
+
+  await fixture.sessionAdmission.run(ROOT.sessionId, (lease) =>
+    fixture.coordinator.resumeSession(ROOT.sessionId, lease),
+  );
+  lifecycle.release();
+  const submitted = await submit(fixture, 'after-resume', 'start again', 'next_turn');
+  assert.equal(submitted.ok, true);
+  if (submitted.ok) assert.equal(submitted.result.disposition, 'turn_started');
+  assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId).steering, []);
+  assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId).followup, []);
+});
+
+for (const priorState of ['absent', 'empty-open'] as const) {
+  test(`message Session resume is idempotent for ${priorState} Epoch state`, async () => {
+    const fixture = createFixture();
+    fixture.setRootState({ kind: 'idle' });
+    if (priorState === 'empty-open') {
+      assert.deepEqual(fixture.coordinator.projection(ROOT.sessionId), {
+        hostEpoch: 'epoch-1',
+        queueRevision: 0,
+        steering: [],
+        followup: [],
+      });
+    }
+    const lifecycle = fixture.sessionAdmission.beginSessionLifecycle(ROOT.sessionId);
+
+    await fixture.sessionAdmission.run(ROOT.sessionId, (lease) =>
+      fixture.coordinator.resumeSession(ROOT.sessionId, lease),
+    );
+    lifecycle.release();
+
+    const submitted = await submit(
+      fixture,
+      `after-${priorState}`,
+      'start after unarchive',
+      'next_turn',
+    );
+    assert.equal(submitted.ok, true);
+    if (submitted.ok) assert.equal(submitted.result.disposition, 'turn_started');
+  });
+}
+
+test('message Session resume fails closed while a terminal transition owns the state', async () => {
+  const fixture = createFixture();
+  fixture.coordinator.reserveRootTurn(ROOT);
+  const owner = fixture.coordinator.bindRun(ROOT);
+  owner.release();
+  const transition = fixture.coordinator.beginTerminalTransition(ROOT);
+  const lifecycle = fixture.sessionAdmission.beginSessionLifecycle(ROOT.sessionId);
+
+  await assert.rejects(
+    fixture.sessionAdmission.run(ROOT.sessionId, (lease) =>
+      fixture.coordinator.resumeSession(ROOT.sessionId, lease),
+    ),
+    /live ownership or transition state/,
+  );
+
+  lifecycle.release();
+  fixture.coordinator.completeIdle(transition);
+});
+
 test('fail-stop isolates the run owner before reclaiming message residency', async () => {
   const fixture = createFixture();
   fixture.coordinator.reserveRootTurn(ROOT);
@@ -535,6 +677,7 @@ function createFixture() {
       };
     },
   };
+  const sessionAdmission = new SessionAdmissionGate();
   const options: HostMessageCoordinatorOptions = {
     hostEpoch: 'epoch-1',
     root,
@@ -542,7 +685,7 @@ function createFixture() {
       readRootTurnSourceMessageReceipt: async (_sessionId, messageId) => receipts.get(messageId),
       readSessionRuntimeEvents: async () => events,
     },
-    sessionAdmission: new SessionAdmissionGate(),
+    sessionAdmission,
     acquireResidency: () => {
       liveResidencies += 1;
       let released = false;
@@ -560,6 +703,10 @@ function createFixture() {
   };
   return {
     coordinator: new HostMessageCoordinator(options),
+    sessionAdmission,
+    setRootState: (state: HostMessageRootState) => {
+      rootState = state;
+    },
     events,
     receipts,
     stopClaimed,

@@ -47,23 +47,41 @@ import {
   type TurnSnapshot,
 } from '../protocol/index.js';
 import type { AutomationOperationHandlerMap, OperationResidency } from './operation-dispatcher.js';
-import { RootTurnCoordinator } from './root-turn-coordinator.js';
-import { SessionAdmissionGate } from './session-admission-gate.js';
+import type { RootTurnCoordinator } from './root-turn-coordinator.js';
+import { type SessionAdmissionLease, SessionAdmissionGate } from './session-admission-gate.js';
 
 const DEFAULT_TOOL_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 const DUE_RETRY_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 interface ActiveFire {
+  readonly automationId: string;
+  readonly targetSessionId: string;
   readonly residency: OperationResidency;
-  task: Promise<void>;
+  readonly settled: Promise<void>;
+  readonly resolveSettled: () => void;
+  readonly rejectSettled: (error: unknown) => void;
   released: boolean;
+}
+
+type AutomationRootCoordinator = Pick<RootTurnCoordinator, 'readRootState' | 'startAutomationTurn'>;
+
+interface AutomationSessionCloseState {
+  readonly holders: Set<symbol>;
+  committed: boolean;
+  cleanup: Promise<void>;
+}
+
+export interface HostAutomationSessionClose {
+  readonly settled: Promise<void>;
+  commit(): void;
+  rollback(): void;
 }
 
 export interface HostAutomationCoordinatorOptions {
   readonly store: AutomationStoreWriter;
   readonly executionStores: ExecutionStoresWriter<'interactive'>;
-  readonly root: RootTurnCoordinator;
+  readonly root: AutomationRootCoordinator;
   readonly sessionAdmission: SessionAdmissionGate;
   readonly acquireResidency: () => OperationResidency;
   readonly requestDrain: () => void;
@@ -80,13 +98,14 @@ export class HostAutomationCoordinator implements AutomationToolService {
 
   readonly #store: AutomationStoreWriter;
   readonly #executionStores: ExecutionStoresWriter<'interactive'>;
-  readonly #root: RootTurnCoordinator;
+  readonly #root: AutomationRootCoordinator;
   readonly #sessionAdmission: SessionAdmissionGate;
   readonly #acquireResidency: () => OperationResidency;
   readonly #requestDrain: () => void;
   readonly #newId: () => string;
   readonly #now: () => number;
   readonly #activeFires = new Map<string, ActiveFire>();
+  readonly #sessionCloses = new Map<string, AutomationSessionCloseState>();
   #timer: ReturnType<typeof setTimeout> | undefined;
   #timerResidency: OperationResidency | undefined;
   #schedulerTask: Promise<void> | undefined;
@@ -121,6 +140,59 @@ export class HostAutomationCoordinator implements AutomationToolService {
     this.#applyTimer(await this.#store.readCatalogSnapshot());
   }
 
+  beginSessionClose(
+    sessionId: string,
+    admissionLease?: SessionAdmissionLease,
+  ): HostAutomationSessionClose {
+    const holder = Symbol(sessionId);
+    let state = this.#sessionCloses.get(sessionId);
+    let created = false;
+    if (!state) {
+      created = true;
+      state = {
+        holders: new Set(),
+        committed: false,
+        cleanup: Promise.resolve(),
+      };
+      this.#sessionCloses.set(sessionId, state);
+    }
+    state.holders.add(holder);
+    if (created) {
+      const cleanup = () => this.#cleanupSessionDefinitions(sessionId);
+      state.cleanup = admissionLease ? cleanup() : this.#sessionAdmission.run(sessionId, cleanup);
+    }
+    this.#rescheduleAfterSessionFence();
+
+    let outcome: 'pending' | 'committed' | 'rolled_back' = 'pending';
+    return {
+      settled: state.cleanup,
+      commit: () => {
+        if (outcome !== 'pending') return;
+        outcome = 'committed';
+        state!.holders.delete(holder);
+        state!.committed = true;
+      },
+      rollback: () => {
+        if (outcome !== 'pending') return;
+        outcome = 'rolled_back';
+        state!.holders.delete(holder);
+        if (state!.holders.size === 0 && !state!.committed) {
+          this.#sessionCloses.delete(sessionId);
+          this.#rescheduleAfterSessionFence();
+        }
+      },
+    };
+  }
+
+  unarchiveSession(sessionId: string): void {
+    const state = this.#sessionCloses.get(sessionId);
+    if (!state?.committed) return;
+    state.committed = false;
+    if (state.holders.size > 0) return;
+    this.#sessionCloses.delete(sessionId);
+    this.#rescheduleAfterSessionFence();
+  }
+
   beginDrain(): void {
     if (this.#draining) return;
     this.#draining = true;
@@ -133,8 +205,8 @@ export class HostAutomationCoordinator implements AutomationToolService {
     const errors: unknown[] = [];
     await this.#schedulerTask?.catch((error: unknown) => errors.push(error));
     while (this.#activeFires.size > 0) {
-      const tasks = [...this.#activeFires.values()].map((active) => active.task);
-      const outcomes = await Promise.allSettled(tasks);
+      const settlements = [...this.#activeFires.values()].map((active) => active.settled);
+      const outcomes = await Promise.allSettled(settlements);
       for (const outcome of outcomes) {
         if (outcome.status === 'rejected') errors.push(outcome.reason);
       }
@@ -165,6 +237,7 @@ export class HostAutomationCoordinator implements AutomationToolService {
         if (fire.released) continue;
         fire.released = true;
         fire.residency.release();
+        fire.rejectSettled(new Error('Automation fire was reclaimed during fail-stop'));
       }
       this.#activeFires.clear();
     };
@@ -172,7 +245,15 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async create(request: AutomationToolCreateRequest): Promise<AutomationToolCreateResult> {
-    if (this.#draining) return { outcome: 'rejected', error: 'Runtime Host is draining.' };
+    if (this.#draining || this.#isSessionFenced(request.requester.sessionId)) {
+      return { outcome: 'rejected', error: 'Runtime Host is draining.' };
+    }
+    return this.#sessionAdmission.run(request.requester.sessionId, () =>
+      this.#createAdmitted(request),
+    );
+  }
+
+  async #createAdmitted(request: AutomationToolCreateRequest): Promise<AutomationToolCreateResult> {
     try {
       const now = this.#now();
       const definition = await this.#toolDefinition(request, now);
@@ -224,7 +305,15 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async delete(request: AutomationToolByIdRequest): Promise<AutomationToolDeleteResult> {
-    if (this.#draining) return { outcome: 'not_found_or_not_owned' };
+    if (this.#draining || this.#isSessionFenced(request.requester.sessionId)) {
+      return { outcome: 'not_found_or_not_owned' };
+    }
+    return this.#sessionAdmission.run(request.requester.sessionId, () =>
+      this.#deleteAdmitted(request),
+    );
+  }
+
+  async #deleteAdmitted(request: AutomationToolByIdRequest): Promise<AutomationToolDeleteResult> {
     try {
       const current = await this.#ownedDefinition(request.id, request.requester.sessionId);
       if (!current) return { outcome: 'not_found_or_not_owned' };
@@ -243,7 +332,7 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async list(request: AutomationToolListRequest): Promise<readonly AutomationToolProjection[]> {
-    if (this.#draining) return [];
+    if (this.#draining || this.#isSessionFenced(request.requester.sessionId)) return [];
     try {
       const snapshot = await this.#store.readCatalogSnapshot();
       const fires = indexFires(snapshot);
@@ -257,7 +346,15 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async pause(request: AutomationToolByIdRequest): Promise<AutomationToolPauseResult> {
-    if (this.#draining) return { outcome: 'not_found_or_invalid' };
+    if (this.#draining || this.#isSessionFenced(request.requester.sessionId)) {
+      return { outcome: 'not_found_or_invalid' };
+    }
+    return this.#sessionAdmission.run(request.requester.sessionId, () =>
+      this.#pauseAdmitted(request),
+    );
+  }
+
+  async #pauseAdmitted(request: AutomationToolByIdRequest): Promise<AutomationToolPauseResult> {
     try {
       const current = await this.#ownedDefinition(request.id, request.requester.sessionId);
       if (!current || current.status !== 'enabled') {
@@ -288,7 +385,15 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async resume(request: AutomationToolByIdRequest): Promise<AutomationToolResumeResult> {
-    if (this.#draining) return { outcome: 'not_found_or_invalid' };
+    if (this.#draining || this.#isSessionFenced(request.requester.sessionId)) {
+      return { outcome: 'not_found_or_invalid' };
+    }
+    return this.#sessionAdmission.run(request.requester.sessionId, () =>
+      this.#resumeAdmitted(request),
+    );
+  }
+
+  async #resumeAdmitted(request: AutomationToolByIdRequest): Promise<AutomationToolResumeResult> {
     try {
       const current = await this.#ownedDefinition(request.id, request.requester.sessionId);
       if (!current) return { outcome: 'not_found_or_invalid' };
@@ -380,9 +485,94 @@ export class HostAutomationCoordinator implements AutomationToolService {
 
   async #mutate(input: AutomationMutateInput): Promise<OperationOutcome<'automation.mutate'>> {
     if (this.#draining) return failure('host_draining', 'Runtime Host is draining');
+    const mutation = input.mutation;
+    if (mutation.kind === 'create') {
+      const ownerId = mutationOwnerHint(mutation);
+      if (!ownerId) {
+        return failure('invalid_request', 'Automation owner Session could not be determined');
+      }
+      if (this.#isSessionFenced(ownerId)) {
+        return failure('operation_conflict', 'Automation owner Session is closing');
+      }
+      return this.#sessionAdmission.run(ownerId, () => this.#mutateAdmitted(input, ownerId));
+    }
+
+    let prepared: Awaited<ReturnType<AutomationStoreWriter['prepareDefinitionMutation']>>;
+    try {
+      prepared = await this.#store.prepareDefinitionMutation(mutationPrepareRequest(mutation));
+    } catch {
+      this.#enterDrain();
+      return failure(
+        'commit_outcome_unknown',
+        'Automation mutation outcome could not be determined',
+      );
+    }
+    if (prepared.status === 'conflict') {
+      return this.#mutationOutcome(input, {
+        status: 'conflict',
+        code: prepared.code,
+        ...(prepared.current ? { current: prepared.current } : {}),
+      });
+    }
+    let current: AutomationDefinition | undefined;
+    if (prepared.status === 'replay') {
+      if (prepared.result.status === 'deleted') {
+        return this.#mutationOutcome(input, prepared.result);
+      }
+      current = prepared.result.definition;
+    } else {
+      current = prepared.current;
+    }
+    if (!current) {
+      this.#enterDrain();
+      return failure('commit_outcome_unknown', 'Automation mutation owner could not be determined');
+    }
+    const ownerId = ownerSessionId(current);
+    if (this.#isSessionFenced(ownerId)) {
+      return failure('operation_conflict', 'Automation owner Session is closing');
+    }
+    return this.#sessionAdmission.run(ownerId, () => this.#mutateAdmitted(input, ownerId));
+  }
+
+  async #mutateAdmitted(
+    input: AutomationMutateInput,
+    admittedOwnerId: string,
+  ): Promise<OperationOutcome<'automation.mutate'>> {
     let result: AutomationDefinitionMutationResult;
     try {
-      result = await this.#applyMutation(input);
+      const mutation = input.mutation;
+      const prepared = await this.#store.prepareDefinitionMutation(
+        mutationPrepareRequest(mutation),
+      );
+      if (prepared.status === 'conflict') {
+        result = {
+          status: 'conflict',
+          code: prepared.code,
+          ...(prepared.current ? { current: prepared.current } : {}),
+        };
+      } else {
+        const current =
+          prepared.status === 'replay' && prepared.result.status !== 'deleted'
+            ? prepared.result.definition
+            : prepared.status === 'ready'
+              ? prepared.current
+              : undefined;
+        if (mutation.kind !== 'create') {
+          if (!current) throw new Error('Prepared Automation mutation has no current definition');
+          const currentOwnerId = ownerSessionId(current);
+          if (currentOwnerId !== admittedOwnerId) {
+            return failure('operation_conflict', 'Automation owner changed before admission');
+          }
+          const proposedOwnerId = mutationOwnerHint(mutation);
+          if (mutation.kind === 'update' && proposedOwnerId !== currentOwnerId) {
+            throw new AutomationRequestError('Automation owner cannot be changed');
+          }
+        }
+        result =
+          prepared.status === 'replay'
+            ? prepared.result
+            : await this.#applyPreparedMutation(input, current);
+      }
     } catch (error) {
       if (error instanceof AutomationRequestError || error instanceof AutomationDomainDecodeError) {
         return failure('invalid_request', error.message);
@@ -393,6 +583,13 @@ export class HostAutomationCoordinator implements AutomationToolService {
         'Automation mutation outcome could not be determined',
       );
     }
+    return this.#mutationOutcome(input, result);
+  }
+
+  async #mutationOutcome(
+    input: AutomationMutateInput,
+    result: AutomationDefinitionMutationResult,
+  ): Promise<OperationOutcome<'automation.mutate'>> {
     if (result.status === 'conflict') {
       return result.code === 'automation_not_found'
         ? failure('not_found', 'Automation was not found')
@@ -431,34 +628,11 @@ export class HostAutomationCoordinator implements AutomationToolService {
     }
   }
 
-  async #applyMutation(input: AutomationMutateInput): Promise<AutomationDefinitionMutationResult> {
+  async #applyPreparedMutation(
+    input: AutomationMutateInput,
+    current: AutomationDefinition | undefined,
+  ): Promise<AutomationDefinitionMutationResult> {
     const mutation = input.mutation;
-    const prepareRequest: AutomationDefinitionMutationPrepareRequest =
-      mutation.kind === 'create'
-        ? {
-            kind: 'create',
-            automationId: mutation.automationId,
-            config: canonicalDefinitionUnchecked(mutation.definition),
-            enabled: true,
-          }
-        : mutation.kind === 'update'
-          ? {
-              kind: 'update',
-              automationId: mutation.automationId,
-              expectedRevision: mutation.expectedRevision,
-              config: canonicalDefinitionUnchecked(mutation.definition),
-            }
-          : mutation;
-    const prepared = await this.#store.prepareDefinitionMutation(prepareRequest);
-    if (prepared.status === 'replay') return prepared.result;
-    if (prepared.status === 'conflict') {
-      return {
-        status: 'conflict',
-        code: prepared.code,
-        ...(prepared.current ? { current: prepared.current } : {}),
-      };
-    }
-
     if (mutation.kind === 'create') {
       const now = this.#now();
       const definition = await this.#canonicalDefinition(mutation.definition);
@@ -483,7 +657,6 @@ export class HostAutomationCoordinator implements AutomationToolService {
         enabled: true,
       });
     }
-    const current = prepared.current;
     if (!current) throw new Error('Prepared Automation mutation has no current definition');
     const now = monotonicNow(this.#now(), current.updatedAt);
     if (mutation.kind === 'update') {
@@ -634,7 +807,13 @@ export class HostAutomationCoordinator implements AutomationToolService {
   #applyTimer(snapshot: AutomationCatalogSnapshot): void {
     if (!this.#schedulerStarted || this.#draining) return;
     const nextFireAt = snapshot.definitions.reduce<number | null>((earliest, definition) => {
-      if (definition.status !== 'enabled' || definition.nextFireAt === null) return earliest;
+      if (
+        this.#isSessionFenced(ownerSessionId(definition)) ||
+        definition.status !== 'enabled' ||
+        definition.nextFireAt === null
+      ) {
+        return earliest;
+      }
       return earliest === null ? definition.nextFireAt : Math.min(earliest, definition.nextFireAt);
     }, null);
     if (nextFireAt === null) {
@@ -681,6 +860,7 @@ export class HostAutomationCoordinator implements AutomationToolService {
     for (const definition of snapshot.definitions) {
       if (this.#draining) break;
       if (
+        this.#isSessionFenced(ownerSessionId(definition)) ||
         definition.status !== 'enabled' ||
         definition.nextFireAt === null ||
         definition.nextFireAt > now
@@ -688,12 +868,34 @@ export class HostAutomationCoordinator implements AutomationToolService {
         continue;
       }
       if (definition.expiresAt !== null && now >= definition.expiresAt) {
-        await this.#disableExpired(definition, now);
+        await this.#disableExpiredFromSweep(definition, now);
         continue;
       }
       await this.#admitDueFire(definition);
     }
     if (!this.#draining) this.#applyTimer(await this.#store.readCatalogSnapshot());
+  }
+
+  async #disableExpiredFromSweep(definition: AutomationDefinition, now: number): Promise<void> {
+    const ownerId = ownerSessionId(definition);
+    await this.#sessionAdmission.run(ownerId, async (lease) => {
+      if (this.#failStop) return;
+      if (!this.#sessionAdmission.isNewWorkAdmitted(ownerId, lease)) return;
+      const current = await this.#store.getDefinition(definition.automationId);
+      if (this.#failStop) return;
+      if (
+        !current ||
+        ownerSessionId(current) !== ownerId ||
+        current.status !== 'enabled' ||
+        current.nextFireAt === null ||
+        current.nextFireAt > now ||
+        current.expiresAt === null ||
+        now < current.expiresAt
+      ) {
+        return;
+      }
+      await this.#disableExpired(current, now);
+    });
   }
 
   async #disableExpired(definition: AutomationDefinition, now: number): Promise<void> {
@@ -710,97 +912,127 @@ export class HostAutomationCoordinator implements AutomationToolService {
   }
 
   async #admitDueFire(definition: AutomationDefinition): Promise<void> {
+    const ownerId = ownerSessionId(definition);
+    if (this.#isSessionFenced(ownerId)) return;
     const targetSessionId =
       definition.target.kind === 'heartbeat' ? definition.target.sessionId : this.#newId();
-    await this.#sessionAdmission.run(targetSessionId, async (lease) => {
-      if (this.#draining) return;
-      if (definition.target.kind === 'heartbeat') {
+    if (definition.target.kind === 'heartbeat') {
+      await this.#sessionAdmission.run(targetSessionId, async (lease) => {
+        if (this.#failStop) return;
+        if (!this.#sessionAdmission.isNewWorkAdmitted(targetSessionId, lease)) return;
         const header = await this.#readActiveSession(targetSessionId).catch((error) => {
           if (error instanceof AutomationRequestError) return undefined;
           throw error;
         });
         if (!header || this.#root.readRootState(targetSessionId).kind !== 'idle') return;
-      }
-      const admittedAt = monotonicNow(this.#now(), definition.updatedAt);
-      const nextFireAt = nextFireAfterAdmission(definition, admittedAt);
-      const residency = this.#acquireResidency();
-      let admitted = false;
-      try {
-        const result = await this.#store.admitFire({
-          admission: {
-            fireId: this.#newId(),
-            automationId: definition.automationId,
-            scheduledFor: requireDueTime(definition),
-            admittedAt,
-            targetSessionId,
-            turnId: this.#newId(),
-            runId: this.#newId(),
-            userMessageId: this.#newId(),
-          },
-          expectedAutomationRevision: definition.revision,
-          nextFireAt,
-        });
-        if (result.status === 'conflict') {
-          if (result.code === 'automation_expired' && result.current) {
-            await this.#disableExpired(result.current, admittedAt);
-          }
-          if (
-            result.code !== 'revision_mismatch' &&
-            result.code !== 'scheduled_slot_mismatch' &&
-            result.code !== 'non_terminal_fire' &&
-            result.code !== 'automation_not_enabled' &&
-            result.code !== 'automation_expired'
-          ) {
-            throw new Error(`Automation fire admission conflicted: ${result.code}`);
-          }
+        if (this.#failStop) return;
+        const reservation = this.#reserveActiveFire(definition.automationId, targetSessionId);
+        await this.#admitReservedFire(definition, targetSessionId, reservation, lease);
+      });
+      return;
+    }
+
+    const reservation = this.#reserveActiveFire(definition.automationId, targetSessionId);
+    try {
+      await this.#sessionAdmission.run(targetSessionId, async (lease) => {
+        if (this.#failStop) return;
+        if (!this.#sessionAdmission.isNewWorkAdmitted(targetSessionId, lease)) {
+          this.#completeActiveFire(reservation.fireId, reservation.active);
           return;
         }
-        admitted = true;
-        const active = this.#registerActiveFire(result.fire.admission.fireId, residency);
-        try {
-          const handle = await this.#startFire(result.fire, lease);
-          if (!handle) {
-            this.#releaseActiveFire(result.fire.admission.fireId, active);
-            return;
-          }
-          active.task = this.#settleFromTurn(result.fire, handle.terminal, active);
-          observe(active.task);
-        } catch (error) {
-          active.task = Promise.reject(error);
-          observe(active.task);
-          this.#releaseActiveFire(result.fire.admission.fireId, active);
-          throw error;
-        }
-      } finally {
-        if (!admitted) residency.release();
+        await this.#admitReservedFire(definition, targetSessionId, reservation, lease);
+      });
+    } catch (error) {
+      if (!reservation.active.released) {
+        this.#failActiveFire(reservation.fireId, reservation.active, error);
       }
-    });
+      throw error;
+    }
+  }
+
+  async #admitReservedFire(
+    definition: AutomationDefinition,
+    targetSessionId: string,
+    reservation: { readonly fireId: string; readonly active: ActiveFire },
+    lease: SessionAdmissionLease,
+  ): Promise<void> {
+    const admittedAt = monotonicNow(this.#now(), definition.updatedAt);
+    const nextFireAt = nextFireAfterAdmission(definition, admittedAt);
+    let admitted = false;
+    try {
+      const result = await this.#store.admitFire({
+        admission: {
+          fireId: reservation.fireId,
+          automationId: definition.automationId,
+          scheduledFor: requireDueTime(definition),
+          admittedAt,
+          targetSessionId,
+          turnId: this.#newId(),
+          runId: this.#newId(),
+          userMessageId: this.#newId(),
+        },
+        expectedAutomationRevision: definition.revision,
+        nextFireAt,
+      });
+      if (result.status === 'conflict') {
+        if (result.code === 'automation_expired' && result.current) {
+          await this.#disableExpired(result.current, admittedAt);
+        }
+        if (
+          result.code !== 'revision_mismatch' &&
+          result.code !== 'scheduled_slot_mismatch' &&
+          result.code !== 'non_terminal_fire' &&
+          result.code !== 'automation_not_enabled' &&
+          result.code !== 'automation_expired'
+        ) {
+          throw new Error(`Automation fire admission conflicted: ${result.code}`);
+        }
+        return;
+      }
+      admitted = true;
+      if (this.#failStop) return;
+      const handle = await this.#startFire(result.fire, lease);
+      if (!handle) {
+        this.#completeActiveFire(result.fire.admission.fireId, reservation.active);
+        return;
+      }
+      const settlement = this.#settleFromTurn(result.fire, handle.terminal, reservation.active);
+      observe(settlement);
+    } catch (error) {
+      this.#failActiveFire(reservation.fireId, reservation.active, error);
+      throw error;
+    } finally {
+      if (!admitted) this.#completeActiveFire(reservation.fireId, reservation.active);
+    }
   }
 
   async #resumeFire(fire: AutomationFire): Promise<void> {
     if (this.#activeFires.has(fire.admission.fireId)) return;
     const residency = this.#acquireResidency();
-    const active = this.#registerActiveFire(fire.admission.fireId, residency);
+    const active = this.#registerActiveFire(
+      fire.admission.fireId,
+      fire.admission.automationId,
+      fire.admission.targetSessionId,
+      residency,
+    );
     try {
       const terminal = await this.#terminalRun(fire);
       if (terminal) {
-        active.task = this.#settleOutcome(fire, terminal, active);
-        observe(active.task);
+        const settlement = this.#settleOutcome(fire, terminal, active);
+        observe(settlement);
         return;
       }
       await this.#sessionAdmission.run(fire.admission.targetSessionId, async (lease) => {
         const handle = await this.#startFire(fire, lease);
         if (!handle) {
-          this.#releaseActiveFire(fire.admission.fireId, active);
+          this.#completeActiveFire(fire.admission.fireId, active);
           return;
         }
-        active.task = this.#settleFromTurn(fire, handle.terminal, active);
-        observe(active.task);
+        const settlement = this.#settleFromTurn(fire, handle.terminal, active);
+        observe(settlement);
       });
     } catch (error) {
-      active.task = Promise.reject(error);
-      observe(active.task);
-      this.#releaseActiveFire(fire.admission.fireId, active);
+      this.#failActiveFire(fire.admission.fireId, active, error);
       this.#enterDrain();
       throw error;
     }
@@ -848,7 +1080,7 @@ export class HostAutomationCoordinator implements AutomationToolService {
 
   async #startFire(
     fire: AutomationFire,
-    lease: Parameters<RootTurnCoordinator['startAutomationTurn']>[1],
+    lease: Parameters<AutomationRootCoordinator['startAutomationTurn']>[1],
   ) {
     await this.#ensureFreshSession(fire);
     const result = await this.#root.startAutomationTurn(
@@ -899,18 +1131,16 @@ export class HostAutomationCoordinator implements AutomationToolService {
     active: ActiveFire,
   ): Promise<void> {
     return (async () => {
+      let outcome: AutomationFireTerminalOutcome;
       try {
         const snapshot = await terminal;
-        await this.#settleOutcome(
-          fire,
-          outcomeFromTurn(snapshot, monotonicNow(this.#now(), fire.admission.admittedAt)),
-          active,
-        );
+        outcome = outcomeFromTurn(snapshot, monotonicNow(this.#now(), fire.admission.admittedAt));
       } catch (error) {
         this.#enterDrain();
-        this.#releaseActiveFire(fire.admission.fireId, active);
+        this.#failActiveFire(fire.admission.fireId, active, error);
         throw error;
       }
+      await this.#settleOutcome(fire, outcome, active);
     })();
   }
 
@@ -920,12 +1150,13 @@ export class HostAutomationCoordinator implements AutomationToolService {
     active: ActiveFire,
   ): Promise<void> {
     try {
-      if (!this.#failStop) await this.#settleFire(fire, outcome);
+      if (this.#failStop) return;
+      await this.#settleFire(fire, outcome);
+      this.#completeActiveFire(fire.admission.fireId, active);
     } catch (error) {
       this.#enterDrain();
+      this.#failActiveFire(fire.admission.fireId, active, error);
       throw error;
-    } finally {
-      this.#releaseActiveFire(fire.admission.fireId, active);
     }
   }
 
@@ -936,19 +1167,121 @@ export class HostAutomationCoordinator implements AutomationToolService {
     }
   }
 
-  #registerActiveFire(fireId: string, residency: OperationResidency): ActiveFire {
+  #registerActiveFire(
+    fireId: string,
+    automationId: string,
+    targetSessionId: string,
+    residency: OperationResidency,
+  ): ActiveFire {
     if (this.#activeFires.has(fireId))
       throw new Error(`Automation fire is already active: ${fireId}`);
-    const active: ActiveFire = { residency, task: Promise.resolve(), released: false };
+    let resolveSettled!: () => void;
+    let rejectSettled!: (error: unknown) => void;
+    const settled = new Promise<void>((resolve, reject) => {
+      resolveSettled = resolve;
+      rejectSettled = reject;
+    });
+    observe(settled);
+    const active: ActiveFire = {
+      automationId,
+      targetSessionId,
+      residency,
+      settled,
+      resolveSettled,
+      rejectSettled,
+      released: false,
+    };
     this.#activeFires.set(fireId, active);
     return active;
   }
 
-  #releaseActiveFire(fireId: string, active: ActiveFire): void {
+  #reserveActiveFire(
+    automationId: string,
+    targetSessionId: string,
+  ): { readonly fireId: string; readonly active: ActiveFire } {
+    const fireId = this.#newId();
+    const residency = this.#acquireResidency();
+    try {
+      return {
+        fireId,
+        active: this.#registerActiveFire(fireId, automationId, targetSessionId, residency),
+      };
+    } catch (error) {
+      residency.release();
+      throw error;
+    }
+  }
+
+  #completeActiveFire(fireId: string, active: ActiveFire): void {
+    this.#finishActiveFire(fireId, active, { kind: 'settled' });
+  }
+
+  #failActiveFire(fireId: string, active: ActiveFire, error: unknown): void {
+    this.#finishActiveFire(fireId, active, { kind: 'failed', error });
+  }
+
+  #finishActiveFire(
+    fireId: string,
+    active: ActiveFire,
+    completion: { readonly kind: 'settled' } | { readonly kind: 'failed'; readonly error: unknown },
+  ): void {
     if (this.#failStop || active.released) return;
     active.released = true;
     active.residency.release();
     if (this.#activeFires.get(fireId) === active) this.#activeFires.delete(fireId);
+    if (completion.kind === 'settled') active.resolveSettled();
+    else active.rejectSettled(completion.error);
+  }
+
+  async #cleanupSessionDefinitions(sessionId: string): Promise<void> {
+    for (;;) {
+      const targeted = [...this.#activeFires.values()].filter(
+        (fire) => fire.targetSessionId === sessionId,
+      );
+      await Promise.all(targeted.map((fire) => fire.settled));
+      const snapshot = await this.#store.readCatalogSnapshot();
+      const owned = snapshot.definitions.filter((definition) => isOwnedBy(definition, sessionId));
+      if (owned.length === 0) return;
+      for (const definition of owned) {
+        const active = [...this.#activeFires.values()].filter(
+          (fire) => fire.automationId === definition.automationId,
+        );
+        await Promise.all(active.map((fire) => fire.settled));
+        const current = await this.#store.getDefinition(definition.automationId);
+        if (!current || !isOwnedBy(current, sessionId)) continue;
+        const result = await this.#store.deleteDefinition({
+          automationId: current.automationId,
+          expectedRevision: current.revision,
+          deletedAt: monotonicNow(this.#now(), current.updatedAt),
+        });
+        if (
+          result.status === 'conflict' &&
+          result.code !== 'revision_mismatch' &&
+          result.code !== 'automation_not_found'
+        ) {
+          throw new Error(`Could not delete closing Session Automation: ${result.code}`);
+        }
+      }
+      if (this.#schedulerStarted && !this.#draining) {
+        this.#applyTimer(await this.#store.readCatalogSnapshot());
+      }
+    }
+  }
+
+  #isSessionFenced(sessionId: string): boolean {
+    const state = this.#sessionCloses.get(sessionId);
+    return (
+      this.#sessionAdmission.isSessionClosing(sessionId) ||
+      (state !== undefined && (state.committed || state.holders.size > 0))
+    );
+  }
+
+  #rescheduleAfterSessionFence(): void {
+    if (!this.#schedulerStarted || this.#draining) return;
+    void this.#store.readCatalogSnapshot().then(
+      (snapshot) => this.#applyTimer(snapshot),
+      () => this.#enterDrain(),
+    );
   }
 
   async #projection(
@@ -1176,9 +1509,41 @@ function toolProjection(
 }
 
 function isOwnedBy(definition: AutomationDefinition, sessionId: string): boolean {
+  return ownerSessionId(definition) === sessionId;
+}
+
+function ownerSessionId(definition: AutomationDefinition): string {
   return definition.target.kind === 'heartbeat'
-    ? definition.target.sessionId === sessionId
-    : definition.target.creatorSessionId === sessionId;
+    ? definition.target.sessionId
+    : definition.target.creatorSessionId;
+}
+
+function mutationOwnerHint(mutation: AutomationMutateInput['mutation']): string | undefined {
+  if (mutation.kind !== 'create' && mutation.kind !== 'update') return undefined;
+  const target = mutation.definition.executionTarget;
+  return target.kind === 'existing_session' ? target.sessionId : target.sourceSessionId;
+}
+
+function mutationPrepareRequest(
+  mutation: AutomationMutateInput['mutation'],
+): AutomationDefinitionMutationPrepareRequest {
+  if (mutation.kind === 'create') {
+    return {
+      kind: 'create',
+      automationId: mutation.automationId,
+      config: canonicalDefinitionUnchecked(mutation.definition),
+      enabled: true,
+    };
+  }
+  if (mutation.kind === 'update') {
+    return {
+      kind: 'update',
+      automationId: mutation.automationId,
+      expectedRevision: mutation.expectedRevision,
+      config: canonicalDefinitionUnchecked(mutation.definition),
+    };
+  }
+  return mutation;
 }
 
 function outcomeFromTurn(snapshot: TurnSnapshot, now: number): AutomationFireTerminalOutcome {

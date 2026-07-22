@@ -194,6 +194,59 @@ test('normal drain waits for pending generation work before closing', async () =
   await fixture.coordinator.close();
 });
 
+test('session close clears immediately and settles only when its generation is idle', async () => {
+  const evaluation = deferred<string>();
+  const evaluatorEntered = deferred<void>();
+  const fixture = createFixture({
+    evaluate: async () => {
+      evaluatorEntered.resolve();
+      return evaluation.promise;
+    },
+  });
+  const { goalId, registration } = await activateGoal(fixture, 'turn-session-close');
+  void registration.settle({ kind: 'completed', turnId: 'turn-session-close' });
+  await evaluatorEntered.promise;
+
+  const close = fixture.coordinator.beginSessionClose(SESSION_ID, 'archive');
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID)?.status, 'cleared');
+  assert.equal(fixture.coordinator.beginExternalTurn(SESSION_ID, 'fenced').kind, 'unavailable');
+  let settled = false;
+  void close.settled.then(() => {
+    settled = true;
+  });
+  await waitForTurns(2);
+  assert.equal(settled, false);
+
+  evaluation.resolve(evaluationResult({ met: true }));
+  await close.settled;
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID)?.id, goalId);
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID)?.status, 'cleared');
+  close.rollback();
+  close.rollback();
+  assert.equal(fixture.coordinator.beginExternalTurn(SESSION_ID, 'reopened').kind, 'registered');
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID)?.status, 'cleared');
+});
+
+test('commit removes only the captured Goal and unarchive releases only committed archive fence', async () => {
+  const fixture = createFixture();
+  fixture.coordinator.manager.create(SESSION_ID, 'archive me');
+  const first = fixture.coordinator.beginSessionClose(SESSION_ID, 'archive');
+  const concurrent = fixture.coordinator.beginSessionClose(SESSION_ID, 'archive');
+  await first.settled;
+  first.commit();
+  first.commit();
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID), undefined);
+
+  fixture.coordinator.unarchiveSession(SESSION_ID);
+  assert.equal(
+    fixture.coordinator.beginExternalTurn(SESSION_ID, 'still-pending').kind,
+    'unavailable',
+  );
+  concurrent.rollback();
+  assert.equal(fixture.coordinator.beginExternalTurn(SESSION_ID, 'unarchived').kind, 'registered');
+  assert.equal(fixture.coordinator.manager.get(SESSION_ID), undefined);
+});
+
 test('fail-stop prevents queued normal release until its reclaimer runs', async () => {
   const evaluation = deferred<string>();
   const evaluatorEntered = deferred<void>();

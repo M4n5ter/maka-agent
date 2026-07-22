@@ -52,6 +52,12 @@ interface GoalResidency {
   releaseTask?: Promise<void>;
 }
 
+export interface HostGoalSessionClose {
+  readonly settled: Promise<void>;
+  commit(): void;
+  rollback(): void;
+}
+
 /** Host-local owner for the intentionally in-memory Goal lifecycle. */
 export class HostGoalCoordinator {
   readonly handlers: GoalOperationHandlerMap = {
@@ -121,6 +127,39 @@ export class HostGoalCoordinator {
       return { kind: 'unavailable', reason: 'Runtime Host is draining.' };
     }
     return this.coordinator.beginExternalTurn(sessionId, turnId);
+  }
+
+  beginSessionClose(sessionId: string, kind: 'archive' | 'remove'): HostGoalSessionClose {
+    const fence = this.coordinator.beginSessionClose(sessionId, kind);
+    const current = this.manager.get(sessionId);
+    const goalId = current?.id;
+    if (current && !TERMINAL_GOAL_STATUSES.has(current.status)) {
+      this.manager.clear(sessionId);
+    }
+    const settled = goalId
+      ? this.coordinator.whenGenerationIdle(sessionId, goalId)
+      : Promise.resolve();
+    let outcome: 'pending' | 'committed' | 'rolled_back' = 'pending';
+    return {
+      settled,
+      commit: () => {
+        if (outcome !== 'pending') return;
+        outcome = 'committed';
+        if (goalId && this.manager.get(sessionId)?.id === goalId) {
+          this.manager.remove(sessionId);
+        }
+        fence.commit();
+      },
+      rollback: () => {
+        if (outcome !== 'pending') return;
+        outcome = 'rolled_back';
+        fence.rollback();
+      },
+    };
+  }
+
+  unarchiveSession(sessionId: string): void {
+    this.coordinator.unarchiveSession(sessionId);
   }
 
   beginDrain(): void {

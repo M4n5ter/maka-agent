@@ -176,12 +176,21 @@ test('a Session admission lease is bound to its gate, Session, and callback', as
 
   await gate.run('session', (lease) => {
     leaseCapture.current = { kind: 'captured', lease };
+    assert.equal(gate.isNewWorkAdmitted('session', lease), true);
     assert.throws(
       () => otherGate.runAdmitted('session', lease, () => undefined),
       /was not issued by this gate/,
     );
     assert.throws(
+      () => otherGate.isNewWorkAdmitted('session', lease),
+      /was not issued by this gate/,
+    );
+    assert.throws(
       () => gate.runAdmitted('other-session', lease, () => undefined),
+      /does not match the Session/,
+    );
+    assert.throws(
+      () => gate.isNewWorkAdmitted('other-session', lease),
       /does not match the Session/,
     );
   });
@@ -192,6 +201,10 @@ test('a Session admission lease is bound to its gate, Session, and callback', as
   assert.throws(
     () => gate.runAdmitted('session', expiredLease.lease, () => undefined),
     /was not issued by this gate|no longer accepts tasks/,
+  );
+  assert.throws(
+    () => gate.isNewWorkAdmitted('session', expiredLease.lease),
+    /was not issued by this gate/,
   );
 });
 
@@ -232,6 +245,56 @@ test('an operation for another Session is not blocked', async () => {
     releaseFirst.resolve();
     await withTimeout(first, 1_000, 'first Session operation did not complete');
   }
+});
+
+test('Session lifecycle holders independently fence admission until all release', () => {
+  const gate = new SessionAdmissionGate();
+  const first = gate.beginSessionLifecycle('session');
+  const second = gate.beginSessionLifecycle('session');
+
+  assert.equal(gate.isSessionClosing('session'), true);
+  assert.equal(gate.isSessionClosing('other-session'), false);
+  first.release();
+  first.release();
+  assert.equal(gate.isSessionClosing('session'), true);
+  second.release();
+  assert.equal(gate.isSessionClosing('session'), false);
+});
+
+test('new-work admission is fixed when an operation enters the Session queue', async () => {
+  const gate = new SessionAdmissionGate();
+  const blockerEntered = deferred();
+  const releaseBlocker = deferred();
+  const order: string[] = [];
+  const blocker = gate.run('session', async () => {
+    order.push('blocker:start');
+    blockerEntered.resolve();
+    await releaseBlocker.promise;
+    order.push('blocker:end');
+  });
+  await blockerEntered.promise;
+
+  const preFence = gate.run('session', (lease) => {
+    order.push('pre-fence');
+    return gate.isNewWorkAdmitted('session', lease);
+  });
+  const lifecycle = gate.beginSessionLifecycle('session');
+  const lifecycleWork = gate.run('session', (lease) => {
+    order.push('lifecycle');
+    return gate.isNewWorkAdmitted('session', lease);
+  });
+  const postFence = gate.run('session', (lease) => {
+    order.push('post-fence');
+    return gate.isNewWorkAdmitted('session', lease);
+  });
+
+  releaseBlocker.resolve();
+  assert.equal(await preFence, true);
+  assert.equal(await lifecycleWork, false);
+  assert.equal(await postFence, false);
+  await blocker;
+  lifecycle.release();
+  assert.deepEqual(order, ['blocker:start', 'blocker:end', 'pre-fence', 'lifecycle', 'post-fence']);
 });
 
 interface Deferred {

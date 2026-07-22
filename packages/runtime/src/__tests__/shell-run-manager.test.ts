@@ -560,6 +560,84 @@ describe('ShellRunProcessManager', () => {
     assert.equal(runtimeManager.liveCount(), 0);
   });
 
+  for (const kind of ['foreground', 'background'] as const) {
+    test(`Session close settlement waits for ${kind} startup before live ownership`, async () => {
+      const cwd = await workspace();
+      const backingStore = createShellRunStore(cwd);
+      const createEntered = deferred<void>();
+      const releaseCreate = deferred<void>();
+      const store: ShellRunStore = {
+        async createShellRun(record) {
+          createEntered.resolve();
+          await releaseCreate.promise;
+          return backingStore.createShellRun(record);
+        },
+        updateShellRun: (...args) => backingStore.updateShellRun(...args),
+        readShellRun: (...args) => backingStore.readShellRun(...args),
+        listSessionShellRuns: (...args) => backingStore.listSessionShellRuns(...args),
+      };
+      const manager = createManager(store);
+      const startup =
+        kind === 'foreground'
+          ? manager.runForegroundBash(
+              shellInput({ cwd, command: waitForeverCommand(), timeoutMs: 5_000 }),
+            )
+          : manager.runBackgroundBash(
+              shellInput({ cwd, command: waitForeverCommand(), timeoutMs: 5_000 }),
+            );
+      await createEntered.promise;
+
+      const closing = manager.terminateSession('session-1');
+      let closeSettled = false;
+      void closing.then(
+        () => {
+          closeSettled = true;
+        },
+        () => {
+          closeSettled = true;
+        },
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(closeSettled, false);
+
+      releaseCreate.resolve();
+      await assert.rejects(startup, /session lifecycle changed/);
+      const lease = await closing;
+      assert.equal(closeSettled, true);
+      assert.equal(manager.liveCount(), 0);
+      manager.rollbackSessionClose(lease);
+    });
+  }
+
+  test('prepare failure releases its Session close lease', async () => {
+    const cwd = await workspace();
+    const backingStore = createShellRunStore(cwd);
+    const store: ShellRunStore = {
+      createShellRun: (...args) => backingStore.createShellRun(...args),
+      async updateShellRun(sessionId, shellRunId, patch) {
+        if (shellRunId === 'shell-run-1' && patch.status === 'cancelled') {
+          throw new Error('injected close persistence failure');
+        }
+        return backingStore.updateShellRun(sessionId, shellRunId, patch);
+      },
+      readShellRun: (...args) => backingStore.readShellRun(...args),
+      listSessionShellRuns: (...args) => backingStore.listSessionShellRuns(...args),
+    };
+    const manager = createManager(store);
+    await manager.runBackgroundBash(shellInput({ cwd, command: waitForeverCommand() }));
+
+    await assert.rejects(
+      manager.terminateSession('session-1'),
+      /injected close persistence failure/,
+    );
+    const reopened = await manager.runForegroundBash(
+      shellInput({ cwd, command: nodeCommand("process.stdout.write('REOPENED')") }),
+    );
+    assert.equal(reopened.output.mode, 'pipes');
+    if (reopened.output.mode !== 'pipes') assert.fail('Expected pipe output');
+    assert.equal(reopened.output.stdout, 'REOPENED');
+  });
+
   test('keeps overlapping session close leases isolated through rollback and commit', async () => {
     const cwd = await workspace();
     const manager = await createTestManager();

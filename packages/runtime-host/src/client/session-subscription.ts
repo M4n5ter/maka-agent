@@ -106,6 +106,9 @@ export class ClientSessionSubscription
 
   accept(frame: SubscriptionFrame): void {
     if (this.#done || this.#terminalError) return;
+    if (this.#doneAfterQueue) {
+      throw new Error('Session subscription received a frame after its terminal frame');
+    }
     if (frame.hostEpoch !== this.hostEpoch) {
       throw new RuntimeHostSubscriptionError(
         'host_epoch_changed',
@@ -170,9 +173,11 @@ export class ClientSessionSubscription
       return;
     }
     const encodedBytes = encodeProtocolFrame(frame).byteLength;
+    const terminal = frame.kind === 'subscription.closed';
     if (
-      this.#queue.length >= MAX_CLIENT_QUEUED_FRAMES ||
-      this.#queuedBytes + encodedBytes > MAX_CLIENT_QUEUED_BYTES
+      this.#queue.length >= MAX_CLIENT_QUEUED_FRAMES - (terminal ? 0 : 1) ||
+      this.#queuedBytes + encodedBytes + (terminal ? 0 : this.#sessionRemovedFrameBytes()) >
+        MAX_CLIENT_QUEUED_BYTES
     ) {
       throw new RuntimeHostSubscriptionError(
         'slow_consumer',
@@ -181,5 +186,15 @@ export class ClientSessionSubscription
     }
     this.#queue.push({ frame, encodedBytes });
     this.#queuedBytes += encodedBytes;
+  }
+
+  #sessionRemovedFrameBytes(): number {
+    return encodeProtocolFrame({
+      kind: 'subscription.closed',
+      hostEpoch: this.hostEpoch,
+      subscriptionId: this.subscriptionId,
+      sequence: this.#expectedSequence,
+      reason: 'session_removed',
+    }).byteLength;
   }
 }

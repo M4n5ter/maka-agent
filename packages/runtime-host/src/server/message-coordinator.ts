@@ -74,6 +74,11 @@ export interface HostMessageStopClaim {
   readonly terminal: Promise<TurnSnapshot>;
 }
 
+export interface HostMessageSessionCloseHandle {
+  readonly deliverStop: () => Promise<void>;
+  readonly terminal: Promise<TurnSnapshot | undefined>;
+}
+
 /** Root execution operations that must share the message coordinator's Session gate. */
 export interface HostMessageRootPort {
   readSessionHeader(sessionId: string): Promise<HostMessageSessionHeader | null>;
@@ -364,6 +369,63 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     return this.#commitQueueFence(identity, admission);
   }
 
+  beginSessionClose(
+    sessionId: string,
+    admissionLease: SessionAdmissionLease,
+  ): Promise<HostMessageSessionCloseHandle> {
+    return this.#sessionAdmission.runAdmitted(sessionId, admissionLease, async () => {
+      this.#assertHealthy();
+      const state = this.#state(sessionId);
+      state.phase = 'closed';
+      const rootState = await this.#root.readRootState(sessionId);
+      if (rootState.kind === 'idle') {
+        const retracted = this.#retractQueued(state);
+        if (retracted.length > 0) this.#mutated(sessionId, state, admissionLease);
+        return {
+          deliverStop: () => Promise.resolve(),
+          terminal: Promise.resolve(undefined),
+        };
+      }
+
+      let fence: QueueFenceResult | undefined;
+      const claim = await this.#root.claimStop(rootState, admissionLease, () => {
+        fence ??= this.#commitQueueFence(rootState, admissionLease);
+        return fence;
+      });
+      if (!fence) {
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Root session close claim omitted queue fence commit',
+        );
+      }
+      return claim;
+    });
+  }
+
+  resumeSession(sessionId: string, admissionLease: SessionAdmissionLease): Promise<void> {
+    return this.#sessionAdmission.runAdmitted(sessionId, admissionLease, () => {
+      this.#assertHealthy();
+      if (!this.#sessionAdmission.isSessionClosing(sessionId)) {
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Message Session resume requires a pending lifecycle fence',
+        );
+      }
+      const state = this.#sessions.get(sessionId);
+      if (!state) return;
+      if (
+        state.reservedRoot ||
+        state.run ||
+        state.transition ||
+        state.stopFence ||
+        allLiveEntries(state).length !== 0
+      ) {
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Message Session cannot resume with live ownership or transition state',
+        );
+      }
+      state.phase = 'open';
+    });
+  }
+
   prepareFailStopReclaim(): () => void {
     if (!this.#poisoned) {
       this.#poisoned = true;
@@ -437,6 +499,9 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
           'outcome_unknown',
           'Message disposition cannot be proven in this Host Epoch',
         );
+      }
+      if (!this.#sessionAdmission.isNewWorkAdmitted(input.sessionId, lease)) {
+        return failure('session_busy', 'Session lifecycle is closing');
       }
       const state = this.#state(input.sessionId);
       const header = await this.#root.readSessionHeader(input.sessionId);

@@ -107,6 +107,7 @@ interface Subscriber {
   queue: QueuedSubscriptionFrame[];
   queuedBytes: number;
   pumping: boolean;
+  terminalQueued: boolean;
 }
 
 export class SessionContinuityCoordinator {
@@ -326,6 +327,21 @@ export class SessionContinuityCoordinator {
     });
   }
 
+  async retireSession(sessionId: string, admissionLease: SessionAdmissionLease): Promise<void> {
+    await this.#runInSessionLane(
+      sessionId,
+      () => {
+        const state = this.#sessions.get(sessionId);
+        if (!state) return;
+        for (const subscriber of state.subscribers.values()) {
+          this.#enqueueSessionRemoved(subscriber);
+        }
+        this.#sessions.delete(sessionId);
+      },
+      admissionLease,
+    );
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -397,6 +413,7 @@ export class SessionContinuityCoordinator {
           queue: [],
           queuedBytes: 0,
           pumping: false,
+          terminalQueued: false,
         };
         committed.state.subscribers.set(subscriptionId, subscriber);
         this.#subscriptions.set(subscriptionId, subscriber);
@@ -454,7 +471,7 @@ export class SessionContinuityCoordinator {
   }
 
   #enqueue(subscriber: Subscriber, frame: SubscriptionFrame): void {
-    if (subscriber.phase !== 'open') return;
+    if (subscriber.phase !== 'open' || subscriber.terminalQueued) return;
     let encodedBytes: number;
     try {
       encodedBytes = encodeProtocolFrame(frame).byteLength;
@@ -463,8 +480,11 @@ export class SessionContinuityCoordinator {
       return;
     }
     if (
-      subscriber.queue.length >= MAX_SUBSCRIBER_QUEUED_FRAMES ||
-      subscriber.queuedBytes + encodedBytes > MAX_SUBSCRIBER_QUEUED_BYTES
+      subscriber.queue.length >= MAX_SUBSCRIBER_QUEUED_FRAMES - 1 ||
+      subscriber.queuedBytes +
+        encodedBytes +
+        sessionRemovedFrameBytes(subscriber, this.#hostEpoch) >
+        MAX_SUBSCRIBER_QUEUED_BYTES
     ) {
       this.#evictSlowSubscriber(subscriber);
       return;
@@ -543,7 +563,7 @@ export class SessionContinuityCoordinator {
   }
 
   #enqueueSlowClose(subscriber: Subscriber): void {
-    if (subscriber.phase !== 'closing') return;
+    if (subscriber.phase !== 'closing' || subscriber.terminalQueued) return;
     const frame: SubscriptionFrame = {
       kind: 'subscription.closed',
       hostEpoch: this.#hostEpoch,
@@ -552,10 +572,34 @@ export class SessionContinuityCoordinator {
       reason: 'slow_consumer',
     };
     subscriber.nextSequence += 1;
+    subscriber.terminalQueued = true;
     const encodedBytes = encodeProtocolFrame(frame).byteLength;
     subscriber.queue.push({ frame, encodedBytes });
     subscriber.queuedBytes += encodedBytes;
     this.#pump(subscriber);
+  }
+
+  #enqueueSessionRemoved(subscriber: Subscriber): void {
+    if (subscriber.phase !== 'open' || subscriber.terminalQueued) return;
+    const frame: SubscriptionFrame = {
+      kind: 'subscription.closed',
+      hostEpoch: this.#hostEpoch,
+      subscriptionId: subscriber.subscriptionId,
+      sequence: subscriber.nextSequence,
+      reason: 'session_removed',
+    };
+    const encodedBytes = encodeProtocolFrame(frame).byteLength;
+    if (
+      subscriber.queue.length >= MAX_SUBSCRIBER_QUEUED_FRAMES ||
+      subscriber.queuedBytes + encodedBytes > MAX_SUBSCRIBER_QUEUED_BYTES
+    ) {
+      throw new Error('Session removal terminal headroom was not preserved');
+    }
+    subscriber.queue.push({ frame, encodedBytes });
+    subscriber.queuedBytes += encodedBytes;
+    subscriber.nextSequence += 1;
+    subscriber.terminalQueued = true;
+    if (subscriber.activated) this.#pump(subscriber);
   }
 
   #pump(subscriber: Subscriber): void {
@@ -710,6 +754,16 @@ export class SessionContinuityCoordinator {
       ? this.sessionAdmission.runAdmitted(sessionId, admission, operation)
       : this.sessionAdmission.run(sessionId, operation);
   }
+}
+
+function sessionRemovedFrameBytes(subscriber: Subscriber, hostEpoch: string): number {
+  return encodeProtocolFrame({
+    kind: 'subscription.closed',
+    hostEpoch,
+    subscriptionId: subscriber.subscriptionId,
+    sequence: subscriber.nextSequence + 1,
+    reason: 'session_removed',
+  }).byteLength;
 }
 
 function immutableClone<T>(value: T): T {

@@ -6,6 +6,10 @@ export interface SessionAdmissionLease {
   readonly [sessionAdmissionLeaseBrand]: true;
 }
 
+export interface SessionLifecycleAdmission {
+  release(): void;
+}
+
 interface SessionAdmissionContext {
   sessionId: string;
   active: boolean;
@@ -15,6 +19,7 @@ interface SessionAdmissionLeaseState {
   readonly sessionId: string;
   readonly context: SessionAdmissionContext;
   readonly tasks: Promise<SessionAdmissionTaskResult>[];
+  readonly newWorkAdmitted: boolean;
   accepting: boolean;
 }
 
@@ -24,8 +29,28 @@ type SessionAdmissionTaskResult =
 
 export class SessionAdmissionGate {
   readonly #tails = new Map<string, Promise<void>>();
+  readonly #closingSessions = new Map<string, number>();
   readonly #context = new AsyncLocalStorage<SessionAdmissionContext>();
   readonly #leases = new WeakMap<SessionAdmissionLease, SessionAdmissionLeaseState>();
+
+  beginSessionLifecycle(sessionId: string): SessionLifecycleAdmission {
+    this.#closingSessions.set(sessionId, (this.#closingSessions.get(sessionId) ?? 0) + 1);
+    let released = false;
+    return Object.freeze({
+      release: () => {
+        if (released) return;
+        released = true;
+        const holders = this.#closingSessions.get(sessionId);
+        if (holders === undefined) return;
+        if (holders === 1) this.#closingSessions.delete(sessionId);
+        else this.#closingSessions.set(sessionId, holders - 1);
+      },
+    });
+  }
+
+  isSessionClosing(sessionId: string): boolean {
+    return this.#closingSessions.has(sessionId);
+  }
 
   async run<T>(
     sessionId: string,
@@ -52,6 +77,8 @@ export class SessionAdmissionGate {
     sessionId: string,
     operation: (lease: SessionAdmissionLease) => Promise<T> | T,
   ): Promise<T> {
+    // Capture before the first await: entering this method is the new-work admission cut.
+    const newWorkAdmitted = !this.#closingSessions.has(sessionId);
     const previous = this.#tails.get(sessionId) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => {
@@ -68,6 +95,7 @@ export class SessionAdmissionGate {
       sessionId,
       context,
       tasks: [],
+      newWorkAdmitted,
       accepting: true,
     };
     this.#leases.set(lease, leaseState);
@@ -115,13 +143,7 @@ export class SessionAdmissionGate {
     lease: SessionAdmissionLease,
     operation: () => Promise<T> | T,
   ): Promise<T> {
-    const leaseState = this.#leases.get(lease);
-    if (!leaseState) {
-      throw new Error('Session admission lease was not issued by this gate');
-    }
-    if (leaseState.sessionId !== sessionId) {
-      throw new Error('Session admission lease does not match the Session');
-    }
+    const leaseState = this.#requireLease(sessionId, lease);
     if (!leaseState.accepting) {
       throw new Error('Session admission lease no longer accepts tasks');
     }
@@ -142,5 +164,20 @@ export class SessionAdmissionGate {
     );
     leaseState.tasks.push(observed);
     return task;
+  }
+
+  isNewWorkAdmitted(sessionId: string, lease: SessionAdmissionLease): boolean {
+    return this.#requireLease(sessionId, lease).newWorkAdmitted;
+  }
+
+  #requireLease(sessionId: string, lease: SessionAdmissionLease): SessionAdmissionLeaseState {
+    const leaseState = this.#leases.get(lease);
+    if (!leaseState) {
+      throw new Error('Session admission lease was not issued by this gate');
+    }
+    if (leaseState.sessionId !== sessionId) {
+      throw new Error('Session admission lease does not match the Session');
+    }
+    return leaseState;
   }
 }

@@ -474,6 +474,10 @@ export class SessionManager {
     await Promise.all(sessions.map((session) => this.runtimeKernel.invalidateBackend(session.id)));
   }
 
+  async disposeSessionBackend(sessionId: string): Promise<void> {
+    await this.runtimeKernel.disposeBackend(sessionId);
+  }
+
   async getMessages(sessionId: string): Promise<StoredMessage[]> {
     return (await this.getSessionView(sessionId)).messages;
   }

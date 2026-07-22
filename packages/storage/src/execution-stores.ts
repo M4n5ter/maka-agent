@@ -156,6 +156,9 @@ async function openExecutionStoresForWrite<K extends StorageRootKind>(
     ...(interactionStore === undefined ? {} : { interactionStore }),
     sessionStore: {
       create: (input) => run(() => sessionStore.create(input)),
+      createStableSession: (request) => run(() => sessionStore.createStableSession(request)),
+      createAutomationSession: (request) =>
+        run(() => sessionStore.createAutomationSession(request)),
       list: (filter) => run(() => sessionStore.list(filter)),
       listForRecovery: () => run(() => sessionStore.listForRecovery()),
       readHeaderSnapshot: (sessionId) => run(() => sessionStore.readHeaderSnapshot(sessionId)),

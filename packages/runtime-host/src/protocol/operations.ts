@@ -16,6 +16,7 @@ import {
   type OperationSpec,
 } from './operation-spec.js';
 import { SESSION_CONTINUITY_OPERATION_SPECS } from './session-continuity.js';
+import { SESSION_MANAGEMENT_OPERATION_SPECS } from './session-management.js';
 import { TURN_OPERATION_SPECS } from './turn.js';
 import { RUNTIME_POLICY_OPERATION_SPECS } from './runtime-policy.js';
 import { RUNTIME_RESOURCE_OPERATION_SPECS } from './runtime-resource.js';
@@ -345,8 +346,13 @@ const HOST_TURN_MESSAGE_INTERACTION_AND_CONTINUITY_OPERATION_SPECS = composeOper
   SESSION_CONTINUITY_OPERATION_SPECS,
 );
 
-const HOST_AND_DOMAIN_OPERATION_SPECS = composeOperationSpecMaps(
+const HOST_AND_SESSION_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_TURN_MESSAGE_INTERACTION_AND_CONTINUITY_OPERATION_SPECS,
+  SESSION_MANAGEMENT_OPERATION_SPECS,
+);
+
+const HOST_AND_DOMAIN_OPERATION_SPECS = composeOperationSpecMaps(
+  HOST_AND_SESSION_OPERATION_SPECS,
   RUNTIME_POLICY_OPERATION_SPECS,
 );
 

@@ -39,6 +39,7 @@ export type MessageOperationKey = Extract<
   'turn.message.submit' | 'queue.retract' | 'turn.interrupt'
 >;
 export type SessionContinuityOperationKey = Extract<OperationKey, `subscription.${string}`>;
+export type SessionManagementOperationKey = Extract<OperationKey, `session.${string}`>;
 export type InteractionOperationKey = Extract<OperationKey, `interaction.${string}`>;
 export type RuntimePolicyOperationKey = Extract<
   OperationKey,
@@ -62,6 +63,10 @@ export type AllDomainOperationHandlerMap = Pick<OperationHandlerMap, DomainOpera
 export type SessionContinuityOperationHandlerMap = Pick<
   OperationHandlerMap,
   SessionContinuityOperationKey
+>;
+export type SessionManagementOperationHandlerMap = Pick<
+  OperationHandlerMap,
+  SessionManagementOperationKey
 >;
 export type InteractionOperationHandlerMap = Pick<OperationHandlerMap, InteractionOperationKey>;
 export type RuntimePolicyOperationHandlerMap = Pick<OperationHandlerMap, RuntimePolicyOperationKey>;

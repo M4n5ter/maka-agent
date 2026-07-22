@@ -68,6 +68,91 @@ test('installs subscription state before resolving an open response', async () =
   );
 });
 
+test('delivers session removal as a normal terminal subscription frame', async () => {
+  await withProtocolPeer(
+    async (transport, hostEpoch) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+      const opened = openResult(hostEpoch, 'subscription-removed');
+      await transport.write({
+        requestId: request.requestId,
+        operation: 'subscription.open',
+        ok: true,
+        result: opened,
+      });
+      await transport.write({
+        kind: 'subscription.closed',
+        hostEpoch,
+        subscriptionId: opened.subscriptionId,
+        sequence: opened.nextSequence,
+        reason: 'session_removed',
+      });
+    },
+    async (connection) => {
+      const subscription = await connection.openSessionSubscription({ sessionId: 'session-1' });
+      const iterator = subscription[Symbol.asyncIterator]();
+      const terminal = await iterator.next();
+      assert.equal(terminal.done, false);
+      if (!terminal.done) {
+        assert.equal(terminal.value.kind, 'subscription.closed');
+        if (terminal.value.kind === 'subscription.closed') {
+          assert.equal(terminal.value.reason, 'session_removed');
+        }
+      }
+      assert.deepEqual(await iterator.next(), { done: true, value: undefined });
+    },
+  );
+});
+
+test('reserves the thirty-second client queue frame for normal Session removal', async () => {
+  await withProtocolPeer(
+    async (transport, hostEpoch) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+      const opened = openResult(hostEpoch, 'subscription-headroom');
+      const frames: HostFrame[] = [
+        {
+          requestId: request.requestId,
+          operation: 'subscription.open',
+          ok: true,
+          result: opened,
+        },
+        ...Array.from({ length: 31 }, (_, index) =>
+          deltaFrame(hostEpoch, opened.subscriptionId, index + 1),
+        ),
+        {
+          kind: 'subscription.closed',
+          hostEpoch,
+          subscriptionId: opened.subscriptionId,
+          sequence: 32,
+          reason: 'session_removed',
+        },
+      ];
+      await transport.writeEncoded(
+        Buffer.concat(frames.map((frame) => encodeProtocolFrame(frame))),
+      );
+    },
+    async (connection) => {
+      const subscription = await connection.openSessionSubscription({ sessionId: 'session-1' });
+      const iterator = subscription[Symbol.asyncIterator]();
+      const received: SubscriptionFrame[] = [];
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) break;
+        received.push(next.value);
+      }
+      assert.equal(received.length, 32);
+      assert.deepEqual(
+        received.map((frame) => frame.sequence),
+        Array.from({ length: 32 }, (_, index) => index + 1),
+      );
+      const terminal = received.at(-1);
+      assert.equal(terminal?.kind, 'subscription.closed');
+      if (terminal?.kind === 'subscription.closed') {
+        assert.equal(terminal.reason, 'session_removed');
+      }
+    },
+  );
+});
+
 test('keeps protocol correlation independent from caller mutation of the snapshot', async () => {
   const snapshotMutated = deferred<void>();
   await withProtocolPeer(

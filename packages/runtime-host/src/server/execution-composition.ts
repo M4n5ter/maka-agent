@@ -57,6 +57,7 @@ import {
 import { HostRuntimePolicyCoordinator } from './runtime-policy-coordinator.js';
 import { HostRuntimeResourceCoordinator } from './runtime-resource-coordinator.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
+import { HostSessionCoordinator } from './session-coordinator.js';
 import { SessionContinuityCoordinator } from './session-continuity-coordinator.js';
 import { HostSkillCatalogCoordinator } from './skill-catalog-coordinator.js';
 import { HostSkillCatalogFilesystem } from './skill-catalog-filesystem.js';
@@ -366,6 +367,20 @@ export async function createExecutionRuntimeHostComposition(
     newId: randomUUID,
     now: Date.now,
   });
+  const sessions = new HostSessionCoordinator({
+    stores,
+    runtimePolicy: runtimePolicyStores,
+    usage: usageStores,
+    manager,
+    admission: sessionAdmission,
+    root: rootCoordinator,
+    messages: messageCoordinator,
+    continuity,
+    goals,
+    automation,
+    resources,
+    requestDrain: context.requestDrain,
+  });
   let runtimeDrain: ReturnType<SessionManager['beginRuntimeDrain']> | undefined;
   let usageDrain: Promise<void> | undefined;
   let artifactDrain: Promise<void> | undefined;
@@ -500,6 +515,7 @@ export async function createExecutionRuntimeHostComposition(
       rootCoordinator.handlers,
       goals.handlers,
       automation.handlers,
+      sessions.handlers,
       messageCoordinator.handlers,
       interaction.handlers,
       continuity.handlers,

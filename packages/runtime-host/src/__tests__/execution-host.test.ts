@@ -31,6 +31,9 @@ import {
   withExecutionRoot,
   withTimeout,
 } from './support/execution-root-fixture.js';
+import { RootAdmissionOwner } from '../server/root-admission-owner.js';
+import { RootTurnCoordinator } from '../server/root-turn-coordinator.js';
+import { SessionAdmissionGate } from '../server/session-admission-gate.js';
 
 test('subscription.open is observational for the durable Session header', async () => {
   await withExecutionRoot(async (fixture) => {
@@ -508,6 +511,136 @@ test('an archived Session rejects a new Turn before durable admission', async ()
       runCount: 0,
       userMessageCount: 0,
     });
+  });
+});
+
+test('isArchived rejects direct turn.start even when status is inconsistent', async () => {
+  await withExecutionRoot(async (fixture) => {
+    const owner = await tryAcquireInteractiveRootOwner(fixture.capability);
+    assert.ok(owner);
+    try {
+      const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+      await stores.sessionStore.updateHeader(fixture.sessionId, {
+        isArchived: true,
+        archivedAt: Date.now(),
+        status: 'active',
+      });
+    } finally {
+      await owner.close();
+    }
+
+    const host = await fixture.startHost();
+    const client = await connectClient(fixture.root, 'desktop');
+    const turnId = randomUUID();
+    await assert.rejects(
+      () =>
+        client.startTurn({
+          sessionId: fixture.sessionId,
+          turnId,
+          content: { text: 'must remain archived' },
+        }),
+      operationError('session_archived'),
+    );
+    await client.close();
+    await fixture.stopHost(host);
+    assert.deepEqual(await fixture.readTurnFootprint(turnId), {
+      admitted: false,
+      runCount: 0,
+      userMessageCount: 0,
+    });
+  });
+});
+
+test('turn.start queued before a Session lifecycle fence keeps its admission decision', async () => {
+  await withExecutionRoot(async (fixture) => {
+    const owner = await tryAcquireInteractiveRootOwner(fixture.capability);
+    assert.ok(owner);
+    if (!owner) throw new Error('Unable to acquire the Interactive root for Turn admission');
+    try {
+      const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+      await stores.sessionStore.updateHeader(fixture.sessionId, { collaborationMode: 'plan' });
+      const admission = new SessionAdmissionGate();
+      let drainRequests = 0;
+      const coordinator = new RootTurnCoordinator(
+        undefined as never,
+        stores,
+        undefined as never,
+        new RootAdmissionOwner().writer,
+        () => ({ release: () => undefined }),
+        () => {
+          drainRequests += 1;
+        },
+        admission,
+        undefined as never,
+        undefined as never,
+        { beginExternalTurn: () => assert.fail('Plan Session unexpectedly started a Turn') },
+        () => undefined,
+      );
+      const blockerEntered = deferred<void>();
+      const releaseBlocker = deferred<void>();
+      const order: string[] = [];
+      const blocker = admission.run(fixture.sessionId, async () => {
+        order.push('blocker:start');
+        blockerEntered.resolve();
+        await releaseBlocker.promise;
+        order.push('blocker:end');
+      });
+      await blockerEntered.promise;
+      const context = {
+        hostEpoch: 'epoch-turn-lifecycle',
+        connectionId: 'turn-lifecycle-test',
+        surface: 'tui' as const,
+        principal: 'local_os_user' as const,
+        acquireResidency: () => ({ release: () => undefined }),
+      };
+      const preFenceTurnId = randomUUID();
+      const postFenceTurnId = randomUUID();
+      const preFence = coordinator.handlers['turn.start'](
+        {
+          sessionId: fixture.sessionId,
+          turnId: preFenceTurnId,
+          content: { text: 'queued before lifecycle' },
+        },
+        context,
+      ).then((outcome) => {
+        order.push('pre-fence');
+        return outcome;
+      });
+      const lifecycle = admission.beginSessionLifecycle(fixture.sessionId);
+      const postFence = coordinator.handlers['turn.start'](
+        {
+          sessionId: fixture.sessionId,
+          turnId: postFenceTurnId,
+          content: { text: 'submitted after lifecycle' },
+        },
+        context,
+      ).then((outcome) => {
+        order.push('post-fence');
+        return outcome;
+      });
+
+      releaseBlocker.resolve();
+      const admitted = await preFence;
+      assert.equal(admitted.ok, false);
+      if (!admitted.ok) assert.equal(admitted.error.code, 'operation_unavailable');
+      const rejected = await postFence;
+      assert.equal(rejected.ok, false);
+      if (!rejected.ok) assert.equal(rejected.error.code, 'session_busy');
+      await blocker;
+      lifecycle.release();
+      assert.equal(drainRequests, 0);
+      assert.deepEqual(order, ['blocker:start', 'blocker:end', 'pre-fence', 'post-fence']);
+      assert.equal(
+        await stores.agentRunStore.readRootTurnAdmission(fixture.sessionId, preFenceTurnId),
+        undefined,
+      );
+      assert.equal(
+        await stores.agentRunStore.readRootTurnAdmission(fixture.sessionId, postFenceTurnId),
+        undefined,
+      );
+    } finally {
+      await owner.close();
+    }
   });
 });
 
@@ -2289,4 +2422,12 @@ function assertJsonLines(bytes: string): void {
   for (const line of bytes.split('\n').filter(Boolean)) {
     assert.doesNotThrow(() => JSON.parse(line));
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
