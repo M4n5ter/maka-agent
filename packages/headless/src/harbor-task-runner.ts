@@ -94,6 +94,25 @@ export class HarborInfraError extends Error {
   }
 }
 
+/** Structural shape shared by HarborInfraError and PierInfraError — PierInfraError
+ * is deliberately NOT a subclass (the controller classifies by behavior, never
+ * identity), so the shared helpers are typed against the structure, not the class. */
+export interface InfraErrorLike extends Error {
+  readonly detail?: string;
+  readonly kind: 'infra_failed' | 'timed_out';
+  readonly artifactRefs?: { providerTelemetryPath?: string };
+}
+
+/** Constructor shape shared by HarborInfraError and PierInfraError. The shared
+ * trial-mapping helpers below take this so they throw the calling runner's own
+ * error type — diagnostics must keep naming the failing harness. */
+export type InfraErrorCtor = new (
+  message: string,
+  detail?: string,
+  kind?: 'infra_failed' | 'timed_out',
+  artifactRefs?: { providerTelemetryPath?: string },
+) => InfraErrorLike;
+
 export interface HarborTaskPricing {
   inputUsdPer1M: number;
   outputUsdPer1M: number;
@@ -409,27 +428,32 @@ export function createHarborTaskRunner(options: HarborTaskRunnerOptions): TaskRu
   return runner;
 }
 
-function providerTelemetryArtifactRefs(
+/** Shared across runners: attach the provider-request telemetry artifact to a
+ * thrown outcome so infra failures keep their billing/usage evidence. */
+export function providerTelemetryArtifactRefs(
   telemetry: readonly ProviderRequestTelemetry[],
   providerTelemetryPath: string,
 ): { providerTelemetryPath: string } | undefined {
   return telemetry.length > 0 ? { providerTelemetryPath } : undefined;
 }
 
-function withProviderTelemetryArtifact(
+/** Shared across runners: enriches only the calling runner's own infra error
+ * type, so a foreign error passes through untouched. */
+export function withProviderTelemetryArtifact(
   error: unknown,
   telemetry: readonly ProviderRequestTelemetry[],
   providerTelemetryPath: string,
+  infraError: InfraErrorCtor = HarborInfraError,
 ): unknown {
   const artifactRefs = providerTelemetryArtifactRefs(telemetry, providerTelemetryPath);
   if (
-    !(error instanceof HarborInfraError) ||
+    !(error instanceof infraError) ||
     !artifactRefs ||
     error.artifactRefs?.providerTelemetryPath
   ) {
     return error;
   }
-  const enriched = new HarborInfraError(error.message, error.detail, error.kind, artifactRefs);
+  const enriched = new infraError(error.message, error.detail, error.kind, artifactRefs);
   enriched.stack = error.stack;
   return enriched;
 }
@@ -555,9 +579,24 @@ function resolveNativeHarborTimeoutMs(
   options: Pick<HarborTaskRunnerOptions, 'timeoutMultiplier'>,
   task: TaskRunInput['task'],
 ): number {
-  const agentSec = task.metadata?.agentTimeoutSec ?? 0;
-  const verifierSec = verifierPolicy(task).outerTimeoutSec;
-  const nativePhasesMs = (agentSec + verifierSec) * (options.timeoutMultiplier ?? 1) * 1_000;
+  return resolveNativeTrialTimeoutMs({
+    nativePhasesSec: (task.metadata?.agentTimeoutSec ?? 0) + verifierPolicy(task).outerTimeoutSec,
+    timeoutMultiplier: options.timeoutMultiplier ?? 1,
+  });
+}
+
+/** Shared wall-clock watchdog contract for one trial: the harness's maximum
+ * legitimate lifecycle in native seconds, times the multiplier, plus
+ * setup/teardown grace, floored at 45 minutes so short tasks keep a sane
+ * ceiling. Cross-runner benchmark invariant: each runner owns its own
+ * lifecycle shape (which phases run, and how often its harness retries them)
+ * and supplies the summed seconds — Harbor passes agent + the oracle verifier
+ * policy's outer budget; Pier passes its full phase-and-retry model. */
+export function resolveNativeTrialTimeoutMs(input: {
+  nativePhasesSec: number;
+  timeoutMultiplier: number;
+}): number {
+  const nativePhasesMs = input.nativePhasesSec * input.timeoutMultiplier * 1_000;
   return Math.max(DEFAULT_HARBOR_TIMEOUT_MS, nativePhasesMs + HARBOR_SETUP_TEARDOWN_GRACE_MS);
 }
 
@@ -572,7 +611,13 @@ async function readOptionalCellOutput(
   }
 }
 
-function hostTraceEventsPath(
+/** Shared across runners: resolve the richest host-side trace for a trial.
+ * Task-run mode prefers the combined agent/trace-events.jsonl, then the
+ * task-run session layout; cell mode resolves the maka-storage session events
+ * via cell.runtimeRefs — the raw runtime-events fallback is a last resort, and
+ * skipping the session branch silently drops tool_failed /
+ * provider_request_captured failure attribution downstream. */
+export function hostTraceEventsPath(
   agent: HarborTaskRunnerOptions['agent'],
   mode: 'cell' | 'task-run',
   trialDir: string,
@@ -591,7 +636,9 @@ function hostTraceEventsPath(
   return existsSync(cellTracePath) ? cellTracePath : hostEventsPath;
 }
 
-function harborTraceMode(agentEnv: Record<string, string> | undefined): 'cell' | 'task-run' {
+/** Exported alongside readTimedOutTrialArtifacts: the Pier runner resolves the
+ * same MAKA_HARBOR_MODE contract when recovering timed-out trial artifacts. */
+export function harborTraceMode(agentEnv: Record<string, string> | undefined): 'cell' | 'task-run' {
   return agentEnv?.MAKA_HARBOR_MODE === 'task-run' ? 'task-run' : 'cell';
 }
 
@@ -611,7 +658,13 @@ function cellArtifactRefs(
   };
 }
 
-async function readTimedOutTrialArtifacts(
+/** Recover whatever attested evidence a timed-out/budget-exhausted trial left
+ * behind (cell output, execution identity, usage checkpoint) so the sample keeps
+ * its Pass@1 eligibility instead of being excluded as missing_execution_identity.
+ * Cross-runner benchmark invariant: the Pier runner reuses this exact
+ * implementation — both runners' trials are written by the same adapters into
+ * the same agent/ layout, so the recovery contract must not fork. */
+export async function readTimedOutTrialArtifacts(
   trialDir: string,
   taskId: string,
   agent: HarborTaskRunnerOptions['agent'],
@@ -800,7 +853,8 @@ function structuredOutputValuesMismatch(normalizedText: string): boolean {
   return normalizedText.includes('only found') && normalizedText.includes('expected values');
 }
 
-function mergeAgentEnv(
+/** Shared across runners: overlay attempt-level env onto runner-level env. */
+export function mergeAgentEnv(
   base: Record<string, string> | undefined,
   attempt: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -1115,7 +1169,8 @@ function usesHostProviderProxy(agent: HarborTaskRunnerOptions['agent']): boolean
   return agent === 'opencode' || agent === 'kimi-code' || agent === 'codex';
 }
 
-function providerTokenSummary(
+/** Shared cost math across runners: build the cell token summary from proxy-observed usage and per-1M pricing. */
+export function providerTokenSummary(
   usage: ProviderTokenUsage,
   pricing: HarborTaskPricing,
 ): NonNullable<HarborCellOutput['tokenSummary']> {
@@ -1141,7 +1196,8 @@ function providerTokenSummary(
   };
 }
 
-function providerProxyAuthMode(provider: string): 'bearer' | 'x-api-key' {
+/** Shared across runners: provider registry drives the proxy's client-facing auth header. */
+export function providerProxyAuthMode(provider: string): 'bearer' | 'x-api-key' {
   const definition = (
     PROVIDER_DEFAULTS as Partial<Record<string, (typeof PROVIDER_DEFAULTS)[ProviderType]>>
   )[provider];
@@ -1151,7 +1207,8 @@ function providerProxyAuthMode(provider: string): 'bearer' | 'x-api-key' {
     : 'bearer';
 }
 
-function providerProxyUsageProtocol(
+/** Shared across runners: adapter/provider registry drives the proxy's SSE usage parser. */
+export function providerProxyUsageProtocol(
   agent: HarborTaskRunnerOptions['agent'],
   provider: string,
 ): ProviderUsageProtocol | undefined {
@@ -1217,7 +1274,8 @@ function taskAgentEnvWithoutProviderSecrets(
   return result;
 }
 
-function assertNoProviderSecretsInAgentEnv(
+/** Shared benchmark invariant: agentEnv must never carry provider secrets. */
+export function assertNoProviderSecretsInAgentEnv(
   agentEnv: Record<string, string> | undefined,
   allowedHostCredentialEnvNames: ReadonlySet<string> = new Set(),
 ): void {
@@ -1229,7 +1287,12 @@ function assertNoProviderSecretsInAgentEnv(
   }
 }
 
-function assertNoExperimentIdentityOverrides(agentEnv: Record<string, string> | undefined): void {
+/** Shared benchmark invariant: attempt-level agentEnv must never override the
+ * experiment's identity or pricing. Exported so the Pier runner enforces the
+ * exact same key set instead of drifting on a copied list. */
+export function assertNoExperimentIdentityOverrides(
+  agentEnv: Record<string, string> | undefined,
+): void {
   const forbidden = Object.keys(agentEnv ?? {}).filter((key) =>
     EXPERIMENT_IDENTITY_ENV_KEYS.has(key),
   );
@@ -1240,19 +1303,30 @@ function assertNoExperimentIdentityOverrides(agentEnv: Record<string, string> | 
   }
 }
 
-function providerRequiresSecret(provider: string | undefined): boolean {
+/** Shared across runners: registry-driven check whether a provider needs a
+ * real credential (keyless providers like ollama/lm-studio run MAKA_HOST_NO_AUTH). */
+export function providerRequiresSecret(provider: string | undefined): boolean {
   const providerType = (provider ?? 'deepseek') as ProviderType;
   const definition = PROVIDER_DEFAULTS[providerType];
   if (!definition) throw new Error(`unsupported MAKA_PROVIDER: ${provider ?? ''}`);
   return providerAuthRequiresSecret(providerType);
 }
 
-async function findTrialDir(jobDir: string, taskName: string): Promise<string> {
+/** Shared across runners: Harbor and Pier lay out job output the same way
+ * (result.json reward_stats/exception_stats trial-name hint, then a
+ * task-name-prefixed directory fallback), so trial-dir discovery must not fork.
+ * `harness`/`infraError` keep the thrown diagnostics naming the calling runner. */
+export async function findTrialDir(
+  jobDir: string,
+  taskName: string,
+  harness = 'harbor',
+  infraError: InfraErrorCtor = HarborInfraError,
+): Promise<string> {
   let entries;
   try {
     entries = await readdir(jobDir, { withFileTypes: true });
   } catch (error) {
-    throw new HarborInfraError(`harbor produced no job output at ${jobDir}`, errorText(error));
+    throw new infraError(`${harness} produced no job output at ${jobDir}`, errorText(error));
   }
   const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   const resultTrialName = await readResultTrialName(join(jobDir, 'result.json'));
@@ -1262,8 +1336,8 @@ async function findTrialDir(jobDir: string, taskName: string): Promise<string> {
   const match =
     dirs.find((name) => name === taskName || name.startsWith(`${taskName}__`)) ?? dirs[0];
   if (!match) {
-    throw new HarborInfraError(
-      `harbor produced no trial directory under ${jobDir} for task ${taskName}`,
+    throw new infraError(
+      `${harness} produced no trial directory under ${jobDir} for task ${taskName}`,
     );
   }
   return join(jobDir, match);
@@ -1343,7 +1417,12 @@ async function readReward(rewardPath: string, resultPath: string, taskId: string
   return reward;
 }
 
-async function readTrialException(resultPath: string): Promise<string | null> {
+/** Shared across runners: both harnesses record how the agent phase ended in
+ * the trial result's `exception_info`, in the same shape. */
+export async function readTrialException(
+  resultPath: string,
+  fallbackType = 'HarborTrialError',
+): Promise<string | null> {
   let raw: string;
   try {
     raw = await readFile(resultPath, 'utf8');
@@ -1360,47 +1439,43 @@ async function readTrialException(resultPath: string): Promise<string | null> {
   const exceptionInfo = isRecord(parsed.exception_info) ? parsed.exception_info : null;
   if (!exceptionInfo) return null;
   const type =
-    typeof exceptionInfo.exception_type === 'string'
-      ? exceptionInfo.exception_type
-      : 'HarborTrialError';
+    typeof exceptionInfo.exception_type === 'string' ? exceptionInfo.exception_type : fallbackType;
   const message =
     typeof exceptionInfo.exception_message === 'string' ? exceptionInfo.exception_message : '';
   return message ? `${type}: ${message}` : type;
 }
 
-function isBudgetExhaustedTrialException(message: string): boolean {
+/** Shared across runners: the trial exceptions that mean the agent budget ran out (host cell deadline or harness AgentTimeoutError). */
+export function isBudgetExhaustedTrialException(message: string): boolean {
   return (
     /^RuntimeError: Maka host cell exceeded \d+(?:\.\d+)?s$/.test(message) ||
     /^AgentTimeoutError: Agent execution timed out after \d+(?:\.\d+)? seconds$/.test(message)
   );
 }
 
-async function readCellOutput(cellOutputPath: string, taskId: string): Promise<HarborCellOutput> {
+/** Shared across runners: the same adapters write the same maka-cell-output.json
+ * contract into both harnesses' trial layouts. */
+export async function readCellOutput(
+  cellOutputPath: string,
+  taskId: string,
+  infraError: InfraErrorCtor = HarborInfraError,
+): Promise<HarborCellOutput> {
   let raw: string;
   try {
     raw = await readFile(cellOutputPath, 'utf8');
   } catch (error) {
-    throw new HarborInfraError(
-      `maka cell did not write output for task ${taskId}`,
-      errorText(error),
-    );
+    throw new infraError(`maka cell did not write output for task ${taskId}`, errorText(error));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new HarborInfraError(
-      `maka cell output is not valid JSON for task ${taskId}`,
-      errorText(error),
-    );
+    throw new infraError(`maka cell output is not valid JSON for task ${taskId}`, errorText(error));
   }
   try {
     return validateHarborCellOutput(parsed);
   } catch (error) {
-    throw new HarborInfraError(
-      `maka cell output is malformed for task ${taskId}`,
-      errorText(error),
-    );
+    throw new infraError(`maka cell output is malformed for task ${taskId}`, errorText(error));
   }
 }
 
@@ -1436,7 +1511,10 @@ function isExecFileTimeout(error: unknown): boolean {
   return record.killed === true && record.signal === 'SIGKILL';
 }
 
-function isBudgetExhaustedError(error: unknown): error is FixedPromptBudgetExhaustedErrorType {
+/** Shared across runners: identify FixedPromptBudgetExhaustedError across module instances. */
+export function isBudgetExhaustedError(
+  error: unknown,
+): error is FixedPromptBudgetExhaustedErrorType {
   return (
     error instanceof FixedPromptBudgetExhaustedError ||
     (typeof error === 'object' &&
