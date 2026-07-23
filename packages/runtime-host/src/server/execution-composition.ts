@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { BackendRegistry, FakeBackend, SessionManager } from '@maka/runtime';
+import {
+  BackendRegistry,
+  FakeBackend,
+  SessionManager,
+  type RuntimeHostedRootAuthority,
+} from '@maka/runtime';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import type { RuntimeHostComposition, RuntimeHostCompositionContext } from './host-kernel.js';
 import { type HostMessageRootPort, HostMessageCoordinator } from './message-coordinator.js';
@@ -12,6 +17,7 @@ export async function createExecutionRuntimeHostComposition(
   context: RuntimeHostCompositionContext,
 ): Promise<RuntimeHostComposition> {
   const stores = await openInteractiveExecutionStoresForWrite(context.owner.lease);
+  await stores.messageReceiptStore.beginHostEpoch(context.hostEpoch);
   const backends = new BackendRegistry();
   backends.register('fake', (backendContext) => new FakeBackend(backendContext));
   const sessionAdmission = new SessionAdmissionGate();
@@ -30,19 +36,22 @@ export async function createExecutionRuntimeHostComposition(
     durableProof: {
       readRootTurnSourceMessageReceipt: (sessionId, messageId) =>
         stores.agentRunStore.readRootTurnSourceMessageReceipt(sessionId, messageId),
-      readImmutableSessionRuntimeEvents: async (sessionId) => {
-        const runs = await stores.agentRunStore.listSessionRuns(sessionId);
-        const events = await Promise.all(
-          runs.map((run) =>
-            stores.runtimeEventStore.readImmutableRuntimeEvents(sessionId, run.runId),
-          ),
-        );
-        return events.flat();
-      },
+      readImmutableSteeringMessageProof: (sessionId, messageId) =>
+        stores.runtimeEventStore.readImmutableSteeringMessageProof(sessionId, messageId),
     },
+    receipts: stores.messageReceiptStore,
     sessionAdmission,
     acquireResidency: context.acquireResidency,
+    requestDrain: context.requestDrain,
   });
+  const runtimeAuthority: RuntimeHostedRootAuthority = {
+    bindRun: (identity) => messages.bindRun(identity),
+    executeRoot: (input) => requireRootCoordinator(rootCoordinator).executeRoot(input),
+    stopRoot: (identity, input) =>
+      requireRootCoordinator(rootCoordinator).stopRoot(identity, input),
+    stopSession: (sessionId, input) =>
+      requireRootCoordinator(rootCoordinator).stopSession(sessionId, input),
+  };
   const manager = new SessionManager({
     store: stores.sessionStore,
     runStore: stores.agentRunStore,
@@ -50,7 +59,7 @@ export async function createExecutionRuntimeHostComposition(
     backends,
     newId: randomUUID,
     now: Date.now,
-    messageAuthority: messages,
+    messageAuthority: runtimeAuthority,
   });
   const rootAdmissionOwner = new RootAdmissionOwner(stores.agentRunStore);
   rootCoordinator = new RootTurnCoordinator(
@@ -70,6 +79,10 @@ export async function createExecutionRuntimeHostComposition(
   return {
     handlers,
     recover: async () => {
+      const sessions = await stores.sessionStore.listForRecovery();
+      for (const session of sessions) {
+        await stores.runtimeEventStore.repairImmutableSteeringMessageProofsForRecovery(session.id);
+      }
       await coordinator.prepareRecovery();
       await manager.recoverInterruptedSessionsStrict(stores);
       await coordinator.recover();

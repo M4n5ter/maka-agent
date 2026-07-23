@@ -125,6 +125,7 @@ export interface ChildAgentRetryInput {
   continuation: RuntimeContinuation;
   /** Retry an ordinary session-inline AgentRun inside a linked child Session. */
   linkedSession?: boolean;
+  onRunStarted?: () => void | Promise<void>;
 }
 
 /**
@@ -732,7 +733,13 @@ export class RuntimeKernel implements RuntimeKernelLike {
 
     // A provider retry replays the source ledger without recording a second
     // user prompt and without turning the child into a session continuation.
-    yield* this.runAgentContinuation(continuation, run, false);
+    yield* this.runAgentContinuation(
+      continuation,
+      run,
+      false,
+      input.linkedSession === true,
+      input.onRunStarted,
+    );
   }
 
   private async *runAgentTurn(
@@ -926,6 +933,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
           if (!flowDone) {
             flowDone = true;
             await run.finalize();
+            releaseMessageOwner();
             sessionEvents.close();
           }
           await this.deps.runtimeInvocationObserver?.(result);
@@ -957,19 +965,42 @@ export class RuntimeKernel implements RuntimeKernelLike {
     continuation: RuntimeContinuation,
     run: AgentRun,
     persistContinuationSource = true,
+    bindHostedRoot = false,
+    onRunStarted?: () => void | Promise<void>,
   ): AsyncIterable<SessionEvent> {
     const sessionEvents = new AsyncEventQueue<SessionEvent>();
     const abortController = new AbortController();
     let flowDone = false;
+    let messageOwner: RuntimeMessageRunOwner | undefined;
+    let messageOwnerReleased = false;
+    const releaseMessageOwner = (): void => {
+      if (!messageOwner || messageOwnerReleased) return;
+      messageOwnerReleased = true;
+      messageOwner.release();
+    };
     let begin: Awaited<ReturnType<AgentRun['beginContinuation']>>;
     try {
       begin = persistContinuationSource
         ? await run.beginContinuation(continuation)
         : await run.beginOperation();
+      if (bindHostedRoot && this.deps.messageAuthority) {
+        messageOwner = this.deps.messageAuthority.bindRun({
+          sessionId: continuation.sessionId,
+          turnId: continuation.turnId,
+          runId: continuation.runId,
+        });
+      }
+      await onRunStarted?.();
     } catch (error) {
-      await run.recordFailure(error);
+      let failure = error;
+      try {
+        releaseMessageOwner();
+      } catch (releaseError) {
+        failure = new AggregateError([error, releaseError], 'Message owner bind cleanup failed');
+      }
+      await run.recordFailure(failure);
       await run.finalize();
-      throw error;
+      throw failure;
     }
 
     const aiSdkFlow = new AiSdkFlow({
@@ -991,6 +1022,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
         flowDone = true;
         try {
           await run.finalize();
+          releaseMessageOwner();
           sessionEvents.close();
         } catch (error) {
           sessionEvents.fail(error);
@@ -1042,6 +1074,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
         await run.finalize();
       }
       await runnerResult.catch(() => undefined);
+      releaseMessageOwner();
     }
   }
 

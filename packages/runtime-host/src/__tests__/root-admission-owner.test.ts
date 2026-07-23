@@ -104,6 +104,19 @@ test('fails closed when a known durable admission identity drifts', async () => 
       () =>
         owner.assertKnownAdmission({
           ...first.admission,
+          execution: {
+            kind: 'linked_child_resume',
+            agentId: 'local-read',
+            agentName: 'Local Read',
+            sourceRunId: 'source-run',
+          },
+        }),
+      /identity changed/,
+    );
+    assert.throws(
+      () =>
+        owner.assertKnownAdmission({
+          ...first.admission,
           normalizedInput: {
             ...first.admission.normalizedInput,
             attachments: first.admission.normalizedInput.attachments?.map((attachment, index) =>
@@ -217,6 +230,7 @@ function admitInput(sessionId: string, turnId: string, admittedAt: number) {
     turnId,
     proposedRunId: `run-${turnId}`,
     proposedUserMessageId: `message-${turnId}`,
+    execution: { kind: 'external_message' as const },
     normalizedInput: { text: `text-${turnId}` },
     sourceMessages: [],
     admittedAt,
@@ -236,6 +250,7 @@ function multiSourceAdmitInput(sessionId: string, turnId: string, admittedAt: nu
     turnId,
     proposedRunId: `run-${turnId}`,
     proposedUserMessageId: `message-${turnId}`,
+    execution: { kind: 'external_message' as const },
     normalizedInput: {
       text: 'model text\n\nfollowup text',
       displayText: 'display text\n\nfollowup text',
@@ -267,6 +282,7 @@ function mutableAdmission(): RootTurnAdmission {
     turnId: input.turnId,
     runId: input.proposedRunId,
     userMessageId: input.proposedUserMessageId,
+    execution: input.execution,
     previousRootTurnId: null,
     normalizedInput: input.normalizedInput,
     sourceMessages: input.sourceMessages,

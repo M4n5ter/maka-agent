@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { messageContentsEqual, type MessageContent } from '@maka/core/events';
 import type {
   AdmitRootTurnInput,
@@ -80,6 +81,7 @@ function sameRootAdmission(left: RootTurnAdmission, right: RootTurnAdmission): b
     left.turnId === right.turnId &&
     left.runId === right.runId &&
     left.userMessageId === right.userMessageId &&
+    isDeepStrictEqual(left.execution, right.execution) &&
     left.previousRootTurnId === right.previousRootTurnId &&
     messageContentsEqual(left.normalizedInput, right.normalizedInput) &&
     left.sourceMessages.length === right.sourceMessages.length &&
@@ -107,6 +109,7 @@ function snapshotAdmission(admission: RootTurnAdmission): RootTurnAdmission {
   );
   return Object.freeze({
     ...admission,
+    execution: Object.freeze({ ...admission.execution }),
     normalizedInput: snapshotMessageContent(admission.normalizedInput),
     sourceMessages: Object.freeze(sourceMessages),
   });

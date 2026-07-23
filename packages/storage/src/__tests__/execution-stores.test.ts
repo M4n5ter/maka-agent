@@ -185,6 +185,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-1',
           proposedUserMessageId: 'message-1',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: {
             text: '<model>hello</model>',
@@ -217,6 +218,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-never-used',
           proposedUserMessageId: 'message-never-used',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: {
             text: '<model>hello</model>',
@@ -257,12 +259,46 @@ describe('execution stores', () => {
         assert.equal(receipt?.admission.turnId, 'turn-1');
         assert.deepEqual(receipt?.sourceMessage, first.admission.sourceMessages[0]);
         assert.equal(Object.isFrozen(receipt), true);
+        const rootProofPath = join(
+          root,
+          'sessions',
+          session.id,
+          'message-proofs',
+          'root',
+          'source-1.json',
+        );
+        await rm(rootProofPath);
+        assert.equal(
+          await stores.agentRunStore.readRootTurnSourceMessageReceipt(session.id, 'source-1'),
+          undefined,
+        );
+        await stores.agentRunStore.listRootTurnAdmissionsForRecovery(session.id);
+        assert.equal(
+          (await stores.agentRunStore.readRootTurnSourceMessageReceipt(session.id, 'source-1'))
+            ?.admission.turnId,
+          'turn-1',
+        );
+        const unrelatedAdmissionEntry = join(
+          root,
+          'sessions',
+          session.id,
+          'turn-admissions',
+          'not-an-admission',
+        );
+        await writeFile(unrelatedAdmissionEntry, 'unrelated');
+        assert.equal(
+          (await stores.agentRunStore.readRootTurnSourceMessageReceipt(session.id, 'source-1'))
+            ?.admission.turnId,
+          'turn-1',
+        );
+        await rm(unrelatedAdmissionEntry);
 
         const conflict = await stores.agentRunStore.admitRootTurn({
           sessionId: session.id,
           turnId: 'turn-1',
           proposedRunId: 'run-never-used',
           proposedUserMessageId: 'message-never-used',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: {
             text: '<model>hello</model>',
@@ -291,24 +327,14 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-never-used',
           proposedUserMessageId: 'message-never-used',
+          execution: { kind: 'linked_child_initial', agentId: 'agent', agentName: 'Agent' },
           previousRootTurnId: null,
           normalizedInput: {
             text: '<model>hello</model>',
             displayText: 'hello',
             attachments: [chartAttachment, notesAttachment],
           },
-          sourceMessages: [
-            {
-              messageId: 'source-1',
-              content: {
-                text: '<model>hello</model>',
-                displayText: 'hello',
-                attachments: [chartAttachment, notesAttachment],
-              },
-              placement: 'current_turn',
-              disposition: 'turn_started',
-            },
-          ],
+          sourceMessages: [],
           admittedAt: 35,
         });
         assert.equal(dispositionConflict.kind, 'conflict');
@@ -318,6 +344,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-never-used',
           proposedUserMessageId: 'message-never-used',
+          execution: { kind: 'external_message' },
           previousRootTurnId: 'different-predecessor',
           normalizedInput: {
             text: '<model>hello</model>',
@@ -364,6 +391,120 @@ describe('execution stores', () => {
     });
   });
 
+  test('rejects invalid root admission contracts before write and when reading disk', async () => {
+    await withRoot(async ({ root }) => {
+      const store = createAgentRunStore(root);
+      const turnStartedSource = {
+        messageId: 'source-message',
+        content: { text: 'source' },
+        placement: 'current_turn' as const,
+        disposition: 'turn_started' as const,
+      };
+      const invalidContracts = [
+        {
+          name: 'external-null-message',
+          userMessageId: null,
+          execution: { kind: 'external_message' as const },
+          sourceMessages: [],
+        },
+        {
+          name: 'retry-with-message',
+          userMessageId: 'message-1',
+          execution: {
+            kind: 'linked_child_provider_retry' as const,
+            agentId: 'agent',
+            agentName: 'Agent',
+            sourceRunId: 'source-run',
+          },
+          sourceMessages: [],
+        },
+        {
+          name: 'child-with-source',
+          userMessageId: 'message-1',
+          execution: {
+            kind: 'linked_child_initial' as const,
+            agentId: 'agent',
+            agentName: 'Agent',
+          },
+          sourceMessages: [turnStartedSource],
+        },
+        {
+          name: 'resume-self-source',
+          userMessageId: 'message-1',
+          execution: {
+            kind: 'linked_child_resume' as const,
+            agentId: 'agent',
+            agentName: 'Agent',
+            sourceRunId: 'run-1',
+          },
+          sourceMessages: [],
+        },
+        {
+          name: 'retry-self-source',
+          userMessageId: null,
+          execution: {
+            kind: 'linked_child_provider_retry' as const,
+            agentId: 'agent',
+            agentName: 'Agent',
+            sourceRunId: 'run-1',
+          },
+          sourceMessages: [],
+        },
+        {
+          name: 'turn-started-owner-mismatch',
+          userMessageId: 'message-1',
+          execution: { kind: 'external_message' as const },
+          sourceMessages: [turnStartedSource],
+        },
+      ];
+
+      for (const invalid of invalidContracts) {
+        const sessionId = `session-${invalid.name}`;
+        const turnId = 'turn-1';
+        const normalizedInput =
+          invalid.sourceMessages.length > 0 ? { text: 'source' } : { text: 'input' };
+        await assert.rejects(
+          () =>
+            store.admitRootTurn({
+              sessionId,
+              turnId,
+              proposedRunId: 'run-1',
+              proposedUserMessageId: invalid.userMessageId,
+              execution: invalid.execution,
+              previousRootTurnId: null,
+              normalizedInput,
+              sourceMessages: invalid.sourceMessages,
+              admittedAt: 10,
+            }),
+          /Invalid root turn admission contract/,
+        );
+        assert.equal(await store.readRootTurnAdmission(sessionId, turnId), undefined);
+
+        const admissionRoot = join(root, 'sessions', sessionId, 'turn-admissions');
+        await mkdir(admissionRoot, { recursive: true });
+        await writeFile(
+          join(admissionRoot, `${turnId}.json`),
+          `${JSON.stringify({
+            schemaVersion: ROOT_TURN_ADMISSION_SCHEMA_VERSION,
+            sessionId,
+            turnId,
+            runId: 'run-1',
+            userMessageId: invalid.userMessageId,
+            execution: invalid.execution,
+            previousRootTurnId: null,
+            normalizedInput,
+            sourceMessages: invalid.sourceMessages,
+            admittedAt: 10,
+          })}\n`,
+        );
+        await assert.rejects(
+          () => store.readRootTurnAdmission(sessionId, turnId),
+          /Invalid root turn admission contract/,
+        );
+      }
+    });
+  });
+
   test('treats ordered source messages as identity and fails closed on ambiguous receipts', async () => {
     await withRoot(async ({ root }) => {
       const store = createAgentRunStore(root);
@@ -386,6 +527,7 @@ describe('execution stores', () => {
         turnId: 'turn-1',
         proposedRunId: 'run-1',
         proposedUserMessageId: 'message-1',
+        execution: { kind: 'external_message' },
         previousRootTurnId: null,
         admittedAt: 10,
       } as const;
@@ -436,6 +578,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           runId: 'run-1',
           userMessageId: 'message-1',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: { text: 'followup' },
           sourceMessages: [
@@ -459,11 +602,12 @@ describe('execution stores', () => {
         turnId: 'turn-1',
         proposedRunId: 'run-1',
         proposedUserMessageId: 'message-1',
+        execution: { kind: 'external_message' },
         previousRootTurnId: null,
         normalizedInput: { text: 'started' },
         sourceMessages: [
           {
-            messageId: 'source-started',
+            messageId: 'message-1',
             content: { text: 'started' },
             placement: 'next_turn',
             disposition: 'turn_started',
@@ -473,19 +617,68 @@ describe('execution stores', () => {
       });
       assert.equal(startedFromNextPlacement.kind, 'admitted');
 
-      await store.admitRootTurn({
-        ...base,
-        turnId: 'turn-2',
-        proposedRunId: 'run-2',
-        proposedUserMessageId: 'message-2',
-        previousRootTurnId: 'turn-1',
-        normalizedInput: { text: 'followup' },
-        sourceMessages: [{ ...sources[1]! }],
-      });
       await assert.rejects(
-        () => store.readRootTurnSourceMessageReceipt(base.sessionId, 'source-followup'),
-        /Ambiguous root turn source message receipt/,
+        () =>
+          store.admitRootTurn({
+            ...base,
+            turnId: 'turn-2',
+            proposedRunId: 'run-2',
+            proposedUserMessageId: 'message-2',
+            execution: { kind: 'external_message' },
+            previousRootTurnId: 'turn-1',
+            normalizedInput: { text: 'followup' },
+            sourceMessages: [{ ...sources[1]! }],
+          }),
+        /Root source message identity belongs to both turn-1 and turn-2/,
       );
+    });
+  });
+
+  test('keys operation receipts by Host Epoch and discards completed Epochs', async () => {
+    await withRoot(async ({ root }) => {
+      const capability = await resolveStorageRoot({ path: root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      if (!owner) return;
+      try {
+        const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+        const receipt = {
+          payload: {
+            originHostEpoch: 'epoch-1',
+            sessionId: 'session-1',
+            retractId: 'retract-1',
+          },
+          result: { queueRevision: 3, retracted: [] },
+        };
+        await stores.messageReceiptStore.beginHostEpoch('epoch-1');
+        await stores.messageReceiptStore.commit(
+          'epoch-1',
+          'retract',
+          'session-1',
+          'retract-1',
+          receipt,
+        );
+        assert.deepEqual(
+          await stores.messageReceiptStore.read('epoch-1', 'retract', 'session-1', 'retract-1'),
+          receipt,
+        );
+        await assert.rejects(
+          () =>
+            stores.messageReceiptStore.commit('epoch-1', 'retract', 'session-1', 'retract-1', {
+              ...receipt,
+              result: { queueRevision: 4, retracted: [] },
+            }),
+          /identity conflict/,
+        );
+
+        await stores.messageReceiptStore.beginHostEpoch('epoch-2');
+        assert.equal(
+          await stores.messageReceiptStore.read('epoch-1', 'retract', 'session-1', 'retract-1'),
+          undefined,
+        );
+      } finally {
+        await owner.close();
+      }
     });
   });
 
@@ -498,6 +691,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: `run-${label}`,
           proposedUserMessageId: `message-${label}`,
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: { text: 'content', attachments: [attachment] },
           sourceMessages: [],
@@ -536,6 +730,7 @@ describe('execution stores', () => {
             turnId: 'turn-1',
             proposedRunId: 'run-too-many',
             proposedUserMessageId: 'message-too-many',
+            execution: { kind: 'external_message' },
             previousRootTurnId: null,
             normalizedInput: {
               text: 'content',
@@ -553,6 +748,7 @@ describe('execution stores', () => {
             turnId: 'turn-1',
             proposedRunId: 'run-large-content',
             proposedUserMessageId: 'message-large-content',
+            execution: { kind: 'external_message' },
             previousRootTurnId: null,
             normalizedInput: { text: 'x'.repeat(ROOT_TURN_ADMISSION_MAX_CONTENT_BYTES + 1) },
             sourceMessages: [],
@@ -584,6 +780,7 @@ describe('execution stores', () => {
             turnId: 'turn-1',
             proposedRunId: 'run-invalid-source',
             proposedUserMessageId: 'message-invalid-source',
+            execution: { kind: 'external_message' },
             previousRootTurnId: null,
             normalizedInput: { text: 'content' },
             sourceMessages: [
@@ -622,6 +819,7 @@ describe('execution stores', () => {
         turnId: 'turn-1',
         proposedRunId: 'run-1',
         proposedUserMessageId: 'message-1',
+        execution: { kind: 'external_message' },
         previousRootTurnId: null,
         normalizedInput: { text: 'hello' },
         sourceMessages: [],
@@ -741,6 +939,50 @@ describe('execution stores', () => {
           ),
           ['runtime-1'],
         );
+        const steering = {
+          ...runtimeEvent(session.id, header.runId, 'runtime-steering', 16),
+          content: { kind: 'text' as const, text: 'steer', steering: true as const },
+          refs: { providerEventId: 'message-steering' },
+        };
+        await stores.runtimeEventStore.appendRuntimeEvent(session.id, header.runId, steering);
+        assert.deepEqual(
+          await stores.runtimeEventStore.readImmutableSteeringMessageProof(
+            session.id,
+            'message-steering',
+          ),
+          { event: steering },
+        );
+        const steeringProofPath = join(
+          root,
+          'sessions',
+          session.id,
+          'message-proofs',
+          'steering',
+          'message-steering.json',
+        );
+        await rm(steeringProofPath);
+        assert.equal(
+          await stores.runtimeEventStore.readImmutableSteeringMessageProof(
+            session.id,
+            'message-steering',
+          ),
+          undefined,
+        );
+        await stores.runtimeEventStore.repairImmutableSteeringMessageProofsForRecovery(session.id);
+        assert.deepEqual(
+          await stores.runtimeEventStore.readImmutableSteeringMessageProof(
+            session.id,
+            'message-steering',
+          ),
+          { event: steering },
+        );
+        assert.equal(
+          await stores.runtimeEventStore.readImmutableSteeringMessageProof(
+            session.id,
+            'message-unknown',
+          ),
+          undefined,
+        );
 
         for (const path of [sessionPath, eventsPath, runtimeEventsPath]) {
           const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean);
@@ -831,6 +1073,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-1',
           proposedUserMessageId: 'message-1',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: { text: 'hello' },
           sourceMessages: [],
@@ -867,6 +1110,7 @@ describe('execution stores', () => {
         turnId: 'z-root',
         proposedRunId: 'run-root',
         proposedUserMessageId: 'message-root',
+        execution: { kind: 'external_message' },
         previousRootTurnId: null,
         normalizedInput: { text: 'root' },
         sourceMessages: [],
@@ -877,6 +1121,7 @@ describe('execution stores', () => {
         turnId: 'a-successor',
         proposedRunId: 'run-successor',
         proposedUserMessageId: 'message-successor',
+        execution: { kind: 'external_message' },
         previousRootTurnId: 'z-root',
         normalizedInput: { text: 'successor' },
         sourceMessages: [],
@@ -958,6 +1203,7 @@ describe('execution stores', () => {
           turnId: 'turn-1',
           proposedRunId: 'run-1',
           proposedUserMessageId: 'message-1',
+          execution: { kind: 'external_message' },
           previousRootTurnId: null,
           normalizedInput: { text: 'hello' },
           sourceMessages: [],
@@ -1000,6 +1246,7 @@ function rootAdmissionRecord(turnId: string, previousRootTurnId: string | null) 
     turnId,
     runId: `run-${turnId}`,
     userMessageId: `message-${turnId}`,
+    execution: { kind: 'external_message' as const },
     previousRootTurnId,
     normalizedInput: { text: turnId },
     sourceMessages: [],

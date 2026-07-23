@@ -19,6 +19,7 @@ import {
   type RootTurnAdmission,
   type RootTurnSourceMessageReceipt,
 } from './agent-run-store.js';
+import { createMessageReceiptStore, type MessageReceiptStore } from './message-receipt-store.js';
 import { createSessionStore, type SessionStore } from './session-store.js';
 import {
   assertStorageRootLease,
@@ -38,15 +39,22 @@ export { normalizeRootTurnAdmissionPayload } from './agent-run-store.js';
 export type {
   AdmitRootTurnInput,
   AdmitRootTurnResult,
+  ImmutableSteeringMessageProof,
   RootTurnAdmission,
   RootTurnAdmissionStore,
   RootTurnSourceMessage,
   RootTurnSourceMessageReceipt,
 } from './agent-run-store.js';
+export type {
+  MessageOperationReceipt,
+  MessageReceiptOperation,
+  MessageReceiptStore,
+} from './message-receipt-store.js';
 
 export type ExecutionSessionWriter = SessionStore;
 export type ExecutionAgentRunWriter = DurableAgentRunStore;
 export type ExecutionRuntimeEventWriter = DurableRuntimeEventStore;
+export type ExecutionMessageReceiptWriter = MessageReceiptStore;
 
 export interface ExecutionStoresWriter<K extends StorageRootKind> {
   readonly kind: K;
@@ -54,6 +62,7 @@ export interface ExecutionStoresWriter<K extends StorageRootKind> {
   readonly sessionStore: Readonly<ExecutionSessionWriter>;
   readonly agentRunStore: Readonly<ExecutionAgentRunWriter>;
   readonly runtimeEventStore: Readonly<ExecutionRuntimeEventWriter>;
+  readonly messageReceiptStore: Readonly<ExecutionMessageReceiptWriter>;
 }
 
 export interface ExecutionSessionReader {
@@ -132,6 +141,7 @@ async function openExecutionStoresForWrite<K extends StorageRootKind>(
   const sessionStore = createSessionStore(lease.canonicalPath);
   const agentRunStore = createAgentRunStore(lease.canonicalPath);
   const runtimeEventStore = createRuntimeEventStore(lease.canonicalPath);
+  const messageReceiptStore = createMessageReceiptStore(lease.canonicalPath);
   const run = <T>(operation: () => Promise<T>) =>
     runWithStorageRootLease(lease, kind, 'write', operation);
 
@@ -207,6 +217,19 @@ async function openExecutionStoresForWrite<K extends StorageRootKind>(
         run(() => runtimeEventStore.readImmutableRuntimeEvents(sessionId, runId)),
       readSessionRuntimeEvents: (sessionId) =>
         run(() => runtimeEventStore.readSessionRuntimeEvents(sessionId)),
+      readImmutableSteeringMessageProof: (sessionId, messageId) =>
+        run(() => runtimeEventStore.readImmutableSteeringMessageProof(sessionId, messageId)),
+      repairImmutableSteeringMessageProofsForRecovery: (sessionId) =>
+        run(() => runtimeEventStore.repairImmutableSteeringMessageProofsForRecovery(sessionId)),
+    },
+    messageReceiptStore: {
+      beginHostEpoch: (hostEpoch) => run(() => messageReceiptStore.beginHostEpoch(hostEpoch)),
+      read: (hostEpoch, operation, sessionId, operationId) =>
+        run(() => messageReceiptStore.read(hostEpoch, operation, sessionId, operationId)),
+      commit: (hostEpoch, operation, sessionId, operationId, receipt) =>
+        run(() =>
+          messageReceiptStore.commit(hostEpoch, operation, sessionId, operationId, receipt),
+        ),
     },
   };
   freezeExecutionStoresFacade(stores);
@@ -275,10 +298,12 @@ function freezeExecutionStoresFacade(stores: {
   readonly sessionStore: object;
   readonly agentRunStore: object;
   readonly runtimeEventStore: object;
+  readonly messageReceiptStore?: object;
 }): void {
   Object.freeze(stores.sessionStore);
   Object.freeze(stores.agentRunStore);
   Object.freeze(stores.runtimeEventStore);
+  if (stores.messageReceiptStore) Object.freeze(stores.messageReceiptStore);
   Object.freeze(stores);
 }
 

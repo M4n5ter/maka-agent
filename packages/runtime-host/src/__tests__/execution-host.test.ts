@@ -11,7 +11,12 @@ import type { MessageContent } from '@maka/core/events';
 import type { StoredMessage } from '@maka/core/session';
 import { isTerminalRuntimeEvent } from '@maka/core/runtime-event';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
-import { classifyTerminalRuntimeLedger, FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime';
+import {
+  buildRecoveredTerminalRuntimeEvent,
+  classifyTerminalRuntimeLedger,
+  commitTerminalRunWithRuntimeFact,
+  FAKE_ASK_USER_QUESTION_PROMPT,
+} from '@maka/runtime';
 import {
   openInteractiveExecutionStoresForRead,
   openInteractiveExecutionStoresForWrite,
@@ -364,6 +369,63 @@ test('startup recovery restores the admitted UserMessage before terminalizing it
     assert.equal(ledger.userMessages.length, 1);
     assert.equal(ledger.userMessages[0]?.id, userMessageId);
     assert.equal(ledger.terminalEvents.length, 1);
+  });
+});
+
+test('startup recovery canonically closes pending linked child admissions without inventing identity', async () => {
+  await withExecutionRoot(async (fixture) => {
+    const initial = await fixture.seedPendingChildAdmission('linked_child_initial');
+    const resume = await fixture.seedPendingChildAdmission('linked_child_resume');
+    const retry = await fixture.seedPendingChildAdmission('linked_child_provider_retry');
+
+    const firstHost = await fixture.startHost();
+    await fixture.stopHost(firstHost);
+    const secondHost = await fixture.startHost();
+    await fixture.stopHost(secondHost);
+
+    const reader = await tryAcquireInteractiveRootReader(fixture.capability);
+    assert.ok(reader);
+    if (!reader) throw new Error('Unable to acquire recovery result reader');
+    try {
+      const stores = await openInteractiveExecutionStoresForRead(reader.lease);
+      for (const recovered of [initial, resume, retry]) {
+        const run = await stores.agentRunStore.readRun(recovered.sessionId, recovered.runId);
+        assert.equal(run.status, 'failed');
+        assert.equal(run.failureClass, 'app_restarted');
+        assert.equal(run.agentId, recovered.agentId);
+        assert.equal(run.agentName, recovered.agentName);
+        assert.equal(run.workspaceIdentity, undefined);
+        if (recovered.kind === 'linked_child_resume') {
+          assert.equal(run.resumedFromRunId, recovered.sourceRunId);
+          assert.equal(run.retriedFromRunId, undefined);
+        } else if (recovered.kind === 'linked_child_provider_retry') {
+          assert.equal(run.retriedFromRunId, recovered.sourceRunId);
+          assert.equal(run.resumedFromRunId, undefined);
+        } else {
+          assert.equal(run.resumedFromRunId, undefined);
+          assert.equal(run.retriedFromRunId, undefined);
+        }
+        const runtimeEvents = await stores.runtimeEventStore.readImmutableRuntimeEvents(
+          recovered.sessionId,
+          recovered.runId,
+        );
+        const terminal = classifyTerminalRuntimeLedger(run, runtimeEvents);
+        assert.equal(terminal.kind, 'fact');
+        if (terminal.kind === 'fact') {
+          assert.equal(terminal.fact.runStatus, 'failed');
+          assert.equal(terminal.fact.failureClass, 'app_restarted');
+        }
+        const userMessages = (await stores.sessionStore.readMessages(recovered.sessionId)).filter(
+          (message) => message.type === 'user' && message.turnId === recovered.turnId,
+        );
+        assert.equal(userMessages.length, recovered.kind === 'linked_child_provider_retry' ? 0 : 1);
+        if (recovered.kind !== 'linked_child_provider_retry') {
+          assert.equal(userMessages[0]?.id, recovered.userMessageId);
+        }
+      }
+    } finally {
+      await reader.close();
+    }
   });
 });
 
@@ -880,6 +942,143 @@ class ExecutionFixture {
     return join(this.root, 'sessions', this.sessionId, 'runs', runId, 'events.jsonl');
   }
 
+  async seedPendingChildAdmission(
+    kind: 'linked_child_initial' | 'linked_child_resume' | 'linked_child_provider_retry',
+  ): Promise<{
+    kind: 'linked_child_initial' | 'linked_child_resume' | 'linked_child_provider_retry';
+    sessionId: string;
+    turnId: string;
+    runId: string;
+    sourceRunId: string | undefined;
+    userMessageId: string | null;
+    agentId: string;
+    agentName: string;
+  }> {
+    const owner = await tryAcquireInteractiveRootOwner(this.capability);
+    assert.ok(owner);
+    if (!owner) throw new Error('Unable to acquire execution root for child admission setup');
+    try {
+      const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+      const turnId = randomUUID();
+      const runId = randomUUID();
+      const sourceRunId = kind === 'linked_child_initial' ? undefined : randomUUID();
+      const agentId = 'local-read';
+      const agentName = 'Local Read';
+      const child = await stores.sessionStore.createSubagent({
+        cwd: this.root,
+        name: `${agentName} ${kind}`,
+        backend: 'fake',
+        llmConnectionSlug: 'fake',
+        model: 'fake-model',
+        permissionMode: 'explore',
+        collaborationMode: 'agent',
+        orchestrationMode: 'default',
+        subagentParent: {
+          kind: 'subagent',
+          parentSessionId: this.sessionId,
+          spawnedBy: {
+            parentRunId: `parent-${kind}`,
+            parentTurnId: `parent-turn-${kind}`,
+            toolCallId: `tool-${kind}`,
+          },
+          lifecycle: 'foreground',
+        },
+        subagentRuntime: {
+          schemaVersion: 1,
+          definitionVersion: 1,
+          agentId,
+          agentName,
+          profile: 'local_read',
+          systemPrompt: 'Read the assigned workspace task.',
+          toolNames: ['Read', 'Glob', 'Grep'],
+          categoryPolicy: { read: 'allow' },
+          permissionCeiling: 'ask',
+        },
+        subagentSpawn: {
+          schemaVersion: 1,
+          requestFingerprint: (kind === 'linked_child_initial'
+            ? 'a'
+            : kind === 'linked_child_resume'
+              ? 'b'
+              : 'c'
+          ).repeat(64),
+          initialTurnId: kind === 'linked_child_initial' ? turnId : `initial-${kind}`,
+          initialRunId: kind === 'linked_child_initial' ? runId : sourceRunId!,
+        },
+      });
+      assert.equal(child.created, true);
+      if (sourceRunId) {
+        const sourceTs = Date.now();
+        const sourceRun: AgentRunHeader = {
+          runId: sourceRunId,
+          invocationId: sourceRunId,
+          sessionId: child.header.id,
+          turnId: `source-turn-${kind}`,
+          status: 'created',
+          backendKind: 'fake',
+          llmConnectionSlug: 'fake',
+          modelId: 'fake-model',
+          cwd: this.root,
+          permissionMode: 'explore',
+          collaborationMode: 'agent',
+          createdAt: sourceTs,
+          updatedAt: sourceTs,
+          agentId,
+          agentName,
+        };
+        await stores.agentRunStore.createRun(sourceRun, { durable: true });
+        const sourceTerminal = buildRecoveredTerminalRuntimeEvent({
+          id: randomUUID(),
+          run: sourceRun,
+          status: 'failed',
+          ts: sourceTs,
+          failureClass: kind === 'linked_child_provider_retry' ? 'RateLimit' : 'source_failed',
+          recoveryReason: 'test_source_terminal',
+        });
+        await commitTerminalRunWithRuntimeFact({
+          runStore: stores.agentRunStore,
+          runtimeEventStore: stores.runtimeEventStore,
+          newId: randomUUID,
+          sessionId: child.header.id,
+          runId: sourceRunId,
+          turnId: sourceRun.turnId,
+          status: 'failed',
+          ts: sourceTs,
+          terminalEvent: sourceTerminal,
+          failureClass: kind === 'linked_child_provider_retry' ? 'RateLimit' : 'source_failed',
+        });
+      }
+      const userMessageId = kind === 'linked_child_provider_retry' ? null : randomUUID();
+      const admitted = await stores.agentRunStore.admitRootTurn({
+        sessionId: child.header.id,
+        turnId,
+        proposedRunId: runId,
+        proposedUserMessageId: userMessageId,
+        execution:
+          kind === 'linked_child_initial'
+            ? { kind, agentId, agentName }
+            : { kind, agentId, agentName, sourceRunId: sourceRunId! },
+        previousRootTurnId: null,
+        normalizedInput: { text: `pending ${kind}` },
+        sourceMessages: [],
+        admittedAt: Date.now(),
+      });
+      assert.equal(admitted.kind, 'admitted');
+      return {
+        kind,
+        sessionId: child.header.id,
+        turnId,
+        runId,
+        sourceRunId,
+        userMessageId,
+        agentId,
+        agentName,
+      };
+    } finally {
+      await owner.close();
+    }
+  }
+
   seedAdmission(turnId: string, text: string): Promise<{ runId: string; userMessageId: string }> {
     return this.seedTurnState(turnId, text, false);
   }
@@ -919,6 +1118,7 @@ class ExecutionFixture {
         turnId,
         proposedRunId: randomUUID(),
         proposedUserMessageId: randomUUID(),
+        execution: { kind: 'external_message' },
         previousRootTurnId: null,
         normalizedInput: { text },
         sourceMessages: [],
@@ -941,6 +1141,7 @@ class ExecutionFixture {
           updatedAt: admittedAt,
         });
       }
+      assert.ok(result.admission.userMessageId);
       return {
         runId: result.admission.runId,
         userMessageId: result.admission.userMessageId,

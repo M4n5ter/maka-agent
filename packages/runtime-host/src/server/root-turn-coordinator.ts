@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import type { BackendStopMode } from '@maka/core/backend-types';
 import type { AgentRunHeader } from '@maka/core/agent-run';
 import {
   messageContentsEqual,
@@ -14,6 +16,8 @@ import {
 import {
   classifyTerminalRuntimeLedger,
   RuntimeMessageAuthorityInvariantError,
+  type RuntimeHostedRootExecutionInput,
+  type RuntimeMessageRunIdentity,
   type SessionManager,
 } from '@maka/runtime';
 import {
@@ -45,11 +49,16 @@ import { SessionAdmissionGate } from './session-admission-gate.js';
 interface ActiveRootTurn {
   turnId: string;
   runId: string;
-  userMessageId: string;
+  userMessageId: string | null;
+  execution?: RuntimeHostedRootExecutionInput;
   started: Promise<void>;
   done: Promise<void>;
   residency: RuntimeHostResidency;
   stopRequested: boolean;
+  stopInput?: {
+    source?: 'stop_button' | 'benchmark_deadline';
+    mode?: BackendStopMode;
+  };
   messageTransitionCommitted: boolean;
 }
 
@@ -77,6 +86,7 @@ interface RecoverySessionPlan {
   sessionId: string;
   admissions: readonly RootTurnAdmission[];
   missingMessages: readonly RecoveryUserMessage[];
+  pendingChildAdmissions: readonly RootTurnAdmission[];
 }
 
 export class RootTurnCoordinator {
@@ -117,16 +127,69 @@ export class RootTurnCoordinator {
       const messageIndex = indexRecoveryMessages(messages);
       const pending: RootTurnAdmission[] = [];
       const missingMessages: RecoveryUserMessage[] = [];
+      const pendingChildAdmissions: RootTurnAdmission[] = [];
       for (const admission of admissions) {
         const run = runsById.get(admission.runId);
         const userMessages = messageIndex.userMessagesByTurnId.get(admission.turnId) ?? [];
-        const messageIdOwners = messageIndex.messagesById.get(admission.userMessageId) ?? [];
+        const messageIdOwners = admission.userMessageId
+          ? (messageIndex.messagesById.get(admission.userMessageId) ?? [])
+          : [];
+        const childExecution = admission.execution.kind !== 'external_message';
+        const retryExecution = admission.execution.kind === 'linked_child_provider_retry';
+        if (childExecution && admission.sourceMessages.length !== 0) {
+          throw new Error(
+            `Admitted Turn ${admission.turnId} has child execution with Message queue sources`,
+          );
+        }
+        if (retryExecution !== (admission.userMessageId === null)) {
+          throw new Error(
+            `Admitted Turn ${admission.turnId} has an invalid UserMessage execution contract`,
+          );
+        }
+        if (admission.userMessageId === null) {
+          if (userMessages.length > 0) {
+            throw new Error(`Admitted Turn ${admission.turnId} must not record a UserMessage`);
+          }
+          if (!run) {
+            pendingChildAdmissions.push(admission);
+            continue;
+          }
+          assertRunMatchesAdmission(run, admission);
+          continue;
+        }
         if (messageIdOwners.length > 1) {
           throw new Error(
             `Admitted Turn ${admission.turnId} has a duplicated UserMessage identity`,
           );
         }
         const messageIdOwner = messageIdOwners[0];
+        if (!run && childExecution) {
+          if (userMessages.length > 1) {
+            throw new Error(`Admitted Turn ${admission.turnId} has multiple UserMessages`);
+          }
+          const userMessage = userMessages[0];
+          if (userMessage) {
+            if (
+              messageIdOwner !== userMessage ||
+              userMessage.id !== admission.userMessageId ||
+              !messageContentsEqual(
+                storedUserMessageContent(userMessage),
+                admission.normalizedInput,
+              )
+            ) {
+              throw new Error(`Admitted Turn ${admission.turnId} does not match its UserMessage`);
+            }
+          } else {
+            if (messageIdOwner) {
+              throw new Error(`Admitted Turn ${admission.turnId} reuses another message identity`);
+            }
+            const recoveredMessage = recoveryUserMessage(admission);
+            missingMessages.push(recoveredMessage);
+            indexRecoveryMessage(messageIndex, recoveredMessage);
+          }
+          pendingChildAdmissions.push(admission);
+          continue;
+        }
         if (!run) {
           if (userMessages.length > 0 || messageIdOwner) {
             throw new Error(`Admitted Turn ${admission.turnId} has a UserMessage but no Run`);
@@ -134,11 +197,7 @@ export class RootTurnCoordinator {
           pending.push(admission);
           continue;
         }
-        if (run.turnId !== admission.turnId) {
-          throw new Error(
-            `Admitted Turn ${admission.turnId} does not match Run ${admission.runId}`,
-          );
-        }
+        assertRunMatchesAdmission(run, admission);
         if (userMessages.length > 1) {
           throw new Error(`Admitted Turn ${admission.turnId} has multiple UserMessages`);
         }
@@ -156,13 +215,7 @@ export class RootTurnCoordinator {
         if (messageIdOwner) {
           throw new Error(`Admitted Turn ${admission.turnId} reuses another message identity`);
         }
-        const recoveredMessage = {
-          type: 'user',
-          id: admission.userMessageId,
-          turnId: admission.turnId,
-          ts: admission.admittedAt,
-          ...normalizeMessageContent(admission.normalizedInput),
-        } satisfies RecoveryUserMessage;
+        const recoveredMessage = recoveryUserMessage(admission);
         missingMessages.push(recoveredMessage);
         indexRecoveryMessage(messageIndex, recoveredMessage);
       }
@@ -177,12 +230,25 @@ export class RootTurnCoordinator {
         sessionId: session.id,
         admissions,
         missingMessages,
+        pendingChildAdmissions,
       });
     }
 
     for (const plan of plans) {
       for (const message of plan.missingMessages) {
         await this.stores.sessionStore.appendMessage(plan.sessionId, message);
+      }
+      for (const admission of plan.pendingChildAdmissions) {
+        if (admission.execution.kind === 'external_message') {
+          throw new Error('External Message admission cannot use child recovery closure');
+        }
+        await this.manager.closePendingHostedLinkedChildAdmission({
+          sessionId: admission.sessionId,
+          turnId: admission.turnId,
+          runId: admission.runId,
+          admittedAt: admission.admittedAt,
+          execution: admission.execution,
+        });
       }
       this.#recoveryAdmissionsBySession.set(plan.sessionId, plan.admissions);
     }
@@ -268,6 +334,138 @@ export class RootTurnCoordinator {
       : { kind: 'idle' };
   }
 
+  executeRoot(input: RuntimeHostedRootExecutionInput): Promise<void> {
+    return this.runCommand(async () => {
+      const canonicalInput = {
+        ...input,
+        content: normalizeMessageContent(input.content),
+      };
+      const disposition = await this.sessionAdmission.run(input.sessionId, async () => {
+        const existing = await this.stores.agentRunStore.readRootTurnAdmission(
+          input.sessionId,
+          input.turnId,
+        );
+        if (existing) {
+          this.rootAdmissionOwner.assertKnownAdmission(existing);
+          if (
+            existing.runId !== input.runId ||
+            existing.userMessageId !== input.userMessageId ||
+            !isDeepStrictEqual(existing.execution, input.execution) ||
+            !messageContentsEqual(existing.normalizedInput, canonicalInput.content) ||
+            existing.sourceMessages.length !== 0
+          ) {
+            throw new RuntimeMessageAuthorityInvariantError(
+              'Hosted root execution identity conflicts with its durable admission',
+            );
+          }
+          return this.prepareAdmittedTurn(
+            canonicalInput,
+            existing,
+            this.acquireRecoveryResidency,
+            undefined,
+            canonicalInput,
+          );
+        }
+
+        const header = await this.stores.sessionStore.readHeaderSnapshot(input.sessionId);
+        if (header.status === 'archived' || header.isArchived) {
+          throw new Error('Cannot start a hosted root execution in an archived Session');
+        }
+        const unavailableReason = unsupportedSessionModeReason(header);
+        if (unavailableReason) throw new Error(unavailableReason);
+        if (this.#activeBySession.has(input.sessionId)) {
+          throw new Error('Session already has an active root Turn');
+        }
+        const admitted = await this.rootAdmissionOwner.admitRootTurn({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          proposedRunId: input.runId,
+          proposedUserMessageId: input.userMessageId,
+          execution: input.execution,
+          normalizedInput: canonicalInput.content,
+          sourceMessages: [],
+          admittedAt: Date.now(),
+        });
+        if (
+          admitted.admission.runId !== input.runId ||
+          admitted.admission.userMessageId !== input.userMessageId ||
+          !isDeepStrictEqual(admitted.admission.execution, input.execution) ||
+          !messageContentsEqual(admitted.admission.normalizedInput, canonicalInput.content) ||
+          admitted.admission.sourceMessages.length !== 0
+        ) {
+          throw new RuntimeMessageAuthorityInvariantError(
+            'Hosted root execution admission changed identity',
+          );
+        }
+        return this.prepareAdmittedTurn(
+          canonicalInput,
+          admitted.admission,
+          this.acquireRecoveryResidency,
+          undefined,
+          canonicalInput,
+        );
+      });
+      if (disposition.kind === 'complete') {
+        if (!disposition.outcome.ok) throw new Error(disposition.outcome.error.message);
+        return;
+      }
+      await disposition.active.started;
+      await disposition.active.done;
+    });
+  }
+
+  stopRoot(
+    identity: RuntimeMessageRunIdentity,
+    input: {
+      source?: 'stop_button' | 'benchmark_deadline';
+      mode?: BackendStopMode;
+    } = {},
+  ): Promise<void> {
+    return this.runCommand(async () => {
+      await this.awaitExactActiveStart(identity);
+      const disposition = await this.sessionAdmission.run(identity.sessionId, () =>
+        this.prepareStopDisposition(identity, () => this.messages.commitStopFence(identity)),
+      );
+      if (disposition.kind === 'complete') {
+        if (!disposition.outcome.ok) throw new Error(disposition.outcome.error.message);
+        return;
+      }
+      disposition.active.stopInput = input;
+      if (disposition.kind === 'request_stop') {
+        await this.deliverRuntimeStop(identity.sessionId, disposition.active);
+      }
+      await disposition.active.done;
+    });
+  }
+
+  stopSession(
+    sessionId: string,
+    input: {
+      source?: 'stop_button' | 'benchmark_deadline';
+      mode?: BackendStopMode;
+    } = {},
+  ): Promise<void> {
+    return this.runCommand(async () => {
+      const disposition = await this.sessionAdmission.run(sessionId, async () => {
+        const active = this.#activeBySession.get(sessionId);
+        if (!active) return undefined;
+        const identity = { sessionId, turnId: active.turnId, runId: active.runId };
+        return this.prepareStopDisposition(identity, () => this.messages.commitStopFence(identity));
+      });
+      if (!disposition || disposition.kind === 'complete') {
+        if (disposition && !disposition.outcome.ok) {
+          throw new Error(disposition.outcome.error.message);
+        }
+        return;
+      }
+      disposition.active.stopInput = input;
+      if (disposition.kind === 'request_stop') {
+        await this.deliverRuntimeStop(sessionId, disposition.active);
+      }
+      await disposition.active.done;
+    });
+  }
+
   startFromMessage(input: HostMessageStartInput): Promise<{ readonly turnId: string }> {
     return this.runCommand(async () => {
       const content = normalizeMessageContent(input.content);
@@ -291,6 +489,7 @@ export class RootTurnCoordinator {
         turnId,
         proposedRunId: randomUUID(),
         proposedUserMessageId: input.sourceMessage.messageId,
+        execution: { kind: 'external_message' },
         normalizedInput: content,
         sourceMessages: [input.sourceMessage],
         admittedAt: Date.now(),
@@ -392,6 +591,7 @@ export class RootTurnCoordinator {
           turnId: input.turnId,
           proposedRunId: randomUUID(),
           proposedUserMessageId: randomUUID(),
+          execution: { kind: 'external_message' },
           normalizedInput: canonicalInput.content,
           sourceMessages: [],
           admittedAt: Date.now(),
@@ -497,6 +697,7 @@ export class RootTurnCoordinator {
     admission: RootTurnAdmission,
     acquireResidency: () => RuntimeHostResidency,
     replacing?: ActiveRootTurn,
+    execution?: RuntimeHostedRootExecutionInput,
   ): Promise<TurnStartDisposition> {
     if (admission.sessionId !== input.sessionId || admission.turnId !== input.turnId) {
       throw new Error('Root Turn admission identity does not match its input');
@@ -550,6 +751,7 @@ export class RootTurnCoordinator {
       turnId: input.turnId,
       runId,
       userMessageId: admission.userMessageId,
+      ...(execution ? { execution } : {}),
       started: started.promise,
       done: Promise.resolve(),
       residency,
@@ -600,21 +802,38 @@ export class RootTurnCoordinator {
   ): Promise<void> {
     let terminalTransitionStarted = false;
     try {
-      for await (const _event of this.manager.sendMessage(
-        input.sessionId,
-        { turnId: input.turnId, ...normalizeMessageContent(input.content) },
-        {
-          runId: active.runId,
-          userMessageId: active.userMessageId,
-          durability: 'required',
-          onRunStarted: (startedRunId) => {
-            if (startedRunId !== active.runId) {
-              throw new Error('Runtime started a different Run than the admitted identity');
-            }
-            started.resolve();
-          },
-        },
-      )) {
+      const stream = active.execution
+        ? active.execution.start({
+            runId: active.runId,
+            userMessageId: active.userMessageId,
+            onRunStarted: async () => {
+              started.resolve();
+              await active.execution?.onReady?.();
+            },
+          })
+        : this.manager.sendMessage(
+            input.sessionId,
+            { turnId: input.turnId, ...normalizeMessageContent(input.content) },
+            {
+              runId: active.runId,
+              userMessageId: active.userMessageId ?? undefined,
+              durability: 'required',
+              onRunStarted: (startedRunId) => {
+                if (startedRunId !== active.runId) {
+                  throw new Error('Runtime started a different Run than the admitted identity');
+                }
+                started.resolve();
+              },
+            },
+          );
+      for await (const event of stream) {
+        if (active.execution?.onEvent) {
+          try {
+            active.execution.onEvent(event);
+          } catch {
+            // Presentation observers do not participate in execution authority.
+          }
+        }
         // The Host must consume the complete stream so Runtime finalization can commit.
       }
       const snapshot = await this.readCanonicalSnapshot(
@@ -622,6 +841,15 @@ export class RootTurnCoordinator {
         input.turnId,
         active.runId,
       );
+      if (active.execution) {
+        const completedRun = await this.readRunIfPresent(input.sessionId, active.runId);
+        if (!completedRun) {
+          throw new RuntimeMessageAuthorityInvariantError(
+            'Hosted root execution completed without its admitted Run',
+          );
+        }
+        assertRunMatchesExecution(completedRun, input.turnId, active.execution.execution);
+      }
       if (!isTerminalSnapshot(snapshot)) {
         throw new Error('Runtime Turn drained without a canonical terminal fact');
       }
@@ -695,6 +923,7 @@ export class RootTurnCoordinator {
       turnId,
       proposedRunId: randomUUID(),
       proposedUserMessageId: randomUUID(),
+      execution: { kind: 'external_message' },
       normalizedInput: batch.content,
       sourceMessages: batch.sources,
       admittedAt: Date.now(),
@@ -732,7 +961,7 @@ export class RootTurnCoordinator {
 
   private async deliverRuntimeStop(sessionId: string, active: ActiveRootTurn): Promise<void> {
     await active.started;
-    await this.manager.stopSession(sessionId, { source: 'stop_button' });
+    await this.manager.deliverHostedRootStop(sessionId, active.stopInput);
   }
 
   private async awaitExactActiveStart(
@@ -845,6 +1074,47 @@ type RecoveryUserMessage = Extract<StoredMessage, { type: 'user' }>;
 interface RecoveryMessageIndex {
   userMessagesByTurnId: Map<string, RecoveryUserMessage[]>;
   messagesById: Map<string, StoredMessage[]>;
+}
+
+function recoveryUserMessage(admission: RootTurnAdmission): RecoveryUserMessage {
+  if (!admission.userMessageId) {
+    throw new Error(`Admitted Turn ${admission.turnId} does not own a UserMessage`);
+  }
+  return {
+    type: 'user',
+    id: admission.userMessageId,
+    turnId: admission.turnId,
+    ts: admission.admittedAt,
+    ...normalizeMessageContent(admission.normalizedInput),
+  };
+}
+
+function assertRunMatchesAdmission(run: AgentRunHeader, admission: RootTurnAdmission): void {
+  assertRunMatchesExecution(run, admission.turnId, admission.execution);
+}
+
+function assertRunMatchesExecution(
+  run: AgentRunHeader,
+  turnId: string,
+  execution: RootTurnAdmission['execution'],
+): void {
+  if (run.turnId !== turnId) {
+    throw new Error(`Admitted Turn ${turnId} does not match Run ${run.runId}`);
+  }
+  if (execution.kind === 'external_message') return;
+  if (run.agentId !== execution.agentId || run.agentName !== execution.agentName) {
+    throw new Error(`Admitted Turn ${turnId} changed its trusted agent identity`);
+  }
+  if (
+    (execution.kind === 'linked_child_initial' &&
+      (run.resumedFromRunId !== undefined || run.retriedFromRunId !== undefined)) ||
+    (execution.kind === 'linked_child_resume' &&
+      (run.resumedFromRunId !== execution.sourceRunId || run.retriedFromRunId !== undefined)) ||
+    (execution.kind === 'linked_child_provider_retry' &&
+      (run.retriedFromRunId !== execution.sourceRunId || run.resumedFromRunId !== undefined))
+  ) {
+    throw new Error(`Admitted Turn ${turnId} changed its child execution lineage`);
+  }
 }
 
 function indexRecoveryMessages(messages: readonly StoredMessage[]): RecoveryMessageIndex {
