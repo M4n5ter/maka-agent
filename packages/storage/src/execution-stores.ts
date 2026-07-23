@@ -33,8 +33,11 @@ const executionStoresWriterKinds = new WeakMap<object, StorageRootKind>();
 const executionStoresReaderKinds = new WeakMap<object, StorageRootKind>();
 
 export type {
+  AdmitRootTurnInput,
+  AdmitRootTurnResult,
   RootTurnAdmission,
   RootTurnAdmissionInput,
+  RootTurnAdmissionStore,
 } from './agent-run-store.js';
 
 export type ExecutionSessionWriter = SessionStore;
@@ -155,6 +158,9 @@ async function openExecutionStoresForWrite<K extends StorageRootKind>(
       setGeneratedTitleIfAbsent: (sessionId, title) =>
         run(() => sessionStore.setGeneratedTitleIfAbsent(sessionId, title)),
       remove: (sessionId) => run(() => sessionStore.remove(sessionId)),
+      close: async () => {
+        await sessionStore.close?.();
+      },
     },
     agentRunStore: {
       createRun: (header, options) => run(() => agentRunStore.createRun(header, options)),

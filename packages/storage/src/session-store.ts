@@ -73,7 +73,7 @@ export interface SessionStore {
   rename(sessionId: string, name: string): Promise<void>;
   setGeneratedTitleIfAbsent(sessionId: string, title: string): Promise<SessionHeader | null>;
   remove(sessionId: string): Promise<void>;
-  close?(): void;
+  close?(): Promise<void>;
 }
 
 export function createSessionStore(workspaceRoot: string): SessionStore {
@@ -89,6 +89,7 @@ class SqliteSessionStore implements SessionStore {
   private readonly files: FileSessionStore;
   private readonly metadata: SqliteSessionMetadataStore;
   private readonly ready: Promise<void>;
+  private closePromise: Promise<void> | null = null;
 
   constructor(workspaceRoot: string) {
     this.files = new FileSessionStore(workspaceRoot);
@@ -99,6 +100,7 @@ class SqliteSessionStore implements SessionStore {
       workspaceRoot,
       destination: this.metadata,
     }).then(() => {});
+    void this.ready.catch(() => {});
   }
 
   async create(input: CreateSessionInput): Promise<SessionHeader> {
@@ -302,7 +304,13 @@ class SqliteSessionStore implements SessionStore {
     await this.files.remove(sessionId);
   }
 
-  close(): void {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeAfterReady();
+    return this.closePromise;
+  }
+
+  private async closeAfterReady(): Promise<void> {
+    await this.ready.catch(() => {});
     this.metadata.close();
   }
 
