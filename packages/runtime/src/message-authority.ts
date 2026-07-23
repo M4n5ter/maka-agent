@@ -1,4 +1,6 @@
-import type { SteeringLease } from '@maka/core/backend-types';
+import type { BackendStopMode, SteeringLease } from '@maka/core/backend-types';
+import type { RootExecutionDescriptor } from '@maka/core/agent-run';
+import type { MessageContent, SessionEvent } from '@maka/core/events';
 
 export interface RuntimeMessageRunIdentity {
   readonly sessionId: string;
@@ -18,6 +20,46 @@ export interface RuntimeMessageRunOwner extends RuntimeMessageRunIdentity {
 /** Process-wide factory. Queue admission and projection remain Host responsibilities. */
 export interface RuntimeMessageAuthority {
   bindRun(identity: RuntimeMessageRunIdentity): RuntimeMessageRunOwner;
+}
+
+export interface RuntimeHostedRootExecutionInput extends RuntimeMessageRunIdentity {
+  readonly userMessageId: string | null;
+  readonly execution: RootExecutionDescriptor;
+  readonly content: MessageContent;
+  readonly start: (input: {
+    readonly runId: string;
+    readonly userMessageId: string | null;
+    readonly onRunStarted: () => void | Promise<void>;
+  }) => AsyncIterable<SessionEvent>;
+  readonly onEvent?: (event: SessionEvent) => void;
+  readonly onReady?: () => void | Promise<void>;
+}
+
+/** Host-only root lifecycle capability. Embedded compositions must omit it. */
+export interface RuntimeHostedRootAuthority extends RuntimeMessageAuthority {
+  executeRoot(input: RuntimeHostedRootExecutionInput): Promise<void>;
+  stopRoot(
+    identity: RuntimeMessageRunIdentity,
+    input?: { source?: 'stop_button' | 'benchmark_deadline'; mode?: BackendStopMode },
+  ): Promise<void>;
+  stopSession(
+    sessionId: string,
+    input?: { source?: 'stop_button' | 'benchmark_deadline'; mode?: BackendStopMode },
+  ): Promise<void>;
+}
+
+export function isRuntimeHostedRootAuthority(
+  authority: RuntimeMessageAuthority | undefined,
+): authority is RuntimeHostedRootAuthority {
+  return (
+    authority !== undefined &&
+    'executeRoot' in authority &&
+    typeof authority.executeRoot === 'function' &&
+    'stopRoot' in authority &&
+    typeof authority.stopRoot === 'function' &&
+    'stopSession' in authority &&
+    typeof authority.stopSession === 'function'
+  );
 }
 
 export class RuntimeMessageAuthorityInvariantError extends Error {

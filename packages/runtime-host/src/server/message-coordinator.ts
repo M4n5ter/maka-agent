@@ -15,6 +15,8 @@ import {
 } from '@maka/runtime';
 import {
   normalizeRootTurnAdmissionPayload,
+  type ImmutableSteeringMessageProof,
+  type MessageReceiptStore,
   type RootTurnSourceMessage,
   type RootTurnSourceMessageReceipt,
 } from '@maka/storage/execution-stores';
@@ -22,6 +24,7 @@ import {
   MESSAGE_QUEUE_MAX_ENTRIES,
   MESSAGE_QUEUE_PROJECTION_MAX_BYTES,
   MESSAGE_OPERATION_RESULT_MAX_BYTES,
+  MESSAGE_OPERATION_SPECS,
   type MessagePlacement,
   type QueueRetractInput,
   type QueueRetractResult,
@@ -92,15 +95,20 @@ export interface HostMessageDurableProofReader {
     sessionId: string,
     messageId: string,
   ): Promise<RootTurnSourceMessageReceipt | undefined>;
-  readImmutableSessionRuntimeEvents(sessionId: string): Promise<readonly RuntimeEvent[]>;
+  readImmutableSteeringMessageProof(
+    sessionId: string,
+    messageId: string,
+  ): Promise<ImmutableSteeringMessageProof | undefined>;
 }
 
 export interface HostMessageCoordinatorOptions {
   readonly hostEpoch: string;
   readonly root: HostMessageRootPort;
   readonly durableProof: HostMessageDurableProofReader;
+  readonly receipts: MessageReceiptStore;
   readonly sessionAdmission: SessionAdmissionGate;
   readonly acquireResidency: () => RuntimeHostResidency;
+  readonly requestDrain?: () => void;
   readonly createId?: () => string;
 }
 
@@ -121,19 +129,19 @@ interface BoundRun extends RuntimeMessageRunIdentity {
   released: boolean;
 }
 
-interface SubmitReceipt {
-  readonly payload: CanonicalSubmitPayload;
-  readonly result: TurnMessageSubmitResult;
-}
-
-interface RetractReceipt {
-  readonly payload: QueueRetractInput;
-  readonly result: QueueRetractResult;
-}
-
 interface InterruptReceipt {
   readonly payload: TurnInterruptInput;
   readonly result: Promise<MessageOutcome<TurnInterruptResult>>;
+}
+
+interface PendingSubmit {
+  readonly payload: CanonicalSubmitPayload;
+  readonly result: Promise<MessageOutcome<TurnMessageSubmitResult>>;
+}
+
+interface PendingRetract {
+  readonly payload: QueueRetractInput;
+  readonly result: Promise<MessageOutcome<QueueRetractResult>>;
 }
 
 interface InterruptDeferred {
@@ -162,8 +170,6 @@ interface SessionState {
     readonly identity: RuntimeMessageRunIdentity;
     readonly result: QueueFenceResult;
   };
-  submitReceipts: Map<string, SubmitReceipt>;
-  retractReceipts: Map<string, RetractReceipt>;
   interruptReceipts: Map<string, InterruptReceipt>;
 }
 
@@ -198,11 +204,16 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
   readonly #hostEpoch: string;
   readonly #root: HostMessageRootPort;
   readonly #durableProof: HostMessageDurableProofReader;
+  readonly #receipts: MessageReceiptStore;
   readonly #sessionAdmission: SessionAdmissionGate;
   readonly #acquireResidency: () => RuntimeHostResidency;
+  readonly #requestDrain: () => void;
   readonly #createId: () => string;
   readonly #sessions = new Map<string, SessionState>();
+  readonly #pendingSubmits = new Map<string, PendingSubmit>();
+  readonly #pendingRetracts = new Map<string, PendingRetract>();
   #draining = false;
+  #receiptPublicationFailed = false;
 
   constructor(options: HostMessageCoordinatorOptions) {
     if (options.hostEpoch.length === 0 || options.hostEpoch.length > 128) {
@@ -211,8 +222,10 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     this.#hostEpoch = options.hostEpoch;
     this.#root = options.root;
     this.#durableProof = options.durableProof;
+    this.#receipts = options.receipts;
     this.#sessionAdmission = options.sessionAdmission;
     this.#acquireResidency = options.acquireResidency;
+    this.#requestDrain = options.requestDrain ?? (() => undefined);
     this.#createId = options.createId ?? randomUUID;
   }
 
@@ -270,6 +283,7 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     state.reservedRoot = undefined;
     state.stopFence = undefined;
     state.phase = 'closed';
+    this.#maybeReclaim(identity.sessionId, state);
   }
 
   beginTerminalTransition(identity: RuntimeMessageRunIdentity): RootFollowupBatch {
@@ -346,6 +360,7 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
     state.reservedRoot = undefined;
     state.phase = 'open';
     this.#mutated(state);
+    this.#maybeReclaim(batch.sessionId, state);
   }
 
   beginDrain(): void {
@@ -370,14 +385,46 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         );
       }
     }
+    this.#sessions.clear();
   }
 
   private submit(input: TurnMessageSubmitInput): Promise<MessageOutcome<TurnMessageSubmitResult>> {
+    const payload = canonicalSubmitPayload(input);
+    const isCurrentEpoch = input.originHostEpoch === this.#hostEpoch;
+    if (isCurrentEpoch) {
+      const pending = this.#pendingSubmits.get(operationKey(input.sessionId, input.messageId));
+      if (pending) {
+        return samePayload(pending.payload, payload)
+          ? pending.result
+          : Promise.resolve(
+              failure('operation_conflict', 'Message identity has a different payload'),
+            );
+      }
+    }
+    if (this.#receiptPublicationFailed) {
+      return Promise.resolve(
+        failure('host_draining', 'Runtime Host failed to publish a durable message receipt'),
+      );
+    }
+    if (!isCurrentEpoch) return this.#submitAdmitted(input, payload);
+    const key = operationKey(input.sessionId, input.messageId);
+    const result = this.#submitAdmitted(input, payload);
+    this.#pendingSubmits.set(key, { payload, result });
+    void result.then(
+      () => this.#deletePendingSubmit(key, result),
+      () => this.#deletePendingSubmit(key, result),
+    );
+    return result;
+  }
+
+  #submitAdmitted(
+    input: TurnMessageSubmitInput,
+    payload: CanonicalSubmitPayload,
+  ): Promise<MessageOutcome<TurnMessageSubmitResult>> {
     return this.#sessionAdmission.run(input.sessionId, async () => {
-      const payload = canonicalSubmitPayload(input);
       const isCurrentEpoch = input.originHostEpoch === this.#hostEpoch;
       if (isCurrentEpoch) {
-        const receipt = this.#sessions.get(input.sessionId)?.submitReceipts.get(input.messageId);
+        const receipt = await this.#readSubmitReceipt(input.sessionId, input.messageId);
         if (receipt) {
           return samePayload(receipt.payload, payload)
             ? success(receipt.result)
@@ -424,10 +471,6 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
           throw new RuntimeMessageAuthorityInvariantError('Started Turn identity is not encodable');
         }
         const result = { disposition: 'turn_started', turnId: started.turnId } as const;
-        this.#requireState(input.sessionId).submitReceipts.set(input.messageId, {
-          payload,
-          result,
-        });
         return success(result);
       }
       const state = this.#requireState(input.sessionId);
@@ -498,6 +541,8 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       ) {
         return failure('session_busy', 'Message queue changed during admission');
       }
+      const result = { disposition, queueRevision: candidateRevision + 1 } as const;
+      const residency = this.#acquireResidency();
       const entry: LiveEntry = {
         entryId,
         messageId: input.messageId,
@@ -505,24 +550,57 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         placement: input.placement,
         disposition,
         generation: state.generation,
-        residency: this.#acquireResidency(),
+        residency,
         state: 'queued',
       };
       if (disposition === 'steering') state.steering.push(entry);
       else state.followup.push(entry);
-      state.revision += 1;
-      const result = { disposition, queueRevision: state.revision } as const;
-      state.submitReceipts.set(input.messageId, { payload, result });
+      state.revision = result.queueRevision;
+      try {
+        await this.#commitReceipt('submit', input.sessionId, input.messageId, payload, result);
+      } catch (error) {
+        this.#failReceiptPublication();
+        throw error;
+      }
       return success(result);
     });
   }
 
   private retract(input: QueueRetractInput): Promise<MessageOutcome<QueueRetractResult>> {
-    return this.#sessionAdmission.run(input.sessionId, async () => {
-      if (input.originHostEpoch !== this.#hostEpoch) {
-        return failure('outcome_unknown', 'Retract outcome is not durable across Host Epochs');
+    const isCurrentEpoch = input.originHostEpoch === this.#hostEpoch;
+    if (isCurrentEpoch) {
+      const pending = this.#pendingRetracts.get(operationKey(input.sessionId, input.retractId));
+      if (pending) {
+        return samePayload(pending.payload, input)
+          ? pending.result
+          : Promise.resolve(
+              failure('operation_conflict', 'Retract identity has a different payload'),
+            );
       }
-      const receipt = this.#sessions.get(input.sessionId)?.retractReceipts.get(input.retractId);
+    }
+    if (this.#receiptPublicationFailed) {
+      return Promise.resolve(
+        failure('host_draining', 'Runtime Host failed to publish a durable message receipt'),
+      );
+    }
+    if (!isCurrentEpoch) {
+      return Promise.resolve(
+        failure('outcome_unknown', 'Retract outcome is not durable across Host Epochs'),
+      );
+    }
+    const key = operationKey(input.sessionId, input.retractId);
+    const result = this.#retractAdmitted(input);
+    this.#pendingRetracts.set(key, { payload: input, result });
+    void result.then(
+      () => this.#deletePendingRetract(key, result),
+      () => this.#deletePendingRetract(key, result),
+    );
+    return result;
+  }
+
+  #retractAdmitted(input: QueueRetractInput): Promise<MessageOutcome<QueueRetractResult>> {
+    return this.#sessionAdmission.run(input.sessionId, async () => {
+      const receipt = await this.#readRetractReceipt(input.sessionId, input.retractId);
       if (receipt) {
         return samePayload(receipt.payload, input)
           ? success(receipt.result)
@@ -541,10 +619,25 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       ) {
         return failure('session_busy', 'Retract result exceeds protocol capacity');
       }
+      const queued = [...state.steering, ...state.followup];
+      const result = {
+        queueRevision: state.revision + (queued.length > 0 ? 1 : 0),
+        retracted: queued.map(retractedSnapshot),
+      };
       const retracted = this.#retractQueued(state);
       if (retracted.length > 0) this.#mutated(state);
-      const result = { queueRevision: state.revision, retracted };
-      state.retractReceipts.set(input.retractId, { payload: input, result });
+      if (!isDeepStrictEqual(result, { queueRevision: state.revision, retracted })) {
+        throw new RuntimeMessageAuthorityInvariantError(
+          'Retract mutation did not match its prepared result',
+        );
+      }
+      this.#maybeReclaim(input.sessionId, state);
+      try {
+        await this.#commitReceipt('retract', input.sessionId, input.retractId, input, result);
+      } catch (error) {
+        this.#failReceiptPublication();
+        throw error;
+      }
       return success(result);
     });
   }
@@ -552,6 +645,15 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
   private async interrupt(input: TurnInterruptInput): Promise<MessageOutcome<TurnInterruptResult>> {
     if (input.originHostEpoch !== this.#hostEpoch) {
       return failure('outcome_unknown', 'Interrupt outcome is not durable across Host Epochs');
+    }
+    if (this.#receiptPublicationFailed) {
+      return failure('host_draining', 'Runtime Host failed to publish a durable message receipt');
+    }
+    const durableReceipt = await this.#readInterruptReceipt(input.sessionId, input.interruptId);
+    if (durableReceipt) {
+      return samePayload(durableReceipt.payload, input)
+        ? durableReceipt.result
+        : failure('operation_conflict', 'Interrupt identity has a different payload');
     }
     const admitted = await this.#sessionAdmission.run(input.sessionId, async () => {
       const prior = this.#sessions.get(input.sessionId)?.interruptReceipts.get(input.interruptId);
@@ -595,6 +697,8 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
             'operation_conflict',
             'Interrupt does not match the active root Turn',
           );
+          await this.#commitReceipt('interrupt', input.sessionId, input.interruptId, input, result);
+          this.#deleteInterruptReceipt(input.sessionId, state, input.interruptId);
           deferred.resolve(result);
           return { kind: 'receipt' as const, result: deferred.promise };
         }
@@ -613,6 +717,7 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         }
         return { kind: 'owner' as const, claim, fence, deferred };
       } catch (error) {
+        this.#deleteInterruptReceipt(input.sessionId, state, input.interruptId);
         deferred.reject(error);
         throw error;
       }
@@ -624,9 +729,19 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       await admitted.claim.deliverStop();
       const turn = await admitted.claim.terminal;
       const result = success({ ...admitted.fence, turn });
+      try {
+        await this.#commitReceipt('interrupt', input.sessionId, input.interruptId, input, result);
+      } catch (error) {
+        this.#failReceiptPublication();
+        throw error;
+      }
+      const state = this.#sessions.get(input.sessionId);
+      if (state) this.#deleteInterruptReceipt(input.sessionId, state, input.interruptId);
       admitted.deferred.resolve(result);
       return result;
     } catch (error) {
+      const state = this.#sessions.get(input.sessionId);
+      if (state) this.#deleteInterruptReceipt(input.sessionId, state, input.interruptId);
       admitted.deferred.reject(error);
       throw error;
     }
@@ -653,18 +768,11 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         queueRevision: this.#sessions.get(input.sessionId)?.revision ?? 0,
       });
     }
-    const events = await this.#durableProof.readImmutableSessionRuntimeEvents(input.sessionId);
-    const matching = events.filter(
-      (event) =>
-        event.partial === false &&
-        event.refs?.providerEventId === input.messageId &&
-        event.content?.kind === 'text' &&
-        event.content.steering === true,
+    const steeringProof = await this.#durableProof.readImmutableSteeringMessageProof(
+      input.sessionId,
+      input.messageId,
     );
-    if (matching.length > 1) {
-      throw new RuntimeMessageAuthorityInvariantError('Durable steering identity is ambiguous');
-    }
-    const event = matching[0];
+    const event = steeringProof?.event;
     if (event) {
       if (
         input.placement !== 'current_turn' ||
@@ -679,6 +787,113 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
       });
     }
     return undefined;
+  }
+
+  async #readSubmitReceipt(
+    sessionId: string,
+    messageId: string,
+  ): Promise<{ payload: CanonicalSubmitPayload; result: TurnMessageSubmitResult } | undefined> {
+    const receipt = await this.#receipts.read(this.#hostEpoch, 'submit', sessionId, messageId);
+    if (!receipt) return undefined;
+    try {
+      return {
+        payload: canonicalSubmitPayload(
+          MESSAGE_OPERATION_SPECS['turn.message.submit'].decodeInput(receipt.payload),
+        ),
+        result: MESSAGE_OPERATION_SPECS['turn.message.submit'].decodeOutput(receipt.result),
+      };
+    } catch (error) {
+      throw new RuntimeMessageAuthorityInvariantError(
+        `Invalid durable submit receipt: ${error instanceof Error ? error.message : 'malformed'}`,
+      );
+    }
+  }
+
+  async #readRetractReceipt(
+    sessionId: string,
+    retractId: string,
+  ): Promise<{ payload: QueueRetractInput; result: QueueRetractResult } | undefined> {
+    const receipt = await this.#receipts.read(this.#hostEpoch, 'retract', sessionId, retractId);
+    if (!receipt) return undefined;
+    try {
+      return {
+        payload: MESSAGE_OPERATION_SPECS['queue.retract'].decodeInput(receipt.payload),
+        result: MESSAGE_OPERATION_SPECS['queue.retract'].decodeOutput(receipt.result),
+      };
+    } catch (error) {
+      throw new RuntimeMessageAuthorityInvariantError(
+        `Invalid durable retract receipt: ${error instanceof Error ? error.message : 'malformed'}`,
+      );
+    }
+  }
+
+  async #readInterruptReceipt(
+    sessionId: string,
+    interruptId: string,
+  ): Promise<
+    { payload: TurnInterruptInput; result: MessageOutcome<TurnInterruptResult> } | undefined
+  > {
+    const receipt = await this.#receipts.read(this.#hostEpoch, 'interrupt', sessionId, interruptId);
+    if (!receipt) return undefined;
+    try {
+      return {
+        payload: MESSAGE_OPERATION_SPECS['turn.interrupt'].decodeInput(receipt.payload),
+        result: decodeInterruptReceiptOutcome(receipt.result),
+      };
+    } catch (error) {
+      throw new RuntimeMessageAuthorityInvariantError(
+        `Invalid durable interrupt receipt: ${error instanceof Error ? error.message : 'malformed'}`,
+      );
+    }
+  }
+
+  async #commitReceipt(
+    operation: 'submit' | 'retract' | 'interrupt',
+    sessionId: string,
+    operationId: string,
+    payload: object,
+    result: object,
+  ): Promise<void> {
+    const receipt = { payload, result };
+    const committed = await this.#receipts.commit(
+      this.#hostEpoch,
+      operation,
+      sessionId,
+      operationId,
+      receipt,
+    );
+    if (!isDeepStrictEqual(committed, receipt)) {
+      throw new RuntimeMessageAuthorityInvariantError(
+        'Durable message receipt publication returned an ambiguous outcome',
+      );
+    }
+  }
+
+  #deletePendingSubmit(
+    key: string,
+    result: Promise<MessageOutcome<TurnMessageSubmitResult>>,
+  ): void {
+    if (this.#pendingSubmits.get(key)?.result === result) this.#pendingSubmits.delete(key);
+  }
+
+  #deletePendingRetract(key: string, result: Promise<MessageOutcome<QueueRetractResult>>): void {
+    if (this.#pendingRetracts.get(key)?.result === result) this.#pendingRetracts.delete(key);
+  }
+
+  #deleteInterruptReceipt(sessionId: string, state: SessionState, interruptId: string): void {
+    state.interruptReceipts.delete(interruptId);
+    this.#maybeReclaim(sessionId, state);
+  }
+
+  #failReceiptPublication(): void {
+    if (this.#receiptPublicationFailed) return;
+    this.#receiptPublicationFailed = true;
+    this.beginDrain();
+    try {
+      this.#requestDrain();
+    } catch {
+      // The coordinator remains fail-stopped even if the Host drain signal itself fails.
+    }
   }
 
   #pull(run: BoundRun): readonly SteeringLease[] {
@@ -836,8 +1051,6 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
         steering: [],
         inFlight: new Map(),
         followup: [],
-        submitReceipts: new Map(),
-        retractReceipts: new Map(),
         interruptReceipts: new Map(),
       };
       this.#sessions.set(sessionId, state);
@@ -854,6 +1067,17 @@ export class HostMessageCoordinator implements RuntimeMessageAuthority {
 
   #mutated(state: SessionState): void {
     state.revision += 1;
+  }
+
+  #maybeReclaim(sessionId: string, state: SessionState): void {
+    if (
+      this.#sessions.get(sessionId) === state &&
+      !hasLiveMessageState(state) &&
+      !state.stopFence &&
+      state.interruptReceipts.size === 0
+    ) {
+      this.#sessions.delete(sessionId);
+    }
   }
 
   #project(
@@ -892,6 +1116,38 @@ function failure(
   readonly error: { readonly code: MessageOperationErrorCode; readonly message: string };
 } {
   return { ok: false, error: { code, message } };
+}
+
+function operationKey(sessionId: string, operationId: string): string {
+  return `${sessionId}\0${operationId}`;
+}
+
+function decodeInterruptReceiptOutcome(value: unknown): MessageOutcome<TurnInterruptResult> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Interrupt receipt outcome is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (record.ok === true && Object.keys(record).length === 2 && Object.hasOwn(record, 'result')) {
+    return success(MESSAGE_OPERATION_SPECS['turn.interrupt'].decodeOutput(record.result));
+  }
+  if (
+    record.ok !== false ||
+    Object.keys(record).length !== 2 ||
+    !record.error ||
+    typeof record.error !== 'object' ||
+    Array.isArray(record.error)
+  ) {
+    throw new Error('Invalid interrupt receipt outcome');
+  }
+  const error = record.error as Record<string, unknown>;
+  if (
+    Object.keys(error).length !== 2 ||
+    error.code !== 'operation_conflict' ||
+    typeof error.message !== 'string'
+  ) {
+    throw new Error('Invalid interrupt receipt error');
+  }
+  return failure(error.code, error.message);
 }
 
 function interruptDeferred(): InterruptDeferred {

@@ -236,6 +236,7 @@ export type {
   AgentRunInputSummary,
   AgentRunStatus,
   AgentRunStore,
+  RootExecutionDescriptor,
 } from './agent-run.js';
 export {
   AGENT_RUN_STATUSES,

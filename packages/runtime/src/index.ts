@@ -44,10 +44,13 @@ export type { EvaluateResult, EvaluateInput, PermissionEngineDeps } from './perm
 export { renderSwarmModePrompt } from './swarm-mode.js';
 export { RuntimeMessageAuthorityInvariantError } from './message-authority.js';
 export type {
+  RuntimeHostedRootAuthority,
+  RuntimeHostedRootExecutionInput,
   RuntimeMessageAuthority,
   RuntimeMessageRunIdentity,
   RuntimeMessageRunOwner,
 } from './message-authority.js';
+export { isRuntimeHostedRootAuthority } from './message-authority.js';
 
 export {
   MAX_ADDITIONAL_PERMISSION_JUSTIFICATION_CHARS,
@@ -980,7 +983,11 @@ export type {
   RuntimeEventTerminalFact,
   RuntimeEventTerminalFactResult,
 } from './runtime-event-read-model.js';
-export { classifyTerminalRuntimeLedger } from './terminal-run-commit.js';
+export {
+  buildRecoveredTerminalRuntimeEvent,
+  classifyTerminalRuntimeLedger,
+  commitTerminalRunWithRuntimeFact,
+} from './terminal-run-commit.js';
 export type { TerminalRuntimeLedgerClassification } from './terminal-run-commit.js';
 export {
   RuntimeReadModel,

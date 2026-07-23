@@ -72,6 +72,7 @@ import {
 import { AGENT_TEAM_CHILD_TOOL_NAMES } from '../agent-team-tool-names.js';
 import {
   RuntimeMessageAuthorityInvariantError,
+  type RuntimeHostedRootAuthority,
   type RuntimeMessageRunIdentity,
 } from '../message-authority.js';
 
@@ -364,7 +365,7 @@ describe('SessionManager child-session runtime primitive', () => {
         async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
           childAttempts += 1;
           childInputs.push(input);
-          if (childAttempts === 1) {
+          if (childAttempts <= 2) {
             yield {
               type: 'error',
               id: `${input.turnId}-error`,
@@ -434,26 +435,46 @@ describe('SessionManager child-session runtime primitive', () => {
     expect(child.status).toBe('failed');
     expect(child.failureClass).toBe('RateLimit');
 
-    const retried = await manager.retryChildAgent(parent.id, {
+    const resumed = await manager.resumeChildAgent(parent.id, {
       parentRunId: parentRun.runId,
       sourceRunId: child.runId,
+      prompt: 'retry with additional guidance',
+    });
+    expect(resumed.status).toBe('failed');
+    expect(resumed.failureClass).toBe('RateLimit');
+    await expectRejects(
+      manager.retryChildAgent(parent.id, {
+        parentRunId: parentRun.runId,
+        sourceRunId: child.runId,
+      }),
+      /already has a successor/,
+    );
+
+    const retried = await manager.retryChildAgent(parent.id, {
+      parentRunId: parentRun.runId,
+      sourceRunId: resumed.runId!,
       execution: {
         kind: 'child_session',
         sessionId: child.childSessionId,
-        currentRunId: child.runId,
+        currentRunId: resumed.runId!,
       },
     });
     expect(retried.status).toBe('completed');
     expect(retried.childSessionId).toBe(child.childSessionId);
-    expect(retried.retriedFromRunId).toBe(child.runId);
+    expect(retried.retriedFromRunId).toBe(resumed.runId);
     expect(childInputs.map((input) => input.text)).toEqual([
       'inspect with a transient provider failure',
+      'retry with additional guidance',
       '',
     ]);
     const retryRun = await runStore.readRun(child.childSessionId, retried.runId!);
     expect(isSessionInlineRun(retryRun)).toBe(true);
     expect(retryRun.parentRunId).toBe(undefined);
-    expect(retryRun.retriedFromRunId).toBe(child.runId);
+    expect(retryRun.retriedFromRunId).toBe(resumed.runId);
+    await expectRejects(
+      manager.prepareChildAgentResume(parent.id, child.runId),
+      /already has a successor/,
+    );
     expect((await manager.prepareChildAgentResume(parent.id, retried.runId!)).execution).toEqual({
       kind: 'child_session',
       sessionId: child.childSessionId,
@@ -474,7 +495,7 @@ describe('SessionManager child-session runtime primitive', () => {
     while (!(await parentTurn.next()).done) {}
   });
 
-  test('deduplicates concurrent and durable retries while rejecting request drift', async () => {
+  test('hosted child spawn joins the exact in-flight identity and rejects request drift', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
@@ -494,6 +515,7 @@ describe('SessionManager child-session runtime primitive', () => {
       childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
       newId: nextId(),
       now: nextNow(150),
+      messageAuthority: hostedRootAuthority(),
     });
     const parent = await manager.createSession(makeInput());
     const parentTurn = manager
@@ -536,6 +558,87 @@ describe('SessionManager child-session runtime primitive', () => {
     expect(durableRetry.summary).toBe('ok');
     expect((await manager.listChildSessions(parent.id)).length).toBe(1);
     expect(backendsBySession.get(firstResult.childSessionId)?.sendInputs.length).toBe(1);
+
+    parentGate.release();
+    while (!(await parentTurn.next()).done) {}
+  });
+
+  test('hosted linked-child gate precedes resume preparation and remains held through terminal', async () => {
+    const store = new MemorySessionStore();
+    const preparationEntered = makeGate();
+    const allowPreparation = makeGate();
+    let watchedRunId: string | undefined;
+    let preparationReads = 0;
+    const runStore = new MemoryAgentRunStore({
+      beforeRuntimeEventRead: async (_sessionId, runId) => {
+        if (runId !== watchedRunId) return;
+        preparationReads += 1;
+        preparationEntered.release();
+        await allowPreparation.promise;
+      },
+    });
+    const backends = new BackendRegistry();
+    const parentGate = makeGate();
+    backends.register(
+      'fake',
+      (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
+    );
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
+      newId: nextId(),
+      now: nextNow(165),
+      messageAuthority: hostedRootAuthority(),
+    });
+    const parent = await manager.createSession(makeInput());
+    const parentTurn = manager
+      .sendMessage(parent.id, { turnId: 'parent-turn', text: 'keep parent active' })
+      [Symbol.asyncIterator]();
+    await parentTurn.next();
+    const [parentRun] = await runStore.listSessionRuns(parent.id);
+    if (!parentRun) throw new Error('parent run was not recorded');
+    const child = await manager.spawnChildSession(parent.id, {
+      spawnedBy: {
+        parentRunId: parentRun.runId,
+        parentTurnId: parentRun.turnId,
+        toolCallId: 'hosted-gate-cut',
+      },
+      agentProfile: LOCAL_READ_AGENT_PROFILE,
+      prompt: 'inspect the gate cut',
+    });
+
+    watchedRunId = child.runId;
+    const first = manager.resumeChildAgent(parent.id, {
+      parentRunId: parentRun.runId,
+      sourceRunId: child.runId,
+      prompt: 'first successor',
+    });
+    await preparationEntered.promise;
+    const second = manager.resumeChildAgent(parent.id, {
+      parentRunId: parentRun.runId,
+      sourceRunId: child.runId,
+      prompt: 'stale second successor',
+    });
+    const outcomes = Promise.allSettled([first, second]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const readsBeforeRelease = preparationReads;
+    allowPreparation.release();
+
+    const [firstOutcome, secondOutcome] = await outcomes;
+    expect(readsBeforeRelease).toBe(1);
+    expect(firstOutcome.status).toBe('fulfilled');
+    expect(secondOutcome.status).toBe('rejected');
+    expect(secondOutcome.status === 'rejected' ? String(secondOutcome.reason) : '').toContain(
+      'already has an active execution',
+    );
+    expect(
+      (await runStore.listSessionRuns(child.childSessionId)).filter(
+        (run) => run.resumedFromRunId === child.runId,
+      ).length,
+    ).toBe(1);
 
     parentGate.release();
     while (!(await parentTurn.next()).done) {}
@@ -7334,7 +7437,7 @@ describe('SessionManager permission mode updates', () => {
     ).toBe(true);
     await expectRejects(
       manager.prepareChildAgentResume(session.id, source.runId),
-      /already has a resume successor/,
+      /already has a successor/,
     );
     expect(await manager.prepareChildAgentResume(session.id, resumed.runId!)).toMatchObject({
       sourceRunId: resumed.runId,
@@ -7502,13 +7605,21 @@ describe('SessionManager permission mode updates', () => {
     expect(first.failureClass).toBe('RateLimit');
     if (!first.runId) throw new Error('rate-limited child run id was not recorded');
 
-    const second = await manager.retryChildAgent(session.id, {
+    const second = await manager.resumeChildAgent(session.id, {
       parentRunId: parentRun.runId,
       sourceRunId: first.runId,
+      prompt: 'retry with additional guidance',
     });
     expect(second.status).toBe('failed');
     expect(second.failureClass).toBe('RateLimit');
     if (!second.runId) throw new Error('second rate-limited child run id was not recorded');
+    await expectRejects(
+      manager.retryChildAgent(session.id, {
+        parentRunId: parentRun.runId,
+        sourceRunId: first.runId,
+      }),
+      /already has a successor/,
+    );
 
     const retried = await manager.retryChildAgent(session.id, {
       parentRunId: parentRun.runId,
@@ -7517,7 +7628,11 @@ describe('SessionManager permission mode updates', () => {
 
     expect(retried.status).toBe('completed');
     expect(retried.retriedFromRunId).toBe(second.runId);
-    expect(sendInputs.map((input) => input.text)).toEqual(['inspect auth', '', '']);
+    expect(sendInputs.map((input) => input.text)).toEqual([
+      'inspect auth',
+      'retry with additional guidance',
+      '',
+    ]);
     expect(
       sendInputs[2]?.runtimeContext?.some(
         (event) =>
@@ -15025,6 +15140,29 @@ function makeGate(): Gate {
     release = resolve;
   });
   return { promise, release };
+}
+
+function hostedRootAuthority(): RuntimeHostedRootAuthority {
+  return {
+    bindRun: (identity) => ({
+      ...identity,
+      pull: () => [],
+      ack: () => {},
+      nack: () => {},
+      release: () => {},
+    }),
+    executeRoot: async (input) => {
+      for await (const event of input.start({
+        runId: input.runId,
+        userMessageId: input.userMessageId,
+        onRunStarted: () => input.onReady?.(),
+      })) {
+        input.onEvent?.(event);
+      }
+    },
+    stopRoot: async () => {},
+    stopSession: async () => {},
+  };
 }
 
 function makeInput(overrides: Partial<CreateSessionInput> = {}): CreateSessionInput {
