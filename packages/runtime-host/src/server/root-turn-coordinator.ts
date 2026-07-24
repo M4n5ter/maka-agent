@@ -859,6 +859,8 @@ export class RootTurnCoordinator {
         }
         if (isRuntimeSessionTransientEvent(event)) {
           await this.continuity.acceptRuntimeEvent(input.sessionId, active.runId, event);
+        } else if (event.type === 'permission_request') {
+          this.continuity.enqueueCanonicalRefresh(input.sessionId);
         }
       }
       const snapshot = await this.readCanonicalSnapshot(

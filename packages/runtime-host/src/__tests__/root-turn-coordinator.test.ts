@@ -113,7 +113,7 @@ test('hosted linked child roots share admission, message, terminal, and stop aut
     backends.register('fake', (context) =>
       context.header.subagentRuntime
         ? new LinkedChildAuthorityBackend(context.sessionId)
-        : new FakeBackend(context),
+        : new PermissionWaitingBackend(context.sessionId),
     );
     const manager = new SessionManager({
       store: stores.sessionStore,
@@ -138,6 +138,17 @@ test('hosted linked child roots share admission, message, terminal, and stop aut
       },
     );
 
+    const parentSink = new RecordingContinuitySink();
+    const parentConnectionId = 'connection-waiting-parent';
+    const parentConnection = continuity.attachConnection(parentConnectionId, parentSink);
+    const parentOpened = await continuity.handlers['subscription.open'](
+      { sessionId: parent.id },
+      operationContext(hostEpoch, acquireResidency, parentConnectionId),
+    );
+    assert.equal(parentOpened.ok, true);
+    if (!parentOpened.ok) return;
+    parentConnection.activate(parentOpened.result.subscriptionId);
+
     const parentTurnId = randomUUID();
     const parentStarted = await coordinator.handlers['turn.start'](
       {
@@ -149,6 +160,12 @@ test('hosted linked child roots share admission, message, terminal, and stop aut
     );
     assert.equal(parentStarted.ok, true);
     if (!parentStarted.ok) return;
+    await waitForContinuityFrame(
+      parentSink,
+      (frame) =>
+        frame.kind === 'subscription.session_projection' &&
+        frame.snapshot.session.status === 'waiting_for_user',
+    );
 
     let initialReady:
       | {
@@ -346,6 +363,7 @@ test('hosted linked child roots share admission, message, terminal, and stop aut
     });
     await coordinator.close();
     await messages.close();
+    parentConnection.close();
     closeChildContinuity?.();
     continuity.close();
   } finally {
@@ -727,8 +745,6 @@ class RecordingContinuitySink implements SessionContinuityFrameSink {
   async send(frame: SubscriptionFrame): Promise<void> {
     this.frames.push(frame);
   }
-
-  close(): void {}
 }
 
 function pauseRunCreation(
@@ -870,6 +886,61 @@ class LinkedChildAuthorityBackend implements AgentBackend {
   }
 }
 
+class PermissionWaitingBackend implements AgentBackend {
+  readonly kind = 'fake' as const;
+  private stopped = false;
+  private releaseWait: (() => void) | undefined;
+
+  constructor(readonly sessionId: string) {}
+
+  async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
+    this.stopped = false;
+    yield {
+      type: 'permission_request',
+      id: randomUUID(),
+      turnId: input.turnId,
+      ts: Date.now(),
+      kind: 'tool_permission',
+      requestId: randomUUID(),
+      toolUseId: randomUUID(),
+      toolName: 'Bash',
+      category: 'shell_safe',
+      reason: 'custom',
+      args: {},
+      rememberForTurnAllowed: true,
+    };
+    await new Promise<void>((resolve) => {
+      this.releaseWait = resolve;
+      if (this.stopped) resolve();
+    });
+    yield {
+      type: 'abort',
+      id: randomUUID(),
+      turnId: input.turnId,
+      ts: Date.now(),
+      reason: 'user_stop',
+    };
+    yield {
+      type: 'complete',
+      id: randomUUID(),
+      turnId: input.turnId,
+      ts: Date.now(),
+      stopReason: 'user_stop',
+    };
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    this.releaseWait?.();
+  }
+
+  async respondToPermission(): Promise<void> {}
+
+  async dispose(): Promise<void> {
+    this.releaseWait?.();
+  }
+}
+
 function testTool(name: string): MakaTool {
   return {
     name,
@@ -899,4 +970,25 @@ async function completesWithin<T>(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+async function waitForContinuityFrame(
+  sink: RecordingContinuitySink,
+  predicate: (frame: SubscriptionFrame) => boolean,
+): Promise<SubscriptionFrame> {
+  return completesWithin(
+    new Promise((resolve) => {
+      const check = (): void => {
+        const frame = sink.frames.find(predicate);
+        if (frame) {
+          resolve(frame);
+          return;
+        }
+        setImmediate(check);
+      };
+      check();
+    }),
+    5_000,
+    'Session continuity frame',
+  );
 }
