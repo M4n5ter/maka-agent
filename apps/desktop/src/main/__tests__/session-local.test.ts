@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +37,7 @@ import {
   type DesktopSessionLocalTarget,
 } from '../session-local-service.js';
 import type { DesktopSessionSummaryInput } from '../../shared/desktop-session-projection.js';
+import type { DesktopTranscriptReplicaSnapshot } from '../desktop-transcript-replica.js';
 
 const accepted: TurnMessageSubmitResult = {
   disposition: 'turn_started',
@@ -403,4 +405,134 @@ test('cache restoration never includes live overlay and expires independently of
   now += 31 * 24 * 60 * 60 * 1000;
   assert.equal(store.transcript('authority', 'session-1'), undefined);
   assert.equal(store.get('authority', 'message-1')?.state, 'saved');
+});
+
+test('durable Host evidence retires delivery independently of cache admission and submit ACK order', async (t) => {
+  for (const ackFirst of [false, true]) {
+    for (const cacheLoss of ['quota', 'revision', 'coalescing']) {
+      await t.test(`ackFirst=${ackFirst}, cacheLoss=${cacheLoss}`, async (t) => {
+        const db = await database(t);
+        const response = deferred<TurnMessageSubmitResult>();
+        const target: DesktopSessionLocalTarget = {
+          partition: 'authority',
+          profileId: 'profile',
+          scope: { hostId: 'root', targetEpoch: 'target' },
+          client: client('epoch'),
+          submit: () => response.promise,
+        };
+        const service = new DesktopSessionLocalService(db.store, {
+          targets: () => [target],
+          changed() {},
+          onError: (error) => assert.fail(String(error)),
+        });
+        db.beforeClose.push(() => service.close());
+        db.store.enqueue('authority', intent());
+        service.wake();
+        await waitFor(() => db.store.get('authority', 'message-1')?.state === 'sending');
+        if (ackFirst) {
+          response.resolve(accepted);
+          await waitFor(() => db.store.get('authority', 'message-1')?.state === 'accepted');
+        }
+        const snapshot: DesktopTranscriptReplicaSnapshot = {
+          sessionId: 'session-1',
+          generation: 'generation',
+          hostEpoch: 'epoch',
+          durableThrough: 1,
+          durable: [
+            {
+              sequence: 1,
+              message: {
+                type: 'user',
+                id: 'message-1',
+                turnId: 'turn-1',
+                ts: 1,
+                text: cacheLoss === 'quota' ? 'x'.repeat(2 * 1024 * 1024) : 'hello',
+              },
+            },
+          ],
+          overlay: [],
+          hasOlder: false,
+          hasNewer: false,
+        };
+        service.cacheTranscript(target.scope, snapshot);
+        if (cacheLoss === 'revision') db.store.enqueue('other-authority', intent('other-message'));
+        if (cacheLoss === 'coalescing')
+          service.cacheTranscript(target.scope, { ...snapshot, durable: [], hasOlder: true });
+        await nextTurn();
+        assert.equal(db.store.get('authority', 'message-1'), undefined);
+        response.resolve(accepted);
+        await nextTurn();
+        assert.equal(db.store.get('authority', 'message-1'), undefined);
+        service.close();
+        db.reopen();
+        assert.deepEqual(db.store.list('authority'), []);
+        assert.deepEqual(db.store.stagedAttachments('authority', 'message-1'), []);
+      });
+    }
+  }
+});
+
+test('attachment retries across restart reuse committed uploads and release staged bytes after preparation', async (t) => {
+  const db = await database(t);
+  const baseClient = client('epoch');
+  const uploads = new Map<string, Awaited<ReturnType<typeof baseClient.ingestAttachment>>>();
+  let loseCommitAck = true;
+  const target: DesktopSessionLocalTarget = {
+    partition: 'authority',
+    profileId: 'profile',
+    scope: { hostId: 'root', targetEpoch: 'target' },
+    client: {
+      ...baseClient,
+      async ingestAttachment(input) {
+        const uploadId = input.uploadId ?? randomUUID();
+        const existing = uploads.get(uploadId);
+        if (existing) return existing;
+        const attachment = {
+          ...(await baseClient.ingestAttachment(input)),
+          ref: {
+            kind: 'session_file' as const,
+            sessionId: input.sessionId,
+            relativePath: `artifacts/${uploadId}.txt`,
+          },
+        };
+        uploads.set(uploadId, attachment);
+        if (uploads.size === 2 && loseCommitAck) {
+          loseCommitAck = false;
+          throw new RuntimeHostRequestInterruptedError(
+            'artifact.ingest',
+            'command',
+            'dispatched',
+            'connection_lost',
+          );
+        }
+        return attachment;
+      },
+    },
+    submit: async () => accepted,
+  };
+  const makeService = () => {
+    const service = new DesktopSessionLocalService(db.store, {
+      targets: () => [target],
+      changed() {},
+      onError: (error) => assert.fail(String(error)),
+    });
+    db.beforeClose.push(() => service.close());
+    return service;
+  };
+  const original = intent();
+  db.store.enqueue('authority', { ...original, staged: [...original.staged, ...original.staged] });
+  const first = makeService();
+  first.wake();
+  await waitFor(() => db.store.get('authority', 'message-1')?.error !== undefined);
+  assert.equal(db.store.stagedAttachments('authority', 'message-1').length, 2);
+  first.close();
+  db.reopen();
+  const resumed = makeService();
+  resumed.wake();
+  await waitFor(() => db.store.get('authority', 'message-1')?.state === 'accepted');
+  assert.equal(uploads.size, 2);
+  assert.deepEqual(db.store.get('authority', 'message-1')?.intent.command.content.attachments, [
+    ...uploads.values(),
+  ]);
+  assert.deepEqual(db.store.stagedAttachments('authority', 'message-1'), []);
 });

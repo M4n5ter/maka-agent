@@ -253,9 +253,16 @@ export class DesktopSessionLocalStore {
       previous.intent.originHostEpoch !== record.intent.originHostEpoch
     )
       throw new Error('Cannot retarget a dispatched Message epoch');
-    this.#db
-      .prepare('UPDATE outbox SET state = ?, payload = ? WHERE partition = ? AND message_id = ?')
-      .run(record.state, JSON.stringify(record), record.partition, record.messageId);
+    this.#transaction(() => {
+      this.#db
+        .prepare('UPDATE outbox SET state = ?, payload = ? WHERE partition = ? AND message_id = ?')
+        .run(record.state, JSON.stringify(record), record.partition, record.messageId);
+      // Host references and local bytes change ownership in the same commit.
+      if (record.intent.attachmentsPrepared)
+        this.#db
+          .prepare('DELETE FROM outbox_attachments WHERE partition = ? AND message_id = ?')
+          .run(record.partition, record.messageId);
+    });
   }
 
   cancel(partition: string, messageId: string): void {
@@ -314,6 +321,32 @@ export class DesktopSessionLocalStore {
     });
   }
 
+  retireObservedMessages(partition: string, snapshot: DesktopTranscriptReplicaSnapshot): boolean {
+    const pending = new Set(
+      this.#db
+        .prepare(
+          "SELECT message_id FROM outbox WHERE partition = ? AND session_id = ? AND state IN ('sending', 'unknown', 'accepted')",
+        )
+        .all(partition, snapshot.sessionId)
+        .map((row) => String(row.message_id)),
+    );
+    if (!pending.size) return false;
+    const observed = snapshot.durable.filter(
+      (entry) => entry.message.type === 'user' && pending.has(entry.message.id),
+    );
+    if (!observed.length) return false;
+    return this.#transaction(() => {
+      let changed = false;
+      const remove = this.#db.prepare(
+        "DELETE FROM outbox WHERE partition = ? AND session_id = ? AND message_id = ? AND state IN ('sending', 'unknown', 'accepted')",
+      );
+      for (const entry of observed) {
+        if (remove.run(partition, snapshot.sessionId, entry.message.id).changes) changed = true;
+      }
+      return changed;
+    });
+  }
+
   saveTranscript(partition: string, snapshot: DesktopTranscriptReplicaSnapshot): void {
     // Persist durable evidence only. Live assistant fragments and old running
     // claims must not masquerade as current execution after restart.
@@ -324,13 +357,6 @@ export class DesktopSessionLocalStore {
         .prepare(`INSERT INTO transcripts VALUES (?, ?, ?, ?)
         ON CONFLICT(partition, session_id) DO UPDATE SET snapshot = excluded.snapshot, updated_at = excluded.updated_at`)
         .run(partition, snapshot.sessionId, payload, this.now());
-      for (const entry of snapshot.durable) {
-        this.#db
-          .prepare(
-            "DELETE FROM outbox WHERE partition = ? AND session_id = ? AND message_id = ? AND state = 'accepted'",
-          )
-          .run(partition, snapshot.sessionId, entry.message.id);
-      }
       let total = Number(
         this.#db
           .prepare(

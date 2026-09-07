@@ -310,6 +310,17 @@ export class DesktopSessionLocalService {
     } catch {
       return;
     }
+    // Delivery completion depends on durable Host evidence, never on optional
+    // cache admission/coalescing. Evidence can arrive before the submit ACK;
+    // removing the intent also fences that worker's late completion.
+    try {
+      if (this.store.retireObservedMessages(target.partition, snapshot)) {
+        this.deps.changed(target.scope, snapshot.sessionId);
+        this.wake();
+      }
+    } catch (error) {
+      this.deps.onError(error);
+    }
     const key = `${target.partition}:${snapshot.sessionId}`;
     const pending = this.#snapshots.has(key);
     this.#snapshots.set(key, { target, snapshot });
@@ -365,9 +376,14 @@ export class DesktopSessionLocalService {
       }
       if (!record.intent.attachmentsPrepared) {
         const attachments = [...(record.intent.command.content.attachments ?? [])];
-        for (const staged of this.store.stagedAttachments(record.partition, record.messageId)) {
+        for (const [ordinal, staged] of this.store
+          .stagedAttachments(record.partition, record.messageId)
+          .entries()) {
+          const uploadId = createHash('sha256')
+            .update(JSON.stringify([record.partition, record.messageId, ordinal]))
+            .digest('hex');
           attachments.push(
-            await client.ingestAttachment({ sessionId: record.sessionId, ...staged }),
+            await client.ingestAttachment({ sessionId: record.sessionId, uploadId, ...staged }),
           );
           if (!stillOwned()) return;
         }
@@ -410,8 +426,6 @@ export class DesktopSessionLocalService {
       };
       this.store.update(record);
       this.#probed.delete(key);
-      const cached = this.store.transcript(target.partition, record.sessionId);
-      if (cached) this.store.saveTranscript(target.partition, cached.snapshot);
       this.#catalogFresh.delete(target.partition);
     } catch (error) {
       if (!stillOwned()) return;
