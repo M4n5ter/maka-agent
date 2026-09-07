@@ -54,7 +54,6 @@ const selectShellRunRecord = (state: AppShellSessionUiState, sessionId: string |
  * is conditionally mounted - the always-mounted Composer lives in a separate
  * region and is not affected by this surface mounting or unmounting.
  */
-import { getSessionLocalCopy } from './locales/session-local-copy';
 
 interface ChatMessageSurfaceProps extends Omit<
   ComponentProps<typeof ChatView>,
@@ -78,7 +77,6 @@ interface ChatMessageSurfaceProps extends Omit<
   /** Advances after the active session's current observation generation finishes seeding. */
   liveContentSeedRevision: number;
   sessionHealthNotice?: SessionHealthNoticeView;
-  cachedHistory?: boolean;
   sessionHealthModelPickerAvailable: boolean;
   workspaceReadinessRecovery?: WorkspaceReadinessRecovery;
   taskReadinessNotice?: TaskReadinessNotice;
@@ -115,7 +113,6 @@ export function ChatMessageSurface({
   activeSessionId,
   liveContentSeedRevision,
   sessionHealthNotice,
-  cachedHistory,
   sessionHealthModelPickerAvailable,
   workspaceReadinessRecovery,
   taskReadinessNotice,
@@ -267,9 +264,6 @@ export function ChatMessageSurface({
           actionLabel={taskReadinessNotice.actionLabel}
           onAction={onTaskReadinessAction}
         />
-      )}
-      {cachedHistory && (
-        <ChatRecoveryNotice status="info" title={getSessionLocalCopy(locale).cachedHistory} />
       )}
       {workspaceReadinessRecovery && (
         <ChatRecoveryNotice

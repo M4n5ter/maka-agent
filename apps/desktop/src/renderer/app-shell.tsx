@@ -2991,7 +2991,6 @@ function AppShellContent({
                   });
                 }}
                 sessionHealthNotice={sessionHealthNotice}
-                cachedHistory={activeSession?.localState === 'cached' || activeTranscriptRange?.generation.startsWith('cached:')}
                 sessionHealthModelPickerAvailable={
                   activeBoundarySurface.localInteractionAvailable
                 }

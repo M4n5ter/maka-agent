@@ -128,7 +128,7 @@ test('cached history remains readable when the live transcript endpoint is unava
   await expect(
     page.getByLabel('Maka 的回答').getByText(`Fake backend received: ${prompt}`),
   ).toBeVisible();
-  await expect(page.getByText('正在显示本地缓存；Host 重连后将补齐历史和实时状态。')).toBeVisible();
+  await expect(page.locator('.maka-chat-recovery-notice')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('cached-history.png') });
 });
 

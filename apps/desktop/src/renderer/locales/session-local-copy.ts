@@ -28,7 +28,6 @@ interface SessionLocalCopy {
   remove: string;
   check: string;
   updateError: string;
-  cachedHistory: string;
 }
 
 const catalog = {
@@ -41,7 +40,6 @@ const catalog = {
     remove: 'Remove local copy',
     check: 'Check status',
     updateError: 'Unable to update the saved message',
-    cachedHistory: 'Showing cached history. Live state will refresh when the Host reconnects.',
   },
   'zh-CN': {
     saved: '已本地保存 · 等待发送',
@@ -52,7 +50,6 @@ const catalog = {
     remove: '移除本地副本',
     check: '核对状态',
     updateError: '无法更新已保存的消息',
-    cachedHistory: '正在显示本地缓存；Host 重连后将补齐历史和实时状态。',
   },
   'zh-TW': {
     saved: '已儲存於本機 · 等待傳送',
@@ -63,7 +60,6 @@ const catalog = {
     remove: '移除本機副本',
     check: '核對狀態',
     updateError: '無法更新已儲存的訊息',
-    cachedHistory: '正在顯示本機快取；Host 重新連線後將補齊歷史與即時狀態。',
   },
 } satisfies UiCatalog<SessionLocalCopy>;
 
