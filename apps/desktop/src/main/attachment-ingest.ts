@@ -49,14 +49,14 @@ export interface AttachmentSnapshotInput {
  * only canonical Session Artifacts, so every path is read once under the byte
  * cap and handed to the Host-owned ingest boundary.
  */
-export async function resolveAttachmentRefs(input: {
+export async function resolveAttachmentRefs<T = AttachmentRef>(input: {
   files: AttachmentIngestFile[];
-  snapshot: (input: AttachmentSnapshotInput) => Promise<AttachmentRef>;
+  snapshot: (input: AttachmentSnapshotInput) => Promise<T>;
   resizeImage?: (bytes: Uint8Array) => Promise<Uint8Array>;
   maxBytes?: number;
-}): Promise<AttachmentRef[]> {
+}): Promise<T[]> {
   const maxBytes = input.maxBytes ?? MAX_ATTACHMENT_BYTES;
-  const refs: AttachmentRef[] = [];
+  const refs: T[] = [];
   for (const file of input.files) {
     const name = attachmentFileName(file);
     let bytes: Uint8Array = isPathAttachment(file) ? await readFileCapped(file.path, maxBytes) : file.content;
