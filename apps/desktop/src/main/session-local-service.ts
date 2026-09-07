@@ -43,14 +43,18 @@ import {
 import type { DesktopRuntimeHostClient } from './runtime-host-client.js';
 import { normalizeSessionSendCommand } from './permission-response-guard.js';
 import type { AttachmentApprovalRegistry } from './attachment-approval.js';
-import { resolveAttachmentRefs, resolveIngestItems } from './attachment-ingest.js';
+import { resolveAttachmentRefs, prepareIngestItems } from './attachment-ingest.js';
 import { mergeWorkspaceFileInlineReferences } from './session-workspace-inline-references.js';
 import {
   resolveDesktopSessionCreateInput,
   toDesktopHostSessionSummary,
 } from './runtime-host-session-catalog-ipc-main.js';
 import { encodeDesktopTranscriptSnapshot } from './desktop-transcript-ipc.js';
-import { DesktopSessionLocalStore, type LocalOutboxRecord } from './session-local-store.js';
+import {
+  DesktopSessionLocalStore,
+  MAX_LOCAL_MESSAGE_BYTES,
+  type LocalOutboxRecord,
+} from './session-local-store.js';
 import type { DesktopTranscriptReplicaSnapshot } from './desktop-transcript-replica.js';
 
 export interface DesktopSessionLocalTarget {
@@ -566,6 +570,7 @@ export function registerDesktopSessionLocalIpc(deps: {
         type: 'send',
       });
       if (!command?.messageId) throw new Error('Invalid submitted message');
+      const messageId = command.messageId;
       if (command.directoryReferences?.some((ref) => ref.hostId !== target.scope.hostId))
         throw new Error('Directory reference belongs to another Host');
       const retained = command.retainedAttachments ?? [];
@@ -573,18 +578,17 @@ export function registerDesktopSessionLocalIpc(deps: {
         if (attachment.ref.kind !== 'session_file' || attachment.ref.sessionId !== sessionId)
           throw new Error('Retained attachment belongs to another Session');
       }
-      const files = command.attachmentItems
-        ? await resolveIngestItems({
-            senderId: event.sender.id,
-            items: command.attachmentItems,
-            approvals: deps.approvals,
-            stat,
-          })
-        : [];
-      if (files.length + retained.length > MAX_ATTACHMENT_COUNT)
-        throw new Error('Too many attachments');
+      const prepared = await prepareIngestItems({
+        senderId: event.sender.id,
+        items: command.attachmentItems ?? [],
+        approvals: deps.approvals,
+        stat,
+        maxAttachments: MAX_ATTACHMENT_COUNT - retained.length,
+        maxTotalBytes: MAX_LOCAL_MESSAGE_BYTES,
+      });
       const staged = await resolveAttachmentRefs({
-        files,
+        files: prepared.files,
+        maxTotalBytes: MAX_LOCAL_MESSAGE_BYTES,
         resizeImage: deps.resizeImage,
         snapshot: async ({ name, mimeType, content }) => ({
           name,
@@ -600,24 +604,26 @@ export function registerDesktopSessionLocalIpc(deps: {
         displayText,
         workspaceFileReferences: command.workspaceFileReferences,
       });
-      service.store.enqueue(target.partition, {
-        staged,
-        command: {
-          sessionId,
-          messageId: command.messageId,
-          placement,
-          content: {
-            text: command.text,
-            ...(command.displayText !== undefined ? { displayText } : {}),
-            attachments: retained,
-            directoryReferences: command.directoryReferences,
-            quotes: command.quotes,
-            inlineReferences,
+      prepared.commit(() =>
+        service.store.enqueue(target.partition, {
+          staged,
+          command: {
+            sessionId,
+            messageId,
+            placement,
+            content: {
+              text: command.text,
+              ...(command.displayText !== undefined ? { displayText } : {}),
+              attachments: retained,
+              directoryReferences: command.directoryReferences,
+              quotes: command.quotes,
+              inlineReferences,
+            },
+            ...(command.skillIds?.length ? { skillIds: command.skillIds } : {}),
+            ...(command.turnOrchestration ? { turnOrchestration: command.turnOrchestration } : {}),
           },
-          ...(command.skillIds?.length ? { skillIds: command.skillIds } : {}),
-          ...(command.turnOrchestration ? { turnOrchestration: command.turnOrchestration } : {}),
-        },
-      });
+        }),
+      );
       deps.changed(target.scope, sessionId);
       service.wake();
       return {

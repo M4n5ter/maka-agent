@@ -31,7 +31,7 @@ import type { DesktopLocalMessageState } from '../shared/session-local-contract.
 import type { DesktopTranscriptReplicaSnapshot } from './desktop-transcript-replica.js';
 
 const MAX_OUTBOX_BYTES = 256 * 1024 * 1024;
-const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+export const MAX_LOCAL_MESSAGE_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_SESSION_BYTES = 2 * 1024 * 1024;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -167,7 +167,7 @@ export class DesktopSessionLocalStore {
       staged.reduce((bytes, item) => bytes + Buffer.byteLength(item.base64, 'base64'), 0);
     if (
       Number(usage.count) >= 256 ||
-      messageBytes > MAX_MESSAGE_BYTES ||
+      messageBytes > MAX_LOCAL_MESSAGE_BYTES ||
       Number(usage.bytes) + storedBytes + messageBytes > MAX_OUTBOX_BYTES
     ) {
       throw new Error(

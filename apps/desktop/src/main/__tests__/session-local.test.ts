@@ -19,11 +19,12 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import type { IpcMainInvokeEvent } from 'electron';
 import { deferred } from '@maka/core/test-only/async-primitives';
 import {
   RuntimeHostOperationError,
@@ -34,10 +35,12 @@ import { DesktopSessionLocalStore, type LocalMessageIntent } from '../session-lo
 import {
   DesktopSessionLocalService,
   desktopSessionLocalPartition,
+  registerDesktopSessionLocalIpc,
   type DesktopSessionLocalTarget,
 } from '../session-local-service.js';
 import type { DesktopSessionSummaryInput } from '../../shared/desktop-session-projection.js';
 import type { DesktopTranscriptReplicaSnapshot } from '../desktop-transcript-replica.js';
+import { createAttachmentApprovalRegistry } from '../attachment-approval.js';
 
 const accepted: TurnMessageSubmitResult = {
   disposition: 'turn_started',
@@ -535,4 +538,88 @@ test('attachment retries across restart reuse committed uploads and release stag
     ...uploads.values(),
   ]);
   assert.deepEqual(db.store.stagedAttachments('authority', 'message-1'), []);
+});
+
+test('local submit preserves picked-file approvals until durable admission succeeds', async (t) => {
+  const { store, path, beforeClose } = await database(t);
+  const file = join(path, '..', 'picked.txt');
+  await writeFile(file, 'x');
+  const approvals = createAttachmentApprovalRegistry();
+  const [picked] = approvals.issueApprovals(7, [{ path: file, name: 'picked.txt', size: 1 }]);
+  const target: DesktopSessionLocalTarget = {
+    partition: 'authority',
+    profileId: 'profile',
+    scope: { hostId: 'root', targetEpoch: 'target' },
+  };
+  const service = new DesktopSessionLocalService(store, {
+    targets: () => [target],
+    changed() {},
+    onError: (error) => assert.fail(String(error)),
+  });
+  beforeClose.push(() => service.close());
+  type Ipc = Parameters<typeof registerDesktopSessionLocalIpc>[0]['ipcMain'];
+  let submit!: Parameters<Ipc['handle']>[1];
+  let resizeCalls = 0;
+  registerDesktopSessionLocalIpc({
+    ipcMain: {
+      handle: (channel, handler) => {
+        if (channel === 'session-local:submit') submit = handler;
+      },
+    },
+    service,
+    approvals,
+    resizeImage: async (bytes) => {
+      resizeCalls++;
+      return bytes;
+    },
+    resolveWorkspace: async () => {
+      throw new Error('Unexpected workspace request');
+    },
+    changed() {},
+  });
+  for (let index = 0; index < 256; index++)
+    store.enqueue('authority', { ...intent(`full-${index}`), staged: [] });
+  const draft = { messageId: 'picked-message', text: 'hello', attachmentItems: [picked] };
+  const send = () =>
+    submit(
+      { sender: { id: 7 } } as IpcMainInvokeEvent,
+      target.scope,
+      'session-1',
+      'current_turn',
+      draft,
+    );
+  await assert.rejects(send, /Local message storage is full/);
+  store.cancel('authority', 'full-0');
+  await send();
+  assert.equal(store.get('authority', 'picked-message')?.state, 'saved');
+  assert.equal(
+    Buffer.from(store.stagedAttachments('authority', 'picked-message')[0]!.content).toString(),
+    'x',
+  );
+  assert.equal(approvals.peekApproval(7, picked!.approvalId), null);
+
+  // Individually valid files exceed the aggregate budget. Main must reject
+  // their stat sizes before reading/resizing/encoding even the first image.
+  const largeFiles = [];
+  for (const name of ['first.png', 'second.png']) {
+    const imagePath = join(path, '..', name);
+    await writeFile(imagePath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    await truncate(imagePath, 33 * 1024 * 1024);
+    largeFiles.push({ path: imagePath, name, size: 33 * 1024 * 1024 });
+  }
+  const largePicked = approvals.issueApprovals(7, largeFiles);
+  await assert.rejects(
+    () =>
+      submit(
+        { sender: { id: 7 } } as IpcMainInvokeEvent,
+        target.scope,
+        'session-1',
+        'current_turn',
+        { ...draft, messageId: 'too-large', attachmentItems: largePicked },
+      ),
+    /附件总量超出大小限制/,
+  );
+  assert.equal(resizeCalls, 0);
+  assert.equal(store.get('authority', 'too-large'), undefined);
+  for (const item of largePicked) assert.ok(approvals.peekApproval(7, item.approvalId));
 });
