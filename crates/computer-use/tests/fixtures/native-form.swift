@@ -24,6 +24,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
     let name = NSTextField(string: "hello hello")
     let message = NSTextView()
     let output = NSTextField(labelWithString: "Not submitted")
+    let resume = DispatchSemaphore(value: 0)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menu = NSMenu()
@@ -39,6 +40,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
 
         window = NSWindow(contentRect: NSRect(x: 220, y: 220, width: 420, height: 250), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Maka Cua Form Fixture"
+        window.isReleasedWhenClosed = false
         name.frame = NSRect(x: 24, y: 190, width: 360, height: 28)
         name.setAccessibilityLabel("Name")
         message.frame = NSRect(x: 24, y: 140, width: 360, height: 28)
@@ -47,11 +49,40 @@ final class Fixture: NSObject, NSApplicationDelegate {
         button.frame = NSRect(x: 24, y: 85, width: 160, height: 32)
         output.frame = NSRect(x: 24, y: 25, width: 370, height: 40)
         for view in [name, message, button, output] { window.contentView!.addSubview(view) }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if ProcessInfo.processInfo.arguments.contains("--background") {
+            window.orderBack(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         FileHandle.standardOutput.write(Data("ready \(window.windowNumber)\n".utf8))
         DispatchQueue.global().async { [self] in
             while let command = readLine() {
+                if command == "activity" {
+                    DispatchQueue.main.async {
+                        FileHandle.standardOutput.write(Data((NSApp.isActive ? "active\n" : "inactive\n").utf8))
+                    }
+                }
+                if command == "pause" {
+                    DispatchQueue.main.async { [self] in
+                        FileHandle.standardOutput.write(Data("paused\n".utf8))
+                        resume.wait()
+                        FileHandle.standardOutput.write(Data("resumed\n".utf8))
+                    }
+                }
+                if command == "resume" { resume.signal() }
+                if command == "edit" {
+                    DispatchQueue.main.async { [self] in
+                        name.stringValue = "externally edited"
+                        FileHandle.standardOutput.write(Data("edited\n".utf8))
+                    }
+                }
+                if command == "close" {
+                    DispatchQueue.main.async { [self] in
+                        window.close()
+                        FileHandle.standardOutput.write(Data("closed\n".utf8))
+                    }
+                }
                 if command == "move" {
                     DispatchQueue.main.async { [self] in
                         let before = window.frame.origin
@@ -73,7 +104,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
     }
 }
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(ProcessInfo.processInfo.arguments.contains("--background") ? .accessory : .regular)
 let fixture = Fixture()
 app.delegate = fixture
 app.run()

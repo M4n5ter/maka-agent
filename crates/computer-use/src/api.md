@@ -20,6 +20,8 @@ App and Tab observations:
 - `getAXStateAndScreenshot(options?)` returns `{state, screenshot}` and emits both.
 Observations emit by default; use `{emit:false}` when processing the result yourself.
 Screenshot-only observation clears accessibility indices.
+If a native AX observation fails while an app is busy, refresh the same bound object
+when the app responds again. Failed observations invalidate old indices and coordinates.
 
 App and Tab actions:
 - `click(index | [x,y], {mouseButton?, clickCount?})`, `drag([x,y], [x,y])`.
@@ -27,6 +29,8 @@ App and Tab actions:
 - `setValue(index, string)`.
 - `selectText(index, text, {prefix?, suffix?, selectionType?})` where selectionType is
   `text`, `cursor_before` or `cursor_after`. Native selection is macOS-only.
+  `text_not_found` means the text or supplied context is absent; read the current
+  state again. `ambiguous_text` requires a more specific prefix/suffix.
 - `performSecondaryAction(index, action)`: use an exact action listed in the native
   AX observation. CDP does not expose secondary actions and rejects this method.
 

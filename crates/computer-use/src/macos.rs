@@ -169,7 +169,9 @@ impl Target {
                 }
                 CFRelease(window.cast());
             }
-            let window = selected.ok_or_else(|| failed("AX window unavailable"))?;
+            let window = selected.ok_or_else(|| {
+                failed("AX window unavailable; the application may be busy or the window closed. Read getAXState again when it is responsive")
+            })?;
             Ok(Self {
                 pid,
                 window_id,
@@ -474,9 +476,14 @@ fn selection(
         })
         .map(|(at, _)| at)
         .collect();
-    if matches.len() != 1 {
+    if matches.is_empty() {
         return Err(failed(
-            "text match is missing or ambiguous; provide prefix/suffix",
+            "text_not_found: no match for text and prefix/suffix; read getAXState again because the content may have changed",
+        ));
+    }
+    if matches.len() > 1 {
+        return Err(failed(
+            "ambiguous_text: multiple matches; provide prefix/suffix",
         ));
     }
     let start = value[..matches[0]].encode_utf16().count();
@@ -512,7 +519,18 @@ mod tests {
             selection("😀 hello hello!", "hello", &options).unwrap(),
             (9, 5)
         );
-        assert!(selection("aaa", "aa", &SelectOptions::default()).is_err());
+        assert!(
+            selection("aaa", "aa", &SelectOptions::default())
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous_text")
+        );
+        assert!(
+            selection("edited", "hello", &SelectOptions::default())
+                .unwrap_err()
+                .to_string()
+                .contains("text_not_found")
+        );
         assert!(selection("abc", "", &SelectOptions::default()).is_err());
     }
 }

@@ -228,14 +228,21 @@ impl Session {
                 kind,
                 options,
             } => {
-                self.observe(
-                    &handle,
-                    kind,
-                    !options.disable_diffing,
-                    session,
-                    cancellation,
-                )
-                .await
+                let result = self
+                    .observe(
+                        &handle,
+                        kind,
+                        !options.disable_diffing,
+                        session,
+                        cancellation,
+                    )
+                    .await;
+                if result.is_err()
+                    && let Some(target) = self.targets.get_mut(&handle)
+                {
+                    target.invalidate_observation();
+                }
+                result
             }
             Command::Action {
                 handle: Handle::App(handle),
@@ -300,7 +307,17 @@ impl Session {
         }
         let id = target.window.window_id;
         #[cfg(target_os = "macos")]
-        let geometry = if let Some(macos) = target.macos.clone() {
+        let macos = target.macos.clone();
+        let windows = self.windows(session, cancellation).await?;
+        let Some(window) = windows
+            .into_iter()
+            .find(|w| w.pid == Some(pid) && w.window_id == id)
+        else {
+            self.targets.remove(handle);
+            return Err(failed("stale_target: window closed; bind a current window"));
+        };
+        #[cfg(target_os = "macos")]
+        let window = if let Some(macos) = macos {
             let verified = tokio::task::spawn_blocking(move || {
                 let target = macos.lock().unwrap();
                 target.verify()?;
@@ -309,30 +326,22 @@ impl Session {
             .await
             .map_err(failed)?;
             match verified {
-                Ok(bounds) => Some(bounds),
+                Ok(bounds) => WindowInfo { bounds, ..window },
                 Err(error) => {
-                    self.targets.remove(handle);
+                    // AX timeouts do not prove that the window was replaced.
+                    // Keep its retained identity, but require a fresh observation
+                    // before any indexed or coordinate input can resume.
+                    self.targets
+                        .get_mut(handle)
+                        .unwrap()
+                        .invalidate_observation();
                     return Err(error);
                 }
             }
         } else {
-            None
+            window
         };
-        let windows = self.windows(session, cancellation).await?;
-        if let Some(window) = windows
-            .into_iter()
-            .find(|w| w.pid == Some(pid) && w.window_id == id)
-        {
-            #[cfg(target_os = "macos")]
-            let window = if let Some(bounds) = geometry {
-                WindowInfo { bounds, ..window }
-            } else {
-                window
-            };
-            return Ok(window);
-        }
-        self.targets.remove(handle);
-        Err(failed("stale_target: window closed; bind a current window"))
+        Ok(window)
     }
     async fn observe(
         &mut self,
@@ -642,6 +651,15 @@ impl Session {
     }
 }
 impl Target {
+    fn invalidate_observation(&mut self) {
+        self.snapshot = None;
+        self.capture = None;
+        self.previous = None;
+        #[cfg(target_os = "macos")]
+        if let Some(macos) = &self.macos {
+            macos.lock().unwrap().clear();
+        }
+    }
     fn element(&self, index: u64) -> Result<&cua_driver_contract::WindowElement, ToolError> {
         self.snapshot
             .as_ref()

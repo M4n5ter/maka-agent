@@ -52,4 +52,7 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 
 测试包括独立 REPL/权限/取消/资源边界，以及需主动运行的真实 Chrome、AppKit 表单
 验收。验证成功的范围与完整 cua_repl 等价、性能更优是不同结论，后两者尚未宣称。
+表单编辑验收会短暂切换键盘焦点，需要在用户没有打字时运行；
+`native_observation_recovers` 验收始终在后台运行，不发送键盘输入，并检查应用忙后恢复、
+旧观察失效、外部编辑保留和窗口关闭后的拒绝。
 构建、配置、测试边界与许可说明见 [English README](README.md)。

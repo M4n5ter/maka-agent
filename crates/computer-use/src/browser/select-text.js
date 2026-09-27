@@ -34,8 +34,11 @@ function selectText(text, prefix, suffix, selectionType) {
       matches.push(at);
     from = at + 1;
   }
-  if (matches.length !== 1)
-    throw Error('text match is missing or ambiguous; provide prefix/suffix');
+  if (matches.length === 0)
+    throw Error(
+      'text_not_found: no match for text and prefix/suffix; read getAXState again because the content may have changed',
+    );
+  if (matches.length > 1) throw Error('ambiguous_text: multiple matches; provide prefix/suffix');
   let start = matches[0],
     end = start + text.length;
   if (selectionType === 'cursor_before') end = start;

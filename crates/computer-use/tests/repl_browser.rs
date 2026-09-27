@@ -94,40 +94,8 @@ fn index(state: &str, role: &str, name: &str) -> u64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 #[ignore = "requires macOS Accessibility; compiles and operates a disposable native form"]
 async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
-    assert!(
-        unsafe { platform_macos::ax::bindings::AXIsProcessTrusted() },
-        "native acceptance requires macOS Accessibility permission for the test host"
-    );
-    let directory = tempfile::tempdir().unwrap();
-    let contents = directory.path().join("Maka Cua Fixture.app/Contents");
-    std::fs::create_dir_all(contents.join("MacOS")).unwrap();
-    std::fs::write(contents.join("Info.plist"),r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.apache.maka.cua.fixture.FIXTURE_ID</string><key>CFBundleName</key><string>Maka Cua Fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>"#.replace("FIXTURE_ID", &uuid::Uuid::new_v4().to_string())).unwrap();
-    let executable = contents.join("MacOS/fixture");
-    let compiled = tokio::process::Command::new("/usr/bin/swiftc")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/native-form.swift"
-        ))
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        compiled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    let mut app = tokio::process::Command::new(&executable)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut lines = BufReader::new(app.stdout.take().unwrap()).lines();
-    let ready = lines.next_line().await.unwrap().unwrap();
-    let window_id: u64 = ready.strip_prefix("ready ").unwrap().parse().unwrap();
+    let mut form = NativeForm::start(false).await;
+    let window_id = form.window_id;
     let driver = Arc::new(Mutex::new(Driver::default()));
     let mut native = Session::new(driver.clone());
     let windows = native
@@ -167,11 +135,7 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
     let button = index(&state, "AXButton", "Submit fixture");
     let (ok,output)=evaluate(&repl,bridge.clone(),format!("await app.click({name}); await app.selectText({name}, 'hello', {{prefix:'hello '}}); await app.paste('world'); await app.setValue({message}, 'placeholder'); await app.click({message}); await app.selectText({message}, 'placeholder'); await app.paste('<b>你好</b>', {{format:'html'}}); await app.click({button}); await app.getAXState({{disableDiffing:true}});")).await;
     assert!(ok, "{}", texts(&output));
-    let submitted = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    let submitted = form.line().await;
     let submitted: Value = serde_json::from_str(&submitted).unwrap();
     assert!(
         submitted["submitted"] == "hello world / 你好",
@@ -201,20 +165,13 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
             .iter()
             .any(|part| matches!(part, CellOutput::Media { .. }))
     );
-    app.stdin
-        .as_mut()
-        .unwrap()
-        .write_all(b"move\n")
-        .await
-        .unwrap();
-    assert_eq!(lines.next_line().await.unwrap().as_deref(), Some("moved"));
+    assert_eq!(form.command("move").await, "moved");
     let (ok, _) = evaluate(&repl, bridge.clone(), "await app.click([5,5]);".into()).await;
     assert!(
         !ok,
         "external window movement must reject old screenshot coordinates"
     );
-    app.kill().await.unwrap();
-    app.wait().await.unwrap();
+    form.stop().await;
     let (ok, _) = evaluate(
         &repl,
         bridge.clone(),
@@ -225,6 +182,191 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
     repl.close().await.unwrap();
     bridge.0.lock().await.close().await.unwrap();
     driver.lock().await.close().await.unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+#[ignore = "requires macOS Accessibility; observes a background fixture without keyboard input"]
+async fn native_observation_recovers_after_busy_and_preserves_external_edits() {
+    let mut form = NativeForm::start(true).await;
+    assert_eq!(form.command("activity").await, "inactive");
+    let driver = Arc::new(Mutex::new(Driver::default()));
+    let bridge = Arc::new(Bridge(Arc::new(Mutex::new(Session::new(driver.clone())))));
+    let repl = Repl::new(
+        facade(),
+        CellLimits {
+            max_value_bytes: 16 * 1024 * 1024,
+            heap_bytes: 128 * 1024 * 1024,
+            ..Default::default()
+        },
+    );
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!(
+            "const app = await cua.getApp({{windowId:{}}}); await app.getAXStateAndScreenshot();",
+            form.window_id
+        ),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let name = index(&texts(&output), "AXTextField", "Name");
+
+    // Hold the fixture's UI thread until the AX request times out, then
+    // explicitly release it. No timing assumption or physical input is needed.
+    assert_eq!(form.command("pause").await, "paused");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "try { await app.getAXState(); } catch (e) { nodeRepl.write(String(e)); }".into(),
+    )
+    .await;
+    assert!(
+        ok && texts(&output).contains("AX window unavailable"),
+        "{}",
+        texts(&output)
+    );
+    assert_eq!(form.command("resume").await, "resumed");
+
+    let (ok, output) = evaluate(&repl, bridge.clone(), format!(
+        "try {{ await app.setValue({name}, 'must not overwrite'); }} catch (e) {{ nodeRepl.write(String(e)); }}
+         try {{ await app.click([5,5]); }} catch (e) {{ nodeRepl.write(String(e)); }}"
+    )).await;
+    assert!(
+        ok && texts(&output).contains("stale_element")
+            && texts(&output).contains("capture_required"),
+        "{}",
+        texts(&output)
+    );
+    let (ok, output) = evaluate(&repl, bridge.clone(), "await app.getAXState();".into()).await;
+    assert!(
+        ok && texts(&output).contains("hello hello"),
+        "the same binding must recover without rebind: {}",
+        texts(&output)
+    );
+    let name = index(&texts(&output), "AXTextField", "Name");
+
+    assert_eq!(form.command("edit").await, "edited");
+    let (ok, output) = evaluate(&repl, bridge.clone(), format!(
+        "try {{ await app.selectText({name}, 'hello', {{prefix:'hello '}}); }} catch (e) {{ nodeRepl.write(String(e)); }}"
+    )).await;
+    assert!(
+        ok && texts(&output).contains("text_not_found"),
+        "{}",
+        texts(&output)
+    );
+    let (ok, output) = evaluate(&repl, bridge.clone(), "await app.getAXState();".into()).await;
+    assert!(
+        ok && texts(&output).contains("externally edited"),
+        "external edits must remain intact: {}",
+        texts(&output)
+    );
+
+    assert_eq!(form.command("activity").await, "inactive");
+    assert_eq!(form.command("close").await, "closed");
+    assert!(
+        form.app.try_wait().unwrap().is_none(),
+        "the window closed, not the process"
+    );
+    let (ok, _) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.setValue({name}, 'closed window');"),
+    )
+    .await;
+    assert!(
+        !ok,
+        "preserving a binding must not permit input to a closed window"
+    );
+    form.stop().await;
+    repl.close().await.unwrap();
+    bridge.0.lock().await.close().await.unwrap();
+    driver.lock().await.close().await.unwrap();
+}
+
+#[cfg(target_os = "macos")]
+struct NativeForm {
+    app: tokio::process::Child,
+    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    window_id: u64,
+    _directory: tempfile::TempDir,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeForm {
+    async fn start(background: bool) -> Self {
+        assert!(
+            unsafe { platform_macos::ax::bindings::AXIsProcessTrusted() },
+            "native acceptance requires macOS Accessibility permission for the test host"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let contents = directory.path().join("Maka Cua Fixture.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::write(contents.join("Info.plist"),r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.apache.maka.cua.fixture.FIXTURE_ID</string><key>CFBundleName</key><string>Maka Cua Fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>"#.replace("FIXTURE_ID", &uuid::Uuid::new_v4().to_string())).unwrap();
+        let executable = contents.join("MacOS/fixture");
+        let compiled = tokio::process::Command::new("/usr/bin/swiftc")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/native-form.swift"
+            ))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let mut launch = tokio::process::Command::new(&executable);
+        if background {
+            launch.arg("--background");
+        }
+        let mut app = launch
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let lines = BufReader::new(app.stdout.take().unwrap()).lines();
+        let mut fixture = Self {
+            app,
+            lines,
+            window_id: 0,
+            _directory: directory,
+        };
+        fixture.window_id = fixture
+            .line()
+            .await
+            .strip_prefix("ready ")
+            .unwrap()
+            .parse()
+            .unwrap();
+        fixture
+    }
+    async fn line(&mut self) -> String {
+        tokio::time::timeout(Duration::from_secs(5), self.lines.next_line())
+            .await
+            .expect("native fixture responds")
+            .unwrap()
+            .expect("native fixture remains alive")
+    }
+    async fn command(&mut self, command: &str) -> String {
+        self.app
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(format!("{command}\n").as_bytes())
+            .await
+            .unwrap();
+        self.line().await
+    }
+    async fn stop(&mut self) {
+        self.app.kill().await.unwrap();
+        self.app.wait().await.unwrap();
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -328,7 +470,26 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     )
     .await;
     assert!(ok, "{}", texts(&output));
-    let state = texts(&output);
+    let mut state = texts(&output);
+    for (text, diagnostic) in [("missing", "text_not_found"), ("hello", "ambiguous_text")] {
+        let name = index(&state, "textbox", "Name ");
+        let (ok, output) = evaluate(&repl, bridge.clone(), format!(
+            "try {{ await tab.selectText({name}, {text:?}); }} catch (e) {{ nodeRepl.write(String(e)); }}"
+        )).await;
+        assert!(
+            ok && texts(&output).contains(diagnostic),
+            "{}",
+            texts(&output)
+        );
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            "await tab.getAXState({disableDiffing:true});".into(),
+        )
+        .await;
+        assert!(ok);
+        state = texts(&output);
+    }
     let name = index(&state, "textbox", "Name ");
     let message = index(&state, "textbox", "Message ");
     let color = index(&state, "combobox", "Color");

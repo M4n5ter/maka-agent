@@ -124,5 +124,11 @@ in `tests/repl_browser.rs` operate disposable fixtures: a temporary Chrome profi
 and a compiled AppKit form, including Unicode editing, rich paste, screenshots,
 navigation and stale targets. Set `MAKA_CUA_TEST_CHROME` to override the Chrome binary.
 They are separate from ordinary CI tests and do not prove untested desktop behavior.
+The form editing test temporarily takes keyboard focus; run it while the user is not
+typing. The recovery test stays in the background and uses no keyboard input:
+
+```sh
+cargo nextest run -p maka-computer-use --test repl_browser -E 'test(native_observation_recovers)' --run-ignored all
+```
 
 See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for source and licensing.
