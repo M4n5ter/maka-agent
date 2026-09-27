@@ -579,6 +579,9 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
             "--no-default-browser-check",
             "--remote-debugging-port=0",
             "--disable-gpu",
+            // This disposable fixture has no credentials. An unavailable
+            // desktop keyring can otherwise stall HTTP navigation under SSH.
+            "--password-store=basic",
         ])
         .arg(format!("--user-data-dir={}", profile.path().display()))
         .arg(&page)
@@ -748,6 +751,9 @@ async fn browser_cursor_scenario(
         "{}",
         texts(&output)
     );
+    // The screenshot precedes A's first movement. Linux font antialiasing can
+    // already contain blue pixels, so compare against this unchanged fixture.
+    let background = cursor_colors(&image_bytes(&output));
     let (ok,output)=evaluate(&second,b.clone(),format!("await cua.cursor.configure({{label:'Maka B',color:'mint',reducedMotion:true}}); const tab=await cua.getTab({{url:{}}}); await tab.getScreenshot(); nodeRepl.write(await tab.moveCursor([210,160]));",json!(page))).await;
     assert!(
         ok && texts(&output).contains("\"visible\":true"),
@@ -759,7 +765,7 @@ async fn browser_cursor_scenario(
     let bytes = image_bytes(&output);
     let (blue, mint) = cursor_colors(&bytes);
     assert!(
-        blue > 15 && mint > 15,
+        blue > background.0 + 15 && mint > background.1 + 15,
         "both CDP cursor colors must be rendered: blue={blue}, mint={mint}"
     );
     if let Some(path) = std::env::var_os("MAKA_CUA_BROWSER_CURSOR_ARTIFACT") {
@@ -774,7 +780,7 @@ async fn browser_cursor_scenario(
     assert!(ok);
     let (blue, mint) = cursor_colors(&image_bytes(&output));
     assert!(
-        blue == 0 && mint > 15,
+        blue == background.0 && mint > background.1 + 15,
         "disabling A must hide only A's cursor: blue={blue}, mint={mint}"
     );
     let (ok, _) = evaluate(
@@ -790,7 +796,7 @@ async fn browser_cursor_scenario(
     assert!(ok);
     let (blue, mint) = cursor_colors(&image_bytes(&output));
     assert!(
-        blue > 15 && mint == 0,
+        blue > background.0 + 15 && mint == background.1,
         "closing B must remove only B's cursor: blue={blue}, mint={mint}"
     );
     let (ok, _) = evaluate(

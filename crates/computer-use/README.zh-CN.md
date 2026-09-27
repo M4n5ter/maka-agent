@@ -59,8 +59,12 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 原生覆盖层运行在同一 CLI/service 可执行文件的私有显示子进程中，只接收有界绘制命令；
 macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参与布局、命中测试和 AX
 的装饰层，空闲后自动删除。Session/reset 清理自己的光标，Host 退出回收显示进程。
-原生 macOS 当前沿用上游主屏渲染；X11/Windows 提供对应后端但未实机验收，未启用
-Wayland 覆盖层。多个图案不会隔离操作系统键盘、焦点或输入法。
+原生 macOS 当前沿用上游主屏渲染；Windows 已在真实交互桌面验收，X11 在独立 Xvfb
+显示器中验证，未启用 Wayland 覆盖层。多个图案不会隔离操作系统键盘、焦点或输入法。
+
+Linux 构建需要 X11、Xi、Xtst 开发库；Windows MSVC 构建还需要对应的 Spectre CRT 库。
+X11 实测发现多个光标位于不同渲染分块时标签会重复；位置与生命周期检查通过，
+但 X11 视觉一致性尚未完成。
 
 测试包括独立 REPL/权限/取消/资源边界，以及需主动运行的真实 Chrome、AppKit 表单
 验收。验证成功的范围与完整 cua_repl 等价、性能更优是不同结论，后两者尚未宣称。

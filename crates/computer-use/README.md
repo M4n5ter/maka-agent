@@ -118,9 +118,14 @@ arbitrary theme paths are not accepted. Generate a comparison preview with
 `cargo run -p maka-computer-use --example cursor-preview -- preview.png`.
 Native display availability requires an interactive desktop; the upstream macOS
 renderer currently uses the main screen, X11 and Windows use their platform overlays,
-and this adapter does not enable a Wayland overlay. Linux/Windows remain unverified
-on physical desktops. Multiple visual pointers do not create separate OS keyboard
-or focus seats.
+and this adapter does not enable a Wayland overlay. Windows native display has been
+validated in an interactive desktop Session; Linux X11 checks use a dedicated Xvfb
+display. Multiple visual pointers do not create separate OS keyboard or focus seats.
+
+Linux builds need the X11, Xi and Xtst development libraries. Windows MSVC builds
+also need the matching Spectre-mitigated CRT libraries. X11 validation currently
+finds duplicated Session labels when multiple cursors occupy separate render tiles;
+pointer placement and lifecycle pass, but X11 visual parity remains incomplete.
 
 ## Platform boundaries
 
