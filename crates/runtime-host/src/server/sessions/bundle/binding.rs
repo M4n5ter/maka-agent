@@ -43,9 +43,8 @@ struct Metadata {
 pub(super) async fn resolve(
     host: &Host,
     staged: &mut StagedBundle,
-    workspace: WorkspaceTarget,
+    destination: WorkspaceProjection,
 ) -> Result<BTreeMap<String, SessionConfiguration>> {
-    let destination = super::super::workspace::resolve(host, &workspace).await?;
     let mut configurations = BTreeMap::new();
     let mut defaults: Option<SessionConfiguration> = None;
     let ids: Vec<_> = staged
@@ -59,7 +58,7 @@ pub(super) async fn resolve(
         let metadata: Metadata = staged.configuration(&id).await.map_err(source_error)?;
         let input = SessionCreateInput {
             session_id: id.clone(),
-            workspace: workspace.clone(),
+            workspace: destination.target.clone(),
             target: SessionCreateTarget::Model {
                 model_target: SessionModelTarget::Default,
             },

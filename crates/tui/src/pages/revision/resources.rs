@@ -165,9 +165,41 @@ impl Input {
                 }
             }
         }
+        let mut input_selection_sources = vec![];
+        let original_selected = input_selections.clone();
+        for (provider, selectors) in &original_selected {
+            for selector in selectors {
+                if let Some(binding) = self.resolved.iter().find(|binding| matches!(&binding.payload,
+                    crate::pages::completion::Payload::Selection { provider: current, selector: value, .. } if current == provider && value == selector)) {
+                    let _ = crate::pages::completion::bindings::payload(binding, &mut content, &mut input_selections,
+                        &mut input_selection_sources, crate::pages::completion::bindings::Merge::Draft { inline: false });
+                } else if let Some(source) = self.original.input_selection_sources.iter().find(|source| &source.provider == provider)
+                    && !input_selection_sources.contains(source) { input_selection_sources.push(source.clone()); }
+            }
+        }
+        for display in [false, true] {
+            if display && self.content.display_text.is_none() {
+                continue;
+            }
+            if let Ok(editor) = self.marked_editor(display) {
+                // Draft display may temporarily contain old/new sources during
+                // explicit target-scope review; only a validated batch can send.
+                let _ = crate::pages::completion::bindings::merge_map(
+                    &self.bindings,
+                    &editor,
+                    &mut content,
+                    &mut input_selections,
+                    &mut input_selection_sources,
+                    crate::pages::completion::bindings::Merge::Draft {
+                        inline: display == self.content.display_text.is_some(),
+                    },
+                );
+            }
+        }
         TurnStartMessage {
             content,
             input_selections,
+            input_selection_sources,
         }
     }
 }

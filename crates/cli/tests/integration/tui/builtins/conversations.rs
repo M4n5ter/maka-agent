@@ -93,9 +93,7 @@ fn real_host_import_and_recall_open_the_exact_imported_session() {
     );
     assert_eq!(std::fs::read_to_string(&rollout).unwrap(), transcript);
 
-    tui.command("Plugin pages");
-    tui.wait_for("maka.recall");
-    tui.click_page_text("Recall");
+    tui.click_text("Recall");
     tui.wait_for("Find what was said");
     edit(&mut tui, "Find", "nonexistentacceptanceword", "Find");
     tui.wait_for("nonexistentacceptanceword");

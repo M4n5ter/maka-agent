@@ -17,6 +17,8 @@
  * under the License.
  */
 
+mod workspace_context;
+
 mod access_expiry;
 mod artifact_boundary;
 mod artifact_interop;

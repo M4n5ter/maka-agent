@@ -39,6 +39,29 @@ pub struct Basis {
     pub(super) turn: String,
     name: String,
     excerpt: String,
+    mode: Mode,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Branch,
+    Side,
+    EmptySide,
+}
+impl Mode {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Branch => "branch-title",
+            Self::Side => "branch-side-title",
+            Self::EmptySide => "branch-empty-side-title",
+        }
+    }
+    fn note(self) -> &'static str {
+        match self {
+            Self::Branch => "branch-note",
+            Self::Side => "branch-side-note",
+            Self::EmptySide => "branch-empty-side-note",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -52,7 +75,7 @@ pub enum Command {
 impl Command {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Open(_) => "branch-title",
+            Self::Open(basis) => basis.mode.title(),
             Self::Resume => "branch-resume",
             Self::Confirm => "branch-create",
             Self::Query => "branch-query",
@@ -71,26 +94,34 @@ pub struct Checkpoint {
 }
 impl Checkpoint {
     pub fn validate(&self, root: &str) -> Result<(), String> {
-        let copy::Purpose::Branch {
-            turn_id: Some(turn),
-            side_conversation: false,
-        } = &self.input.purpose
-        else {
-            return Err("Invalid saved branch purpose".into());
+        let (turn, side) = match &self.input.purpose {
+            copy::Purpose::Branch {
+                turn_id: Some(turn),
+                side_conversation,
+            } => (Some(turn.as_str()), *side_conversation),
+            copy::Purpose::EmptySideConversation => (None, true),
+            _ => return Err("Invalid saved branch purpose".into()),
         };
         if self.root != root {
             return Err("Saved branch belongs to another Root".into());
         }
-        copy::decode_input(
-            Operation::SessionBranchCreate,
-            &serde_json::json!({
-                "sourceSessionId":self.input.source_session_id,
-                "targetSessionId":self.input.target_session_id,
-                "expectedSourceRevision":self.input.expected_source_revision,
-                "sourceTurnId":turn
-            }),
-        )
-        .map_err(|e| e.to_string())?;
+        let mut wire = serde_json::json!({
+            "sourceSessionId":self.input.source_session_id,
+            "targetSessionId":self.input.target_session_id,
+            "expectedSourceRevision":self.input.expected_source_revision,
+        });
+        // The Session contract distinguishes an omitted optional field from null.
+        if let Some(turn) = turn {
+            wire["sourceTurnId"] = serde_json::json!(turn);
+        }
+        if side {
+            wire["intent"] = serde_json::json!("side_conversation");
+        }
+        let decoded = copy::decode_input(Operation::SessionBranchCreate, &wire)
+            .map_err(|error| error.to_string())?;
+        if decoded != self.input {
+            return Err("Saved branch intent changed during validation".into());
+        }
         Ok(())
     }
 }
@@ -217,6 +248,49 @@ impl App {
             turn: turn.into(),
             name: item.name.clone(),
             excerpt: text.chars().take(120).collect(),
+            mode: Mode::Branch,
+        })
+    }
+    /// Side conversations capture the same immutable source as ordinary branching.
+    pub fn side_branch_commands(&self) -> Vec<(Action, &'static str)> {
+        if self.branch.saved.is_some() {
+            return vec![];
+        }
+        [Mode::Side, Mode::EmptySide]
+            .into_iter()
+            .filter_map(|mode| {
+                self.side_branch_basis(mode)
+                    .map(|basis| (Action::Branch(Command::Open(basis)), mode.title()))
+            })
+            .collect()
+    }
+    fn side_branch_basis(&self, mode: Mode) -> Option<Basis> {
+        if mode == Mode::Side {
+            let mut basis = self.branch_basis()?;
+            basis.mode = mode;
+            return Some(basis);
+        }
+        let ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return None;
+        };
+        let Route::Session(id) = self.navigation.current() else {
+            return None;
+        };
+        let super::sessions::Detail::Ready(item) = &self.sessions.detail else {
+            return None;
+        };
+        if item.id != id || self.chat.removed || self.session_is_managed(&id) {
+            return None;
+        }
+        Some(Basis {
+            root: root_id.clone(),
+            epoch: epoch.clone(),
+            source: id,
+            revision: item.revision,
+            turn: String::new(),
+            name: item.name.clone(),
+            excerpt: String::new(),
+            mode,
         })
     }
     pub fn branch_enabled(&self, command: &Command) -> bool {
@@ -229,7 +303,12 @@ impl App {
             Command::Open(basis) => {
                 state.saved.is_none()
                     && !state.visible
-                    && self.branch_basis().as_ref() == Some(basis)
+                    && match basis.mode {
+                        Mode::Branch => self.branch_basis(),
+                        mode => self.side_branch_basis(mode),
+                    }
+                    .as_ref()
+                        == Some(basis)
             }
             Command::Resume => state.saved.is_some() && !state.visible,
             Command::Close => state.visible,
@@ -301,9 +380,12 @@ impl App {
                         source_session_id: basis.source.clone(),
                         target_session_id: uuid::Uuid::new_v4().to_string(),
                         expected_source_revision: basis.revision,
-                        purpose: copy::Purpose::Branch {
-                            turn_id: Some(basis.turn.clone()),
-                            side_conversation: false,
+                        purpose: match basis.mode {
+                            Mode::Branch | Mode::Side => copy::Purpose::Branch {
+                                turn_id: Some(basis.turn.clone()),
+                                side_conversation: basis.mode == Mode::Side,
+                            },
+                            Mode::EmptySide => copy::Purpose::EmptySideConversation,
                         },
                     },
                 });
@@ -481,6 +563,67 @@ pub(crate) mod tests {
         (app, basis)
     }
     #[test]
+    fn side_copy_checkpoints_preserve_history_intent_and_empty_boundary() {
+        for purpose in [
+            copy::Purpose::Branch {
+                turn_id: Some("turn".into()),
+                side_conversation: false,
+            },
+            copy::Purpose::Branch {
+                turn_id: Some("turn".into()),
+                side_conversation: true,
+            },
+            copy::Purpose::EmptySideConversation,
+        ] {
+            let saved = Checkpoint {
+                root: "root".into(),
+                input: copy::Input {
+                    source_session_id: "source".into(),
+                    target_session_id: "target".into(),
+                    expected_source_revision: 7,
+                    purpose,
+                },
+            };
+            assert!(saved.validate("root").is_ok());
+            let restored: Checkpoint =
+                serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+            assert_eq!(restored.input, saved.input);
+            assert!(restored.validate("other-root").is_err());
+            let mut extra = serde_json::to_value(&saved).unwrap();
+            extra["unsupported"] = json!(true);
+            assert!(serde_json::from_value::<Checkpoint>(extra).is_err());
+            let mut extra = serde_json::to_value(&saved).unwrap();
+            extra["input"]["unsupported"] = json!(true);
+            assert!(serde_json::from_value::<Checkpoint>(extra).is_err());
+            // The data-bearing variant rejects unknown fields. Serde's
+            // internally tagged unit variant carries no fields to validate.
+            if matches!(&saved.input.purpose, copy::Purpose::Branch { .. }) {
+                let mut extra = serde_json::to_value(&saved).unwrap();
+                extra["input"]["purpose"]["unsupported"] = json!(true);
+                assert!(serde_json::from_value::<Checkpoint>(extra).is_err());
+                let mut invalid = serde_json::to_value(&saved).unwrap();
+                invalid["input"]["purpose"]["sideConversation"] = json!("invalid");
+                assert!(serde_json::from_value::<Checkpoint>(invalid).is_err());
+            }
+            let mut unknown = serde_json::to_value(&saved).unwrap();
+            unknown["input"]["purpose"]["kind"] = json!("unknown_copy_kind");
+            assert!(serde_json::from_value::<Checkpoint>(unknown).is_err());
+            for (field, value) in [
+                ("expectedSourceRevision", json!(0)),
+                ("purpose", json!({"kind":"revision", "turnId":"turn"})),
+            ] {
+                let mut invalid = serde_json::to_value(&saved).unwrap();
+                invalid["input"][field] = value;
+                assert!(
+                    serde_json::from_value::<Checkpoint>(invalid)
+                        .unwrap()
+                        .validate("root")
+                        .is_err()
+                );
+            }
+        }
+    }
+    #[test]
     fn branch_confirmation_checkpoint_and_recovery_preserve_the_exact_target_and_draft() {
         let (mut app, basis) = fixture();
         app.drafts
@@ -631,7 +774,7 @@ pub(crate) mod tests {
             ("/input/targetSessionId", json!("source")),
             ("/input/expectedSourceRevision", json!(0)),
             ("/input/purpose/turnId", json!(null)),
-            ("/input/purpose/sideConversation", json!(true)),
+            ("/input/purpose/turnId", json!("invalid/turn")),
         ] {
             let mut invalid = saved.clone();
             *invalid.pointer_mut(pointer).unwrap() = value;

@@ -41,7 +41,9 @@ export default async function (ctx) {
     throw new Error('model lookup invented an unconfigured default');
   if (await ctx.models.resolve({ kind: 'named', connectionSlug: 'recovery', model: 'not-enabled' }))
     throw new Error('disabled model is selectable');
-  const choices = await ctx.models.search({ query: 'recovery fixture-model' });
+  const searched = await ctx.models.search({ query: 'recovery fixture-model' });
+  if (searched.kind !== 'page') throw new Error('fresh model search is stale');
+  const choices = searched.page;
   if (
     !choices.complete ||
     choices.models.length !== 1 ||
@@ -50,7 +52,8 @@ export default async function (ctx) {
     choices.models[0]?.isDefault
   )
     throw new Error('model search disagrees with selection resolution');
-  if ((await ctx.models.search({ query: 'not-enabled' })).models.length !== 0)
+  const unavailable = await ctx.models.search({ query: 'not-enabled' });
+  if (unavailable.kind !== 'page' || unavailable.page.models.length !== 0)
     throw new Error('model search invented an available choice');
 
   /** @type {import('../../../../packages/plugin-sdk/src/host.js').ReadDirectory | undefined} */
@@ -176,7 +179,9 @@ export default async function (ctx) {
       capabilities: { thinking: true, toolActivity: true },
     },
     async (request, context) => {
-      const executors = await ctx.executors.search({ query: 'external acceptance' });
+      const searched = await ctx.executors.search({ query: 'external acceptance' });
+      if (searched.kind !== 'page') throw new Error('fresh executor search is stale');
+      const executors = searched.page;
       const advertised = executors.executors[0];
       if (
         !executors.complete ||

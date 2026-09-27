@@ -114,6 +114,22 @@ fn real_host_builtin_settings_save_and_read_back_domain_values() {
     assert_eq!(entry["pricing"]["inputUsdPer1M"], 1.25);
     assert_eq!(entry["pricing"]["outputUsdPer1M"], 4.5);
     assert_eq!(entry["pricing"]["cacheReadUsdPer1M"], 0.25);
+    let before = fixture.read("maka.insights", "request", json!({"kind":"preferences"}));
+    reveal(&mut tui, "Save this view");
+    tui.click_page_text("Save this view");
+    tui.wait_until(|screen| {
+        screen.contains("Load saved view")
+            && fixture.read("maka.insights", "request", json!({"kind":"preferences"}))
+                ["snapshot"]["revision"]
+                != before["snapshot"]["revision"]
+    });
+    let saved = fixture.read("maka.insights", "request", json!({"kind":"preferences"}));
+    assert_eq!(saved["snapshot"]["preferences"]["tab"], "pricing");
+    assert_eq!(
+        saved["snapshot"]["revision"].as_u64(),
+        Some(before["snapshot"]["revision"].as_u64().unwrap_or(0) + 1),
+        "the normal Save view control writes the shared preferences once"
+    );
     fixture.finish(tui);
 }
 
@@ -149,18 +165,45 @@ fn real_host_jev_settings_test_the_saved_local_endpoint() {
     category(&mut tui, "Jev", "Timeout (ms)");
     if !before["snapshot"]["settings"]["enabled"].as_bool().unwrap() {
         tui.click_page_text("Enabled");
+        wait_setting(&mut tui, "Enabled", "━●");
     }
     edit(&mut tui, "Endpoint", &url, "Timeout (ms)");
-    edit(&mut tui, "Model", "acceptance-jev", "Timeout (ms)");
-    edit(&mut tui, "Timeout (ms)", "5000", "Timeout (ms)");
-    edit(&mut tui, "API key", "synthetic-jev-key", "Timeout (ms)");
-    tui.click_page_text("Save");
-    tui.wait_for("Saved · type to replace");
-    let snapshot = fixture.read("maka.jev", "manage", json!({"kind":"read"}));
-    assert_eq!(
-        snapshot["snapshot"]["settings"],
-        json!({"enabled":true,"url":url,"model":"acceptance-jev","timeoutMs":5000})
+    // This single-row editor can show only the final wrapped row of a long URL.
+    // Select all, then collapse left to expose its beginning without changing it.
+    tui.send(b"\x01\x1b[D");
+    wait_setting(
+        &mut tui,
+        "Endpoint",
+        url.strip_suffix("/v1/chat/completions").unwrap(),
     );
+    edit(&mut tui, "Model", "acceptance-jev", "Timeout (ms)");
+    wait_setting(&mut tui, "Model", "acceptance-jev");
+    edit(&mut tui, "Timeout (ms)", "5000", "Timeout (ms)");
+    wait_setting(&mut tui, "Timeout (ms)", "5000");
+    tui.click_page_text("Save");
+    let settings = json!({"enabled":true,"url":url,"model":"acceptance-jev","timeoutMs":5000});
+    tui.wait_until(|screen| {
+        screen.contains("Test")
+            && fixture.read("maka.jev", "manage", json!({"kind":"read"}))["snapshot"]["settings"]
+                == settings
+    });
+    let configured = fixture.read("maka.jev", "manage", json!({"kind":"read"}));
+    assert_eq!(configured["snapshot"]["settings"], settings);
+    assert_eq!(
+        configured["snapshot"]["apiKeyConfigured"], false,
+        "saving ordinary settings does not save a credential"
+    );
+    edit(&mut tui, "New value", "synthetic-jev-key", "Timeout (ms)");
+    wait_setting(
+        &mut tui,
+        "New value",
+        &"*".repeat("synthetic-jev-key".len()),
+    );
+    tui.click_page_text("Save key change");
+    wait_setting(&mut tui, "API key", "Keep saved value");
+    wait_setting(&mut tui, "New value", "Saved value is kept");
+    let snapshot = fixture.read("maka.jev", "manage", json!({"kind":"read"}));
+    assert_eq!(snapshot["snapshot"]["settings"], settings);
     assert_eq!(snapshot["snapshot"]["configured"], true);
     tui.click_page_text("Test");
     // A local Remote call derives authority from its current caller directly.
@@ -168,4 +211,15 @@ fn real_host_jev_settings_test_the_saved_local_endpoint() {
     fixture.runtime.block_on(response).unwrap();
     assert!(tui.screen.snapshot().unwrap().screen.contains("ready"));
     fixture.finish(tui);
+}
+
+fn wait_setting(tui: &mut Pty, label: &str, value: &str) {
+    tui.wait_until(|screen| {
+        screen.lines().any(|line| {
+            let body = line.rsplit_once('│').map_or(line, |(_, body)| body);
+            body.trim_start().strip_prefix(label).is_some_and(|suffix| {
+                suffix.starts_with(' ') && suffix.trim_start().starts_with(value)
+            })
+        })
+    });
 }

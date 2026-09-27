@@ -34,6 +34,7 @@ use ratatui::{
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 mod collection;
+mod menu;
 pub(super) mod reader;
 mod reading;
 
@@ -104,9 +105,10 @@ impl<M> Outcome<M> {
     }
 }
 
-struct Popover {
+struct Popover<M> {
     owner: String,
     highlighted: usize,
+    menu: Option<menu::Frozen<M>>,
 }
 
 /// Geometry of the last drawn frame. Input only ever resolves against what
@@ -141,7 +143,7 @@ pub struct Surface<M> {
     /// Recently focused ids, newest last: returning to a group resumes there.
     recent: Vec<String>,
     hover: Option<String>,
-    popover: Option<Popover>,
+    popover: Option<Popover<M>>,
     offsets: HashMap<String, u16>,
     /// Native prefix used by this contribution's state, including while parked.
     reading_prefix: Option<String>,
@@ -392,6 +394,13 @@ impl<M: Clone> Surface<M> {
         items: &[Item<M>],
         context: &Context,
     ) -> Option<Chooser> {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|popover| popover.menu.is_some())
+        {
+            return self.draw_menu(frame, items, context);
+        }
         let popover = self.popover.as_mut()?;
         let Some(owner) = items
             .iter()
@@ -483,6 +492,14 @@ impl<M: Clone> Surface<M> {
     /// Whether this surface currently holds a modal layer over its page.
     pub fn captures(&self) -> bool {
         self.popover.is_some()
+    }
+
+    /// Actual painted chooser geometry, including menus anchored outside the surface.
+    pub fn popover_occludes(&self, area: Rect) -> bool {
+        self.committed
+            .as_ref()
+            .and_then(|committed| committed.popover.as_ref())
+            .is_some_and(|popover| !popover.rect.intersection(area).is_empty())
     }
 
     pub fn splits(&self) -> &Splits {
@@ -724,6 +741,10 @@ impl<M: Clone> Surface<M> {
                     }
                     _ => Outcome::handled(false),
                 },
+                MouseEventKind::ScrollUp if popover.menu.is_some() => self.menu_key(KeyCode::Up),
+                MouseEventKind::ScrollDown if popover.menu.is_some() => {
+                    self.menu_key(KeyCode::Down)
+                }
                 MouseEventKind::Down(MouseButton::Left) => match index {
                     Some(index) => self.choose(index),
                     None if chooser.rect.contains(point) => Outcome::handled(false),
@@ -764,7 +785,7 @@ impl<M: Clone> Surface<M> {
         }
         // A scrollbar column is a thumb to drag, never a row to open.
         let bar = committed.scrollers.iter().rev().find(|scroller| {
-            scroller.content > scroller.viewport.height
+            scroller.maximum() > 0
                 && scroller.viewport.contains(point)
                 && point.x == scroller.viewport.right().saturating_sub(1)
         });
@@ -777,7 +798,7 @@ impl<M: Clone> Surface<M> {
         match (mouse.kind, bar, dragged) {
             (MouseEventKind::Down(MouseButton::Left), Some(scroller), _)
             | (MouseEventKind::Drag(MouseButton::Left), _, Some(scroller)) => {
-                let maximum = scroller.content.saturating_sub(scroller.viewport.height);
+                let maximum = scroller.maximum();
                 let span = scroller.viewport.height.saturating_sub(1).max(1);
                 let row = point
                     .y
@@ -846,10 +867,15 @@ impl<M: Clone> Surface<M> {
                     On::Activate(_) if item.slot => Outcome::handled(true),
                     On::Scroll | On::Transcript | On::Collection(_) => Outcome::handled(true),
                     On::Activate(message) => Outcome::emit(message.clone()),
+                    On::Menu { identity, items } => {
+                        self.popover = Some(menu::open(id.clone(), identity, items));
+                        Outcome::handled(true)
+                    }
                     On::Choose { current, .. } => {
                         self.popover = Some(Popover {
                             owner: id.clone(),
                             highlighted: current.unwrap_or(0),
+                            menu: None,
                         });
                         Outcome::handled(true)
                     }
@@ -868,14 +894,15 @@ impl<M: Clone> Surface<M> {
                 else {
                     return Outcome::handled(false);
                 };
-                let maximum = scroller.content.saturating_sub(scroller.viewport.height);
+                let maximum = scroller.maximum();
+                let step = scroller.viewport.height.clamp(1, 3);
                 let offset = self.offsets.entry(scroller.id.clone()).or_default();
                 *offset = (*offset).min(maximum);
                 let before = *offset;
                 *offset = if mouse.kind == MouseEventKind::ScrollUp {
-                    offset.saturating_sub(3)
+                    offset.saturating_sub(step)
                 } else {
-                    offset.saturating_add(3).min(maximum)
+                    offset.saturating_add(step).min(maximum)
                 };
                 // Pointer targets move under the wheel; resolve them afresh.
                 self.hover = None;
@@ -889,6 +916,13 @@ impl<M: Clone> Surface<M> {
     }
 
     fn choose(&mut self, index: usize) -> Outcome<M> {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|popover| popover.menu.is_some())
+        {
+            return self.choose_menu(index);
+        }
         let owner = self.popover.take().map(|popover| popover.owner);
         let message = self
             .committed
@@ -904,6 +938,7 @@ impl<M: Clone> Surface<M> {
                     choices.get(index).map(|choice| choice.action.clone())
                 }
                 On::Activate(_)
+                | On::Menu { .. }
                 | On::Scroll
                 | On::Transcript
                 | On::Resize { .. }
@@ -916,6 +951,22 @@ impl<M: Clone> Surface<M> {
     }
 
     fn key(&mut self, key: KeyEvent) -> Outcome<M> {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|popover| popover.menu.is_some())
+            && key.modifiers.intersects(
+                KeyModifiers::CONTROL
+                    | KeyModifiers::ALT
+                    | KeyModifiers::SUPER
+                    | KeyModifiers::META,
+            )
+            && !menu::shell_shortcut(key)
+        {
+            // In particular Ctrl+Enter must not submit the composer underneath
+            // its open Add menu, nor Ctrl+J edit that hidden input.
+            return Outcome::handled(false);
+        }
         if key.modifiers.intersects(
             KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::META,
         ) {
@@ -969,7 +1020,7 @@ impl<M: Clone> Surface<M> {
                 .iter()
                 .find(|scroller| scroller.id == item(stops[at]).id)
         {
-            let maximum = scroller.content.saturating_sub(scroller.viewport.height);
+            let maximum = scroller.maximum();
             let page = scroller.viewport.height.saturating_sub(1).max(1);
             if maximum > 0 {
                 let offset = self.offsets.entry(scroller.id.clone()).or_default();
@@ -1020,7 +1071,8 @@ impl<M: Clone> Surface<M> {
                 }
             }
             (KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End, Some(at))
-                if item(stops[at]).axis == Axis::Vertical =>
+                if item(stops[at]).axis == Axis::Vertical
+                    || (item(stops[at]).follow_focus && item(stops[at]).tab_group.is_some()) =>
             {
                 match self.along(&stops, stops[at], key.code) {
                     Some(index) => index,
@@ -1050,10 +1102,15 @@ impl<M: Clone> Surface<M> {
                 }
                 return match &item.on {
                     On::Activate(message) => Outcome::emit(message.clone()),
+                    On::Menu { identity, items } => {
+                        self.popover = Some(menu::open(item.id.clone(), identity, items));
+                        Outcome::handled(true)
+                    }
                     On::Choose { current, .. } => {
                         self.popover = Some(Popover {
                             owner: item.id.clone(),
                             highlighted: current.unwrap_or(0),
+                            menu: None,
                         });
                         Outcome::handled(true)
                     }
@@ -1119,10 +1176,24 @@ impl<M: Clone> Surface<M> {
     fn along(&self, stops: &[usize], from: usize, code: KeyCode) -> Option<usize> {
         let items = &self.committed.as_ref()?.items;
         let group = items[from].group;
+        // A selectable list remains one keyboard group when its rows gain
+        // secondary controls. Vertical navigation also reaches off-screen rows.
+        let list_navigation = matches!(
+            code,
+            KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
+        ) && items[from].axis == Axis::Horizontal
+            && items[from].follow_focus
+            && items[from].tab_group.is_some();
         let peers: Vec<usize> = stops
             .iter()
             .copied()
-            .filter(|index| items[*index].group == group)
+            .filter(|index| {
+                if list_navigation {
+                    items[*index].follow_focus && items[*index].tab_group == items[from].tab_group
+                } else {
+                    items[*index].group == group
+                }
+            })
             .collect();
         let here = peers.iter().position(|index| *index == from)?;
         match code {
@@ -1196,6 +1267,13 @@ impl<M: Clone> Surface<M> {
     }
 
     fn chooser_key(&mut self, code: KeyCode) -> Outcome<M> {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|popover| popover.menu.is_some())
+        {
+            return self.menu_key(code);
+        }
         let Some(popover) = &mut self.popover else {
             return Outcome::ignored();
         };
@@ -1206,6 +1284,7 @@ impl<M: Clone> Surface<M> {
             .map_or(0, |item| match &item.on {
                 On::Choose { choices, .. } => choices.len(),
                 On::Activate(_)
+                | On::Menu { .. }
                 | On::Scroll
                 | On::Transcript
                 | On::Resize { .. }
@@ -1325,7 +1404,7 @@ fn reveal_offsets(
     let mut changed = false;
     while let Some(scroller) = index.and_then(|index| scrollers.get(index)) {
         let offset = offsets.entry(scroller.id.clone()).or_default();
-        let drawn = (*offset).min(scroller.content.saturating_sub(scroller.viewport.height));
+        let drawn = (*offset).min(scroller.maximum());
         let maximum = scroller.content.saturating_sub(scroller.height);
         let before = *offset;
         *offset = drawn.min(maximum);
@@ -1763,6 +1842,45 @@ mod tests {
                 surface.input(&click(rect.x, rect.y)).message,
                 Some(Message::Pick(20))
             );
+            let list = if nested {
+                "outer/sections/list"
+            } else {
+                "list"
+            };
+            let last = format!("{list}/rows/29");
+            for _ in 0..12 {
+                surface.input(&mouse(MouseEventKind::ScrollDown, 1, 1));
+                draw(&mut surface, 40, 8, tree());
+            }
+            let viewport = surface
+                .committed
+                .as_ref()
+                .unwrap()
+                .scrollers
+                .iter()
+                .find(|scroller| scroller.id == list)
+                .unwrap()
+                .viewport;
+            assert_eq!(
+                surface.rect(&last).unwrap().bottom(),
+                viewport.bottom(),
+                "wheel scrolling must not move the final row above the viewport bottom"
+            );
+            let x = viewport.right() - 1;
+            surface.input(&click(x, viewport.top()));
+            draw(&mut surface, 40, 8, tree());
+            surface.input(&mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                x,
+                viewport.bottom() - 1,
+            ));
+            surface.input(&mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                x,
+                viewport.bottom() - 1,
+            ));
+            draw(&mut surface, 40, 8, tree());
+            assert_eq!(surface.rect(&last).unwrap().bottom(), viewport.bottom());
             for _ in 0..12 {
                 surface.input(&mouse(MouseEventKind::ScrollUp, 1, 1));
                 draw(&mut surface, 40, 8, tree());
@@ -1777,6 +1895,19 @@ mod tests {
                 surface.rect(target).unwrap().is_empty(),
                 "resize must respect that reading position"
             );
+            if nested {
+                let mut surface = Surface::default();
+                draw(&mut surface, 80, 20, tree());
+                for _ in 0..12 {
+                    surface.input(&mouse(MouseEventKind::ScrollDown, 1, 16));
+                    draw(&mut surface, 80, 20, tree());
+                }
+                assert_eq!(
+                    surface.rect(&last).unwrap().bottom(),
+                    20,
+                    "bottom clipping must still allow the final row to reach the visible edge"
+                );
+            }
         }
     }
 

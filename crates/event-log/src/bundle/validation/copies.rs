@@ -154,14 +154,16 @@ impl Copies {
                             return Err(invalid("revision source exceeds its original fence"));
                         }
                         let selected: bool = sqlx::query_scalar(
-                            "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE sequence=? AND kind='invocation_opened'
+                            "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE sequence=?
                              AND json_extract(event_json,'$.invocation.turn_id')=?
-                             AND json_extract(event_json,'$.fact.input.kind')='message'
-                             AND json_array_length(event_json,'$.fact.input.source_messages')>0)"
+                             AND ((kind='invocation_opened'
+                               AND json_extract(event_json,'$.fact.input.kind')='message'
+                               AND json_array_length(event_json,'$.fact.input.source_messages')>0)
+                               OR (kind='message_steered' AND json_type(event_json,'$.fact.source')='object')))"
                         ).bind(sequence as i64).bind(turn_id).fetch_one(&mut *db).await?;
                         if !selected {
                             return Err(invalid(
-                                "revision source is not the selected editable Message opening",
+                                "revision source is not a selected canonical Message input",
                             ));
                         }
                         sqlx::query("INSERT INTO session_revision_sources VALUES(?,?)")

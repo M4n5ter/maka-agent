@@ -44,7 +44,7 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Select(_) => "connection-select",
-            Self::Open(_) => "connection-rename",
+            Self::Open(_) => "connection-actions",
             Self::Refresh => "command-refresh",
             Self::Next => "sessions-next",
             Self::Previous => "sessions-previous",
@@ -59,6 +59,7 @@ pub struct Row {
     pub slug: String,
     pub provider: maka_protocol::model_provider::Identity,
     pub configuration: Value,
+    pub request_body_overlay: Option<Value>,
     pub enabled: bool,
     pub enabled_models: u64,
     pub model_ids: Vec<String>,
@@ -220,6 +221,7 @@ impl Connections {
                 provider: serde_json::from_value(item["provider"].clone())
                     .expect("validated provider identity"),
                 configuration: item["configuration"].clone(),
+                request_body_overlay: item.get("requestBodyOverlay").cloned(),
                 enabled: item["enabled"].as_bool().unwrap(),
                 enabled_models: item["enabledModelIdCount"].as_u64().unwrap(),
                 model_ids: vec![],
@@ -296,9 +298,10 @@ impl App {
     pub fn connection_action(&mut self, command: Command) -> Option<Action> {
         match command {
             Command::Open(id) => {
-                self.connections.selected = Some(id);
-                let action = self.rename_connection_action()?;
-                return self.apply(action);
+                self.connections.selected = Some(id.clone());
+                self.connections
+                    .surface
+                    .open_menu(&format!("connections/rows/{id}/actions"));
             }
             Command::Select(id) => {
                 self.connections.selected = Some(id);
@@ -488,7 +491,7 @@ mod tests {
         app.apply(Action::Connection(Command::Select("id-0".into())));
         app.connections
             .surface
-            .focus("connections/rows/id-0".into());
+            .focus("connections/rows/id-0/summary".into());
         terminal.backend_mut().resize(60, 15);
         terminal
             .resize(ratatui::layout::Rect::new(0, 0, 60, 15))
@@ -499,7 +502,7 @@ mod tests {
         let first = app
             .connections
             .surface
-            .rect("connections/rows/id-0")
+            .rect("connections/rows/id-0/summary")
             .unwrap();
         app.input(Event::Mouse(crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::ScrollDown,
@@ -514,10 +517,30 @@ mod tests {
         assert!(
             app.connections
                 .surface
-                .rect("connections/rows/id-0")
+                .rect("connections/rows/id-0/summary")
                 .unwrap()
                 .is_empty()
         );
+        for (code, indices) in [
+            (KeyCode::Down, (1..16).collect::<Vec<_>>()),
+            (KeyCode::Up, (0..15).rev().collect()),
+        ] {
+            for index in indices {
+                app.input(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+                terminal
+                    .draw(|frame| crate::view::draw(frame, &mut app))
+                    .unwrap();
+                assert_eq!(app.connections.selected, Some(format!("id-{index}")));
+                assert!(
+                    !app.connections
+                        .surface
+                        .rect(&format!("connections/rows/id-{index}/summary"))
+                        .unwrap()
+                        .is_empty(),
+                    "arrow navigation reveals each row across viewport boundaries"
+                );
+            }
+        }
         app.input(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
         terminal
             .draw(|frame| crate::view::draw(frame, &mut app))
@@ -526,7 +549,7 @@ mod tests {
         assert!(
             !app.connections
                 .surface
-                .rect("connections/rows/id-15")
+                .rect("connections/rows/id-15/summary")
                 .unwrap()
                 .is_empty()
         );

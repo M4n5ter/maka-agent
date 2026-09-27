@@ -17,6 +17,8 @@
  * under the License.
  */
 
+import type { ConnectionVersionBasis, CredentialVersionBasis } from './runtime-policy.js';
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 export interface JsonArray extends ReadonlyArray<JsonValue> {}
@@ -26,6 +28,12 @@ export interface JsonObject {
 
 export interface SavedRequestHeaders {
   readonly names: readonly string[];
+  readonly basis: RequestHeadersBasis;
+}
+
+export interface RequestHeadersBasis {
+  readonly connection: ConnectionVersionBasis;
+  readonly credential: CredentialVersionBasis | null;
 }
 
 export interface RequestHeaderUpdate {

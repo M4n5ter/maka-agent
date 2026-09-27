@@ -25,7 +25,7 @@
     return en;
   };
   const view = ({ title, revision, fields = [], actions = [], root }) => ({
-    version: 8,
+    version: 9,
     title,
     revision: String(revision),
     fields,
@@ -74,6 +74,8 @@
     link: (key, title, route, extra) => item(key, title, { kind: 'route', route }, extra),
     act: (key, title, action, extra) => item(key, title, { kind: 'action', action }, extra),
     open: (key, title, session, extra) => item(key, title, { kind: 'session', session }, extra),
+    openMessage: (key, title, { session, turn, message, sequence }, extra) =>
+      item(key, title, { kind: 'session_message', session, turn, message, sequence }, extra),
     button: (key, action, role = 'normal', label) => ({
       kind: 'button',
       key,

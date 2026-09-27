@@ -91,6 +91,20 @@ impl MouseAction {
         })
     }
 
+    pub(super) fn applicable(self, modes: TerminalInputModes, size: TerminalSize) -> bool {
+        self.x < u64::from(size.cols())
+            && self.y < u64::from(size.rows())
+            && modes.mouse_encoding == MouseEncoding::Sgr
+            && match (modes.mouse_tracking_mode, self.event) {
+                (MouseTracking::None, _) => false,
+                (MouseTracking::X10, MouseEvent::Press(_)) => self.modifiers.bits() == 0,
+                (MouseTracking::X10, _)
+                | (MouseTracking::Vt200, MouseEvent::Move(_))
+                | (MouseTracking::Drag, MouseEvent::Move(None)) => false,
+                _ => true,
+            }
+    }
+
     pub(super) fn encode(
         self,
         modes: TerminalInputModes,

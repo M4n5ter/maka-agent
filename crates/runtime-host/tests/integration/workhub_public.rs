@@ -210,8 +210,8 @@ async fn scenario() {
                 json!({"query":"fixture-model"}),
             )
             .await;
-            assert_eq!(choices["complete"], true);
-            assert_eq!(choices["models"][0]["model"], json!(model));
+            assert_eq!(choices["page"]["complete"], true);
+            assert_eq!(choices["page"]["models"][0]["model"], json!(model));
             // A valid binding with unsupported thinking leaves a durable, failed
             // creation intent. A later user choice must repair it at the same ID.
             let rejected = remote_result(

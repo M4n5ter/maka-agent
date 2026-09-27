@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use crate::presentation::{OAuthPresentation, Presentation};
+use crate::presentation::{NativeDispatch, Publication};
 use crate::subscription::{PendingObservation, Subscriptions};
 use crate::{Notification, notification};
 use maka_protocol::{
@@ -26,7 +26,11 @@ use maka_protocol::{
     handshake::{ClientHello, HostHandshake, Lifecycle, decode_host_handshake},
 };
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
@@ -77,7 +81,13 @@ impl Admission {
     fn operation(operation: Operation) -> Self {
         if matches!(
             operation,
-            Operation::SubscriptionReady | Operation::SubscriptionClose
+            Operation::SubscriptionReady
+                | Operation::SubscriptionClose
+                | Operation::SubscriptionPtyInterestSet
+                | Operation::RuntimeResourceControllerAcquire
+                | Operation::RuntimeResourceControllerControl
+                | Operation::RuntimeResourceControllerRelease
+                | Operation::RuntimeResourceStop
         ) {
             Self::Control
         } else {
@@ -90,7 +100,7 @@ struct Command {
     request: Request,
     reply: oneshot::Sender<Result<Value, ClientError>>,
     permit: Option<OwnedSemaphorePermit>,
-    presentation: Option<mpsc::Sender<OAuthPresentation>>,
+    presentation: Option<Publication>,
 }
 
 pub(crate) struct PendingRequest {
@@ -233,11 +243,15 @@ impl Client {
             });
             let mut pending = HashMap::<String, Pending>::new();
             let mut subscriptions = Subscriptions::default();
-            let mut presentation = Presentation::default();
+            let mut presentation = NativeDispatch::default();
             let mut queued_command: Option<Command> = None;
-            let mut control_frame: Option<Value> = None;
+            // Both services share one bounded control lane. A frame contains
+            // only its bounded invocation ID and fixed acknowledgement data;
+            // neither notification bodies nor OAuth URLs enter this queue.
+            let mut control_frames = VecDeque::<Value>::new();
             let failure = loop {
-                let presentation_consumer = presentation.consumer();
+                let presentation_consumer = presentation.oauth_consumer();
+                let notification_consumer = presentation.notification_consumer();
                 tokio::select! {
                     _ = cancel.cancelled() => break closed("client disconnected"),
                     _ = notices.closed() => break closed("notification consumer dropped"),
@@ -247,8 +261,14 @@ impl Client {
                             None => std::future::pending().await,
                         }
                     } => break closed("OAuth presentation consumer dropped"),
-                    frame = presentation.completion(), if control_frame.is_none() => {
-                        control_frame = Some(frame);
+                    _ = async {
+                        match notification_consumer {
+                            Some(sender) => sender.closed().await,
+                            None => std::future::pending().await,
+                        }
+                    } => break closed("Native notification consumer dropped"),
+                    frame = presentation.completion(), if control_frames.len() < MAX_IN_FLIGHT_DOMAIN_REQUESTS => {
+                        control_frames.push_back(frame);
                     },
                     result = &mut writer_task => break match result {
                         Ok(Err(error)) => error,
@@ -268,12 +288,12 @@ impl Client {
                                 Ok(produced) => produced,
                                 Err(error) => break error,
                             };
-                            if control_frame.as_ref().is_some_and(|frame| !presentation.current_control(frame)) {
-                                control_frame = None;
-                            }
-                            if let Some(frame) = produced
-                                && control_frame.replace(frame).is_some() {
-                                break protocol("Host presentation exceeded pending control flow");
+                            control_frames.retain(|frame| presentation.current_control(frame));
+                            if let Some(frame) = produced {
+                                if control_frames.len() == MAX_IN_FLIGHT_DOMAIN_REQUESTS {
+                                    break protocol("Host native services exceeded pending control flow");
+                                }
+                                control_frames.push_back(frame);
                             }
                             continue;
                         }
@@ -334,12 +354,12 @@ impl Client {
                         let Some(command) = command else { break closed("client disconnected"); };
                         queued_command = Some(command);
                     }
-                    ready = outbound.reserve(), if control_frame.is_some() || queued_command.is_some() => {
+                    ready = outbound.reserve(), if !control_frames.is_empty() || queued_command.is_some() => {
                         let permit = match ready {
                             Ok(permit) => permit,
                             Err(_) => break closed("Host writer unavailable"),
                         };
-                        if let Some(frame) = control_frame.take() {
+                        if let Some(frame) = control_frames.pop_front() {
                             permit.send(frame);
                             continue;
                         }
@@ -423,13 +443,13 @@ impl Client {
     pub(crate) async fn request_presentation(
         &self,
         input: Value,
-        sender: mpsc::Sender<OAuthPresentation>,
+        publication: Publication,
     ) -> Result<Value, RequestFailure> {
         self.request_inner(
             Operation::ClientCapabilityReplace,
             input,
             REQUEST_TIMEOUT,
-            Some(sender),
+            Some(publication),
             Admission::Ordinary,
         )
         .await
@@ -462,7 +482,7 @@ impl Client {
         operation: Operation,
         input: Value,
         timeout: Duration,
-        presentation: Option<mpsc::Sender<OAuthPresentation>>,
+        presentation: Option<Publication>,
         admission: Admission,
     ) -> Result<Value, RequestFailure> {
         let deadline = tokio::time::Instant::now() + timeout;
@@ -494,12 +514,12 @@ impl Client {
         operation: Operation,
         input: Value,
         deadline: tokio::time::Instant,
-        presentation: Option<mpsc::Sender<OAuthPresentation>>,
+        presentation: Option<Publication>,
         admission: Admission,
     ) -> Result<PendingRequest, RequestFailure> {
         if operation == Operation::ClientCapabilityReplace && presentation.is_none() {
             return Err(RequestFailure::NotDispatched(protocol(
-                "Use the OAuth presentation publisher",
+                "Use a native service publisher",
             )));
         }
         let input = self
@@ -683,13 +703,13 @@ mod observation_tests {
             let (mut reader, mut writer) = server.await.unwrap();
             let publishing = tokio::spawn({
                 let client = client.clone();
-                async move { client.publish_oauth_presentation().await }
+                async move { client.publish_native_services().await }
             });
             let registration = reader.read().await.unwrap().unwrap();
             writer.write(&json!({"requestId":registration["requestId"],"operation":registration["operation"],"ok":true,
                 "result":{"registrationId":registration["input"]["registrationId"],"revision":1}})).await.unwrap();
-            let mut service = publishing.await.unwrap().unwrap();
-            let registration_id = service.registration_id.clone();
+            let mut services = publishing.await.unwrap().unwrap();
+            let registration_id = services.oauth.registration_id.clone();
             let call = |id: &str| json!({"kind":"client.capability.service_call","registrationId":registration_id,
                 "invocationId":id,"serviceId":"oauth_presentation","version":"1","method":"open_external",
                 "input":{"url":"https://login.example/device","stateHint":id}});
@@ -713,6 +733,9 @@ mod observation_tests {
             assert!(matches!(notices.recv().await, Some(Notification::Catalog(notice)) if notice.revision == 7));
             assert_eq!(client.capacity.available_permits(), MAX_IN_FLIGHT_DOMAIN_REQUESTS - 4);
             writer.write(&call("original")).await.unwrap();
+            writer.write(&json!({"kind":"client.capability.service_call","registrationId":registration_id,
+                "invocationId":"notification","serviceId":"maka_notifications","version":"1","method":"send",
+                "input":{"packageId":"fixture","notification":{"id":"queued","title":"Queued notification","body":"private","destination":{"kind":"local"}}}})).await.unwrap();
             writer.write(&json!({"kind":"configuration.changed","revision":8})).await.unwrap();
             assert!(matches!(notices.recv().await, Some(Notification::Catalog(notice)) if notice.revision == 8));
             // A's accepted frame is now staged behind the full writer. A
@@ -724,26 +747,32 @@ mod observation_tests {
             assert!(matches!(notices.recv().await, Some(Notification::Catalog(notice)) if notice.revision == 9));
             gate.blocked.store(false, Ordering::Release);
             if let Some(waker) = gate.writer.lock().unwrap().take() { waker.wake(); }
-            let mut accepted = 0;
-            for _ in 0..count + 1 {
+            let mut accepted = std::collections::BTreeSet::new();
+            for _ in 0..count + 2 {
                 let frame = reader.read().await.unwrap().unwrap();
                 if frame.get("kind").is_some() {
                     assert_eq!(frame["kind"], "client.capability.accepted");
-                    assert_eq!(frame["invocationId"], "replacement", "cancelled A must never leave staging");
-                    accepted += 1;
+                    assert_ne!(frame["invocationId"], "original", "cancelled A must never leave staging");
+                    accepted.insert(frame["invocationId"].as_str().unwrap().to_owned());
                 } else {
                     writer.write(&json!({"requestId":frame["requestId"],"operation":"plugin.remote","ok":true,"result":{"kind":"end"}})).await.unwrap();
                 }
             }
-            assert_eq!(accepted, 1);
+            assert_eq!(accepted, std::collections::BTreeSet::from(["replacement".into(), "notification".into()]));
             for pending in waiting { assert_eq!(pending.settle().await.unwrap(), json!({"kind":"end"})); }
             writer.write(&json!({"kind":"client.capability.admitted","invocationId":"replacement"})).await.unwrap();
-            let shown = service.recv().await.unwrap();
+            let shown = services.oauth.recv().await.unwrap();
             assert_eq!(shown.state_hint.as_deref(), Some("replacement"));
             assert!(shown.acknowledge_presented());
             let result = reader.read().await.unwrap().unwrap();
             assert_eq!(result["kind"], "client.capability.result");
             assert_eq!(result["invocationId"], "replacement");
+            writer.write(&json!({"kind":"client.capability.admitted","invocationId":"notification"})).await.unwrap();
+            let mut notification = services.notifications.recv().await.unwrap();
+            assert!(notification.acknowledge_presented());
+            let result = reader.read().await.unwrap().unwrap();
+            assert_eq!(result["kind"], "client.capability.result");
+            assert_eq!(result["invocationId"], "notification");
             client.disconnect();
         }).await.expect("writer backpressure blocked the independent reader");
     }

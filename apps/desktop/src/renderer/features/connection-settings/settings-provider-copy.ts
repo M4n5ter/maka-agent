@@ -232,6 +232,7 @@ const zhCopy = {
   },
   shared: {
     connectionStale: '连接状态已更新，请刷新列表后再删除。',
+    requestHeadersStale: '连接或请求头已更新，请取消并重新打开请求头编辑器，核对当前设置后再保存。',
     actionFallback: '模型连接服务暂时不可用，请稍后重试。', rateLimit: '当前账号或模型服务触发速率限制，请稍后重试。',
     timeout: '请求超时，请检查网络或代理后重试。', unavailable: '模型服务暂时不可用，请稍后重试。',
     network: '网络错误，请检查服务地址或代理设置后重试。', statusUnavailable: '连接测试状态暂时无法显示，请重新测试。',
@@ -413,6 +414,7 @@ const zhTwCopy = {
   },
   shared: {
     connectionStale: '連線狀態已更新，請重新整理清單後再刪除。',
+    requestHeadersStale: '連線或請求標頭已更新，請取消並重新開啟請求標頭編輯器，核對目前設定後再儲存。',
     actionFallback: '模型連線服務暫時不可用，請稍後重試。', rateLimit: '目前帳號或模型服務觸發速率限制，請稍後重試。',
     timeout: '請求超時，請檢查網路或代理後重試。', unavailable: '模型服務暫時不可用，請稍後重試。',
     network: '網路錯誤，請檢查服務地址或代理設定後重試。', statusUnavailable: '連線測試狀態暫時無法顯示，請重新測試。',
@@ -593,6 +595,7 @@ const enCopy: ProviderSettingsCopy = {
   },
   shared: {
     connectionStale: 'The connection changed while deleting. Refresh the list and try again.',
+    requestHeadersStale: 'The connection or headers changed. Cancel and reopen the header editor to review the current settings before saving.',
     actionFallback: 'The model connection service is temporarily unavailable. Try again later.', rateLimit: 'This account or model service is rate-limited. Try again later.',
     timeout: 'The request timed out. Check the network or proxy and try again.', unavailable: 'The model service is temporarily unavailable. Try again later.',
     network: 'Network error. Check the service URL or proxy settings and try again.', statusUnavailable: 'The connection test status is temporarily unavailable. Test again.',

@@ -146,6 +146,7 @@ impl SessionConfiguration {
             collaboration_mode: self.collaboration_mode,
             behavior: self.orchestration_mode.clone(),
             bound_tools: self.bound_tools.clone(),
+            tool_profile: self.tool_profile,
         }
     }
 

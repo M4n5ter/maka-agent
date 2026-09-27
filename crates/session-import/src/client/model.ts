@@ -18,7 +18,12 @@
  */
 
 import type { ClientContext, ClientWorkspace } from '@maka-agent/plugin-sdk/client';
-import type { Executions, ModelChoices, SessionImportReceipt } from '@maka-agent/plugin-sdk/host';
+import type {
+  Executions,
+  ModelSearch,
+  ModelSearchResult,
+  SessionImportReceipt,
+} from '@maka-agent/plugin-sdk/host';
 
 export type Location =
   | { kind: 'codex' | 'claude_code'; root: string }
@@ -64,7 +69,7 @@ type Request =
       expectedRevision: number | null;
       configuration: Snapshot['configuration'];
     }
-  | { kind: 'models'; query: { query: string } }
+  | { kind: 'models'; query: ModelSearch }
   | { kind: 'catalog'; sourceId: string; revision: number; query: Query }
   | { kind: 'prepare'; request: Intent }
   | { kind: 'deliver' | 'abandon'; operationId: string }
@@ -72,7 +77,7 @@ type Request =
   | { kind: 'copy'; operationId: string };
 type Response =
   | { kind: 'sources'; snapshot: Snapshot }
-  | { kind: 'models'; choices: ModelChoices }
+  | { kind: 'models'; choices: ModelSearchResult }
   | { kind: 'catalog'; page: Catalog }
   | { kind: 'copy'; copy: Copy }
   | { kind: 'copies'; page: Copies }

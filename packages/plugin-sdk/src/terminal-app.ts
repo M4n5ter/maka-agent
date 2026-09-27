@@ -49,7 +49,7 @@ export interface TerminalSubmission {
   readonly grant: string | null;
 }
 /** A view without its version; the SDK adds the one it speaks. */
-export type TerminalViewBody = Omit<TerminalViewTree, 'version'> & { version?: 8 };
+export type TerminalViewBody = Omit<TerminalViewTree, 'version'> & { version?: 9 };
 export type TerminalRecoveryReply = Exclude<TerminalReply, { kind: 'updated' }>;
 export interface TerminalAppHandlers<Model = Json> {
   read(route: Json, cx: TerminalContext<Model>): Awaitable<TerminalViewBody>;

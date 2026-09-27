@@ -63,13 +63,21 @@ impl Store for LostCreation {
 async fn creation_receipt_survives_lost_commit_reply_deletion_and_restart_without_reauthorization()
 {
     tokio::time::timeout(Duration::from_secs(15), async {
+        for effect in [
+            Effect::Notify(Notification::Local),
+            Effect::SessionResume { session_id: "scheduled-session".into() },
+            serde_json::from_value(serde_json::json!({"kind":"agent_run","execution":{
+                "cwd":"/scheduled-workspace","projectId":"scheduled-project","llmConnectionId":"connection","llmConnectionSlug":"provider","model":"model",
+                "thinkingLevel":"high","sandboxMode":"read-only","approvalPolicy":{"kind":"on-request"},"collaborationMode":"agent","orchestrationMode":"default"
+            }})).unwrap(),
+        ] {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("creation.sqlite");
         let operation_id = uuid::Uuid::new_v4();
         let task_id = format!("task-{operation_id}");
         let create = input(
             Schedule::Once { run_at: 100_000 },
-            Effect::Notify(Notification::Local),
+            effect,
         );
         let (entered, _calls) = mpsc::unbounded_channel();
         let dispatcher = Arc::new(DeliveryHost {
@@ -197,6 +205,7 @@ async fn creation_receipt_survives_lost_commit_reply_deletion_and_restart_withou
             log.shutdown().await.unwrap();
         }
         assert!(dispatcher.calls.lock().unwrap().is_empty());
+        }
     })
     .await
     .unwrap();

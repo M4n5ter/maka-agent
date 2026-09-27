@@ -21,6 +21,7 @@ mod bundle;
 pub(super) mod configuration;
 pub(super) mod copy;
 pub(super) mod create;
+mod workspace_context;
 pub(super) use crate::session::model;
 pub(super) mod mutation;
 pub(super) mod removal;
@@ -40,6 +41,10 @@ type Result<T> = std::result::Result<T, OperationError>;
 #[serde(untagged)]
 pub(super) enum Output {
     BundlePreviewed(maka_protocol::session::bundle::Previewed),
+    BundleImportPreviewed(maka_protocol::session::bundle::ImportPreviewed),
+    BundleImportQueried(maka_protocol::session::bundle::ImportQueried),
+    WorkspacePage(maka_protocol::session::workspace_context::Page),
+    WorkspaceCaptured(maka_protocol::session::workspace_context::Captured),
     BundleExported(maka_protocol::session::bundle::Exported),
     BundleImported(maka_protocol::session::bundle::Imported),
     Query(SessionCatalogQueryResult),
@@ -72,6 +77,30 @@ pub(super) async fn execute(
 ) -> Result<Output> {
     let log = host.log.as_ref();
     match operation {
+        Operation::SessionWorkspaceQuery => workspace_context::query(
+            host,
+            maka_protocol::session::workspace_context::decode_query(value).map_err(invalid)?,
+        )
+        .await
+        .map(Output::WorkspacePage),
+        Operation::SessionWorkspaceCapture => workspace_context::capture(
+            host,
+            maka_protocol::session::workspace_context::decode_capture(value).map_err(invalid)?,
+        )
+        .await
+        .map(Output::WorkspaceCaptured),
+        Operation::SessionBundleImportPreview => bundle::import_preview(
+            host,
+            maka_protocol::session::bundle::decode_import_preview(value).map_err(invalid)?,
+        )
+        .await
+        .map(Output::BundleImportPreviewed),
+        Operation::SessionBundleImportQuery => bundle::import_query(
+            host,
+            maka_protocol::session::bundle::decode_import_query(value).map_err(invalid)?,
+        )
+        .await
+        .map(Output::BundleImportQueried),
         Operation::SessionBundlePreview => bundle::preview(
             host,
             maka_protocol::session::bundle::decode_preview(value).map_err(invalid)?,

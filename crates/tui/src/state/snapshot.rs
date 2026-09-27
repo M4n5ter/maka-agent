@@ -29,6 +29,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+#[cfg(test)]
+mod completion_tests;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
@@ -39,6 +42,8 @@ pub struct Snapshot {
     attachments: BTreeMap<String, Vec<crate::pages::attachments::Saved>>,
     directories: BTreeMap<String, Vec<maka_protocol::turn::DirectoryReference>>,
     skills: BTreeMap<String, Vec<crate::pages::skills::Picked>>,
+    #[serde(default)]
+    completion: Option<crate::pages::completion::Checkpoint>,
     unresolved: Vec<Submission>,
     locale: LocalePreference,
     theme: crate::theme::Choice,
@@ -53,6 +58,12 @@ pub struct Snapshot {
     oauth: Option<crate::pages::manage::oauth::saved::Checkpoint>,
     branch: Option<crate::pages::branch::Checkpoint>,
     recap: Option<crate::pages::recap::Checkpoint>,
+    #[serde(default)]
+    bundle: Option<crate::pages::bundle::Checkpoint>,
+    #[serde(default)]
+    session_controls: Option<crate::pages::session_controls::Checkpoint>,
+    #[serde(default)]
+    resources: Option<crate::pages::resources::Checkpoint>,
     #[serde(default)]
     resume: Option<crate::pages::resume::Checkpoint>,
     revision: Option<crate::pages::revision::Checkpoint>,
@@ -70,7 +81,7 @@ impl Snapshot {
             .collect();
         unresolved.sort_by(|left, right| left.session.cmp(&right.session));
         Self {
-            version: 23,
+            version: 24,
             attachments: app.attachments.saved.clone(),
             directories: app.directories.clone(),
             skills: app.skills.saved.clone(),
@@ -81,6 +92,7 @@ impl Snapshot {
                 .iter()
                 .map(|(id, editor)| (id.clone(), editor.save()))
                 .collect(),
+            completion: app.completion_checkpoint(),
             unresolved,
             locale: app.i18n.preference,
             theme: app.theme.choice,
@@ -95,6 +107,9 @@ impl Snapshot {
             oauth: app.management.oauth.checkpoint(),
             branch: app.branch.checkpoint(),
             recap: app.recap.checkpoint(),
+            bundle: app.bundle.checkpoint(),
+            session_controls: app.session_controls.checkpoint(),
+            resources: app.resources.checkpoint(),
             resume: app.resume.checkpoint(),
             revision: app.revision.checkpoint(),
             apps: app.apps.checkpoints(root),
@@ -106,7 +121,7 @@ impl Snapshot {
         let id = |id: &str| {
             !id.is_empty() && id.encode_utf16().count() <= 256 && !id.chars().any(char::is_control)
         };
-        if self.version != 23
+        if self.version != 24
             || self.root != root
             || self.tabs.len() > LIMIT
             || self.drafts.len() > LIMIT
@@ -204,6 +219,48 @@ impl Snapshot {
             }
             request.input().validate().map_err(|e| e.to_string())?;
         }
+        if let Some(completion) = &self.completion {
+            completion.validate(root)?;
+            for draft in &completion.drafts {
+                let Some(editor) = self.drafts.get(&draft.key.session) else {
+                    return Err("Completion bindings have no draft".into());
+                };
+                if draft.key.input.is_some()
+                    || draft.key.display
+                    || draft.bindings.len() != editor.marks.len()
+                    || editor
+                        .marks
+                        .iter()
+                        .any(|mark| !draft.bindings.contains_key(&mark.id))
+                {
+                    return Err("Completion bindings differ from their editor marks".into());
+                }
+            }
+        }
+        let completion_bytes = self
+            .completion
+            .as_ref()
+            .map_or(0, |saved| saved.bytes())
+            .saturating_add(
+                self.revision
+                    .as_ref()
+                    .map_or(0, |saved| saved.completion_bytes()),
+            );
+        if completion_bytes > crate::pages::completion::bindings::BUDGET {
+            return Err("Combined completion payloads exceed their byte budget".into());
+        }
+        for (session, editor) in &self.drafts {
+            if !editor.marks.is_empty()
+                && !self.completion.as_ref().is_some_and(|saved| {
+                    saved
+                        .drafts
+                        .iter()
+                        .any(|draft| &draft.key.session == session)
+                })
+            {
+                return Err("Marked draft has no completion bindings".into());
+            }
+        }
         if let Some(oauth) = &self.oauth {
             oauth.validate()?;
         }
@@ -223,6 +280,15 @@ impl Snapshot {
         }
         if let Some(recap) = &self.recap {
             recap.validate(root)?;
+        }
+        if let Some(bundle) = &self.bundle {
+            bundle.validate(root)?;
+        }
+        if let Some(controls) = &self.session_controls {
+            controls.validate(root)?;
+        }
+        if let Some(resources) = &self.resources {
+            resources.validate(root)?;
         }
         if let Some(resume) = &self.resume {
             resume.validate(root)?;
@@ -244,10 +310,22 @@ impl Snapshot {
         if let Some(revision) = self.revision {
             app.revision.restore(revision);
         }
+        if let Some(completion) = self.completion {
+            app.completion.restore(completion);
+        }
         app.apps.restore(self.apps)?;
         app.plugins.restore(self.plugins);
         if let Some(recap) = self.recap {
             app.recap.restore(recap);
+        }
+        if let Some(bundle) = self.bundle {
+            app.bundle.restore(bundle);
+        }
+        if let Some(controls) = self.session_controls {
+            app.session_controls.restore(controls);
+        }
+        if let Some(resources) = self.resources {
+            app.resources.restore(resources);
         }
         if let Some(resume) = self.resume {
             app.resume.restore(resume);
@@ -490,7 +568,7 @@ mod tests {
         request.input().validate().unwrap();
         original.sending.get_mut("a").unwrap().request = request.clone();
         let saved = serde_json::to_value(Snapshot::capture(&original, "root")).unwrap();
-        assert_eq!(saved["version"], 23);
+        assert_eq!(saved["version"], 24);
         let mut restored = app();
         serde_json::from_value::<Snapshot>(saved.clone())
             .unwrap()

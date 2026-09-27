@@ -190,6 +190,7 @@ pub(super) async fn execute(
                                 .prepare_message_input(
                                     observation.session,
                                     source.message.content.clone(),
+                                    source.submitted_intent.as_ref(),
                                     Some(connection_id),
                                     active_tools,
                                 )

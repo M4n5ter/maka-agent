@@ -22,10 +22,13 @@
 //! The endpoint requires Host path access, as the management it wraps does.
 
 mod auth;
+mod install;
+mod launch;
 mod sign_in;
 mod url;
 
 use super::Management;
+use crate::Agent;
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     contributions::Staged,
@@ -36,7 +39,7 @@ use maka_plugins::{
         view::{self, Action, Confirm, Node, Reply, Role, Tone, View, build::*},
     },
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -82,8 +85,8 @@ pub(super) fn publish(
 
 #[derive(Clone)]
 struct Agents {
-    management: Arc<Management>,
-    setup: Arc<crate::setup::Provider>,
+    management: Arc<dyn Method>,
+    setup: Arc<dyn StreamProvider>,
     pages: auth::Pages,
 }
 
@@ -94,17 +97,6 @@ struct Configuration {
     #[serde(default)]
     agents: Vec<Agent>,
     activation_error: Option<String>,
-}
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Agent {
-    id: String,
-    display_name: String,
-    executable: String,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    env: BTreeMap<String, String>,
 }
 
 impl Agents {
@@ -209,12 +201,34 @@ impl App for Agents {
             {
                 this.pages.cancel(&cx.caller, attempt.id)?;
             }
+            if let Some(attempt) = this.pages.installation(&cx.caller)
+                && attempt.active()
+                && route["install"] != "antigravity"
+            {
+                this.pages.cancel_install(&cx.caller, attempt.id)?;
+            }
+            if route["install"] == "antigravity" {
+                return Ok(install::view(
+                    words,
+                    &configuration,
+                    this.pages.installation(&cx.caller),
+                    this.pages.connected(&cx.caller),
+                ));
+            }
             match route.get("agent") {
                 None => Ok(list(words, &configuration)),
                 Some(id) => {
                     let agent = id
                         .as_str()
                         .and_then(|id| configuration.agents.iter().find(|agent| agent.id == id));
+                    if let Some(agent) = agent
+                        && let Some(part) = route["launch"].as_str()
+                    {
+                        if route["items"] == true {
+                            return launch::items::view(words, &configuration, agent, &route);
+                        }
+                        return launch::advanced(words, &configuration, agent, part);
+                    }
                     let checked = this.pages.checked(&cx.caller).filter(|checked| {
                         route["agent"] == checked.agent
                             && configuration.revision == Some(checked.revision)
@@ -241,6 +255,7 @@ impl App for Agents {
                         this.pages.snapshot(&cx.caller),
                         words,
                     );
+                    launch::fit(&mut view);
                     Ok(view)
                 }
             }
@@ -251,6 +266,9 @@ impl App for Agents {
         let this = self.clone();
         Box::pin(async move {
             let configuration = this.read(&cx.caller).await?;
+            if submission.action.starts_with("cancel-install-") {
+                return install::cancel(&this.pages, &submission, &cx.caller);
+            }
             if submission.action.starts_with("cancel-authentication-") {
                 return sign_in::cancel(&this.pages, submission, &cx);
             }
@@ -266,6 +284,22 @@ impl App for Agents {
                         "請先取消目前登入。",
                     ),
                 });
+            }
+            if this
+                .pages
+                .installation(&cx.caller)
+                .is_some_and(|attempt| attempt.active())
+            {
+                return Ok(Reply::Rejected {
+                    message: cx.t(
+                        "Cancel the current installation first.",
+                        "请先取消当前安装。",
+                        "請先取消目前安裝。",
+                    ),
+                });
+            }
+            if submission.action.starts_with("launch-item-") {
+                return launch::items::submit(&this, configuration, &submission, &cx.caller).await;
             }
             if stamp(&configuration) != submission.revision {
                 return Ok(Reply::Conflict);
@@ -286,6 +320,13 @@ impl App for Agents {
             }
             if submission.action.starts_with("authenticate-") {
                 return sign_in::begin(&this.pages, &configuration, submission, &cx);
+            }
+            if submission.action == "install-antigravity" {
+                this.pages.begin_install(&cx.caller)?;
+                return Ok(Reply::Updated {});
+            }
+            if submission.action.starts_with("adopt-install-") {
+                return install::adopt(&this, configuration, &submission, &cx.caller).await;
             }
             let mut agents = configuration.agents;
             match submission.action.as_str() {
@@ -310,40 +351,24 @@ impl App for Agents {
                     let id = original.ok_or_else(|| Error::Invalid("No agent".into()))?;
                     agents.retain(|agent| agent.id != id);
                 }
+                "save-launch" => {
+                    let id = original.ok_or_else(|| Error::Invalid("No agent".into()))?;
+                    let Some(agent) = agents.iter_mut().find(|agent| agent.id == id) else {
+                        return Ok(Reply::Conflict);
+                    };
+                    if let Err(error) = launch::update(agent, &submission) {
+                        return rejected(error);
+                    }
+                }
                 "save" => {
                     let id = match &original {
                         Some(id) => id.clone(),
                         None => submission.text("id")?.trim().to_owned(),
                     };
-                    let mut env = BTreeMap::new();
-                    for line in submission.text("env")?.lines() {
-                        let line = line.trim();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        let Some((key, value)) = line.split_once('=') else {
-                            return Ok(Reply::Rejected {
-                                message: cx.t(
-                                    "Write each variable as NAME=value on its own line.",
-                                    "每行写一个变量，格式为 NAME=value。",
-                                    "每行寫一個變數，格式為 NAME=value。",
-                                ),
-                            });
-                        };
-                        env.insert(key.trim().to_owned(), value.to_owned());
-                    }
-                    let agent = Agent {
-                        id: id.clone(),
-                        display_name: submission.text("name")?.trim().to_owned(),
-                        executable: submission.text("executable")?.trim().to_owned(),
-                        args: submission
-                            .text("args")?
-                            .lines()
-                            .map(str::trim)
-                            .filter(|arg| !arg.is_empty())
-                            .map(str::to_owned)
-                            .collect(),
-                        env,
+                    let previous = agents.iter().find(|agent| agent.id == id);
+                    let agent = match launch::normal(&submission, id.clone(), previous) {
+                        Ok(agent) => agent,
+                        Err(error) => return rejected(error),
                     };
                     match agents.iter_mut().find(|item| item.id == id) {
                         Some(item) => *item = agent,
@@ -399,11 +424,12 @@ fn list(words: &Words, configuration: &Configuration) -> View {
                 clean(&agent.display_name),
                 json!({"agent": agent.id}),
             )
-            .detail(clean(&format!(
-                "{} {}",
-                agent.executable,
-                agent.args.join(" ")
-            )))
+            .detail(
+                clean(&format!("{} {}", agent.executable, agent.args.join(" ")))
+                    .chars()
+                    .take(256)
+                    .collect::<String>(),
+            )
             .into()
         })
         .collect();
@@ -412,6 +438,18 @@ fn list(words: &Words, configuration: &Configuration) -> View {
             "add",
             words.t("Add an agent", "添加代理", "新增代理"),
             json!({"agent": null}),
+        )
+        .into(),
+    );
+    rows.push(
+        link(
+            "installer",
+            words.t(
+                "Install Antigravity",
+                "安装 Antigravity",
+                "安裝 Antigravity",
+            ),
+            json!({"install":"antigravity"}),
         )
         .into(),
     );
@@ -435,35 +473,9 @@ fn editor(
     let text_of = |get: fn(&Agent) -> String| agent.map_or_else(String::new, get);
     let mut fields = vec![
         view::build::line("name", text_of(|agent| clean(&agent.display_name)), 256),
-        view::build::line(
-            "executable",
-            text_of(|agent| clean(&agent.executable)),
-            4096,
-        ),
-        area(
-            "args",
-            text_of(|agent| {
-                agent
-                    .args
-                    .iter()
-                    .map(|arg| clean(arg))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
-            8192,
-        ),
-        area(
-            "env",
-            text_of(|agent| {
-                agent
-                    .env
-                    .iter()
-                    .map(|(key, value)| clean(&format!("{key}={value}")))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
-            8192,
-        ),
+        launch::executable_field(agent),
+        launch::field("args", agent),
+        launch::field("env", agent),
     ];
     let mut form = vec![];
     let mut sent: Vec<String> = vec![];
@@ -479,16 +491,18 @@ fn editor(
         ("env", "Environment", "环境变量", "環境變數"),
     ] {
         form.push(input(id, id, words.t(en, zh_cn, zh_tw)));
-        sent.push(id.into());
+        if fields.iter().any(|field| field.id == id && field.enabled) {
+            sent.push(id.into());
+        }
     }
     let mut children = vec![link(
         "all-agents", words.t("All agents", "所有代理", "所有代理"), Value::Null,
     ).into(), text(
         "hint",
         words.t(
-            "One argument per line, and NAME=value per line for the environment. Sign-in secrets stay in the agent's own login.",
-            "参数每行一个，环境变量每行一个 NAME=value。登录凭据保存在代理自己的登录中。",
-            "參數每行一個，環境變數每行一個 NAME=value。登入憑證保存在代理自己的登入中。",
+            "One argument per line; NAME=value for environment variables. Complex values use Advanced after saving. Unchanged values are kept exactly.",
+            "参数每行一个，环境变量使用 NAME=value。复杂值保存后可通过高级编辑修改；未改的值会原样保留。",
+            "參數每行一個，環境變數使用 NAME=value。複雜值儲存後可透過進階編輯修改；未改的值會原樣保留。",
         ),
         Tone::Subtle,
     )];
@@ -505,6 +519,9 @@ fn editor(
         ));
     }
     children.push(stack("form", form));
+    if let Some(agent) = agent {
+        children.push(launch::links(words, agent));
+    }
     let mut actions = vec![Action {
         fields: sent,
         ..view::build::action("save", words.t("Save", "保存", "儲存"))

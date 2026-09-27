@@ -26,6 +26,8 @@ use maka_runtime::{
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+#[path = "steering/sources.rs"]
+mod source_cases;
 #[path = "support/steering.rs"]
 mod support;
 use support::{invocation, steering, transcript, write};

@@ -164,8 +164,7 @@ fn real_host_graph_reads_every_work_and_unicode_page_through_public_routes() {
             tui.screen.snapshot().unwrap().screen
         );
     }
-    tui.wait_for("◨");
-    tui.click_text("◨");
+    tui.session_view_action("Show panels");
     tui.wait_for("Give this session an objective");
     reveal(&mut tui, "Next work items");
     tui.wait_for("Page 16/16");
@@ -175,9 +174,13 @@ fn real_host_graph_reads_every_work_and_unicode_page_through_public_routes() {
     reading::click(&mut tui, "Graph reading instruction");
     reading::reveal(&mut tui, "Next instruction page");
     reading::click(&mut tui, "Next instruction page");
+    // Await the new detail page before scrolling; the old Unicode frame can
+    // otherwise send a wheel event into the temporary outer loading panel.
+    tui.wait_for("Open the agent's session");
     reading::reveal(&mut tui, "tail instruction");
     reading::reveal(&mut tui, "Next result page");
     reading::click(&mut tui, "Next result page");
+    tui.wait_for("Open the agent's session");
     reading::reveal(&mut tui, "tail result");
     // Each back restores the preceding offsets and its reading position.
     eprintln!("Graph reading: Back to the preceding result page");

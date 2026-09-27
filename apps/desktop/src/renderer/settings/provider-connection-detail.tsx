@@ -30,7 +30,7 @@ import {
   Token,
   VStack,
 } from '@astryxdesign/core';
-import { isRelayProviderType, PROVIDER_REGISTRY } from '@maka/core/llm-connections';
+import { isRelayProviderType, PROVIDER_REGISTRY, type RequestHeadersBasis } from '@maka/core/llm-connections';
 import {
   supportsRelayFastServiceTier,
   modelLimitsConflict,
@@ -214,13 +214,16 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     contextWindowInput.trim() !== '' && parseContextWindowInput(contextWindowInput) === null;
   const [modelFilter, setModelFilter] = useState('');
   const [savedHeaderNames, setSavedHeaderNames] = useState<readonly string[]>([]);
+  const [headerBasis, setHeaderBasis] = useState<RequestHeadersBasis | null>(null);
+  const [headersLoading, setHeadersLoading] = useState(false);
   const [headerDrafts, setHeaderDrafts] = useState<RequestHeaderDraft[]>([]);
   const savedBodyText = formatRequestBodyOverlay(connection.requestBodyOverlay);
   const [bodyDraft, setBodyDraft] = useState(savedBodyText);
   const [requestCustomizationBusy, setRequestCustomizationBusy] = useState(false);
   const toast = useToast();
   const mounted = useMountedRef();
-  const allActionsBusy = detailActionBusy || requestCustomizationBusy;
+  const headerEditorOpen = editingRow === 'headers';
+  const allActionsBusy = detailActionBusy || requestCustomizationBusy || (headerEditorOpen && headersLoading);
   const hasHeaderDraftChanges =
     headerDrafts.length !== savedHeaderNames.length ||
     headerDrafts.some(
@@ -231,16 +234,22 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     );
 
   useEffect(() => {
-    let current = true;
-    setSavedHeaderNames([]);
-    setHeaderDrafts([]);
     setBodyDraft(formatRequestBodyOverlay(connection.requestBodyOverlay));
     setModelFilter('');
+  }, [connection.connectionId, connection.slug]);
+
+  useEffect(() => {
+    let current = true;
+    setHeadersLoading(true);
+    setSavedHeaderNames([]);
+    setHeaderBasis(null);
+    setHeaderDrafts([]);
     void props.bridge
       .getRequestHeaders({ connectionId: connection.connectionId, slug: connection.slug })
-      .then(({ names }) => {
+      .then(({ names, basis }) => {
         if (!current) return;
         setSavedHeaderNames(names);
+        setHeaderBasis(basis);
         setHeaderDrafts(savedRequestHeaderDrafts(names));
       })
       .catch((error) => {
@@ -249,11 +258,14 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
           copy.requestCustomizationInvalid,
           providerPanelActionErrorMessage(error, locale),
         );
+      })
+      .finally(() => {
+        if (current) setHeadersLoading(false);
       });
     return () => {
       current = false;
     };
-  }, [connection.slug, props.bridge, toast]);
+  }, [connection.connectionId, connection.slug, props.bridge, toast, headerEditorOpen]);
 
   const numericInputs = typeof editingRow === 'object' && editingRow?.model === editingModelId ? editingRow.numericInputs : undefined;
   const numericInvalid = Object.values(numericInputs ?? {}).some((input) => input.trim() !== '' && parseContextWindowInput(input) === null);
@@ -289,6 +301,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
   }
 
   async function saveRequestHeaders(): Promise<boolean> {
+    if (!headerBasis) return false;
     let updates;
     try {
       updates = requestHeaderUpdates(headerDrafts);
@@ -300,10 +313,12 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     try {
       const saved = await props.bridge.setRequestHeaders(
         { connectionId: connection.connectionId, slug: connection.slug },
+        headerBasis,
         updates,
       );
       if (!mounted.current) return true;
       setSavedHeaderNames(saved.names);
+      setHeaderBasis(saved.basis);
       setHeaderDrafts(savedRequestHeaderDrafts(saved.names));
       await props.onChanged();
       return true;
@@ -747,7 +762,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
             actionAriaLabel={`${copy.edit}: ${copy.requestHeaders}`}
             isEditing={editingRow === 'headers'}
             isDisabled={allActionsBusy}
-            canSave={hasHeaderDraftChanges}
+            canSave={headerBasis !== null && hasHeaderDraftChanges}
             saveLabel={copy.save}
             cancelLabel={copy.cancel}
             onEdit={() => openRow('headers')}

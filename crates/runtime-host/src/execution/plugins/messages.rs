@@ -120,7 +120,7 @@ impl BoundCommands {
                 };
                 drop(gate);
                 prepared = Some(
-                    host.prepare_message_input(session, request.content.clone(), None, tools)
+                    host.prepare_message_input(session, request.content.clone(), None, None, tools)
                         .await
                         .map_err(protocol)?,
                 );

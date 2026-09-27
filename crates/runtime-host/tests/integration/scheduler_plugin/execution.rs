@@ -37,8 +37,10 @@ async fn scenario() {
     let fixture = ClientFixture::new("maka-scheduler-execution-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
+    restricted_source(&fixture, model.clone()).await;
     let mut task_id = String::new();
     let mut run_id = Value::Null;
+    let mut scheduled_session = String::new();
     for reopened in [false, true] {
         let host = Host::open(fixture.owner()).await.unwrap();
         #[cfg(unix)]
@@ -70,11 +72,6 @@ async fn scenario() {
         let mut peer = Peer::new(host.clone(), "scheduler-execution").await;
         ready(&mut peer).await;
         if !reopened {
-            rpc(&mut peer, "session.create", json!({
-                "sessionId":"scheduler-source","workspace":{"kind":"host_path","path":fixture.workspace},
-                "modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model},
-                "sandboxMode":"workspace-write"
-            })).await;
             approve(&mut peer, json!({"kind":"workspace","workspace":{"kind":"host_path","path":fixture.workspace},"sandboxMode":"workspace-write"})).await;
             rpc(&mut peer, "turn.start", json!({
                 "sessionId":"scheduler-source","turnId":"schedule-turn","content":{"text":"Schedule independent work"},
@@ -133,7 +130,12 @@ async fn scenario() {
             );
             let task = settled(&mut peer, &task_id).await;
             assert_eq!(task["runs"][0]["outcome"], "ok", "{task}");
+            assert_eq!(
+                task["effect"]["execution"]["boundTools"],
+                json!(["Read", "ScheduledTask", "tool_search"])
+            );
             let session_id = task["runs"][0]["sessionId"].clone();
+            scheduled_session = session_id.as_str().unwrap().to_owned();
             run_id = task["runs"][0]["runId"].clone();
             assert_ne!(session_id, "scheduler-source");
             let session = rpc(
@@ -142,6 +144,20 @@ async fn scenario() {
                 json!({"kind":"get","sessionId":session_id}),
             )
             .await;
+            assert!(
+                background.body["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|tool| {
+                        !matches!(
+                            tool["function"]["name"].as_str(),
+                            Some("Write" | "Edit" | "Bash" | "Shell" | "apply_patch")
+                        )
+                    }),
+                "excluded mutation tools remain absent from the scheduled model: {}",
+                background.body
+            );
             assert_eq!(
                 session["session"]["sandboxMode"], "workspace-write",
                 "{session}"
@@ -253,6 +269,18 @@ async fn scenario() {
         server.await.unwrap().unwrap();
         guard.disarm();
         drop(host);
+        let log = fixture.log().await;
+        let stored = log
+            .get_session::<maka_runtime_host::session::SessionConfiguration>(&scheduled_session)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.configuration.bound_tools,
+            Some(["Read".into(), "ScheduledTask".into(), "tool_search".into()].into()),
+            "scheduled root retains the original tool ceiling through restart"
+        );
+        log.close().await.unwrap();
     }
 }
 async fn rpc(peer: &mut Peer, operation: &str, input: Value) -> Value {
@@ -358,4 +386,41 @@ fn tool(id: &str, name: &str, input: Value) -> Value {
 }
 fn answer(text: &str) -> Value {
     json!({"index":0,"delta":{"content":text},"finish_reason":"stop"})
+}
+
+// Establish a genuinely restricted canonical Session before opening Host. The
+// ordinary session.create wire intentionally does not accept plugin tool ceilings.
+async fn restricted_source(
+    fixture: &ClientFixture,
+    model: maka_runtime_host::session::SessionModel,
+) {
+    let input = maka_protocol::session::decode_session_create_input(&json!({
+        "sessionId":"scheduler-source", "workspace":{"kind":"host_path","path":fixture.workspace},
+        "modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model},
+        "sandboxMode":"workspace-write"
+    })).unwrap();
+    let prepared = maka_runtime_host::session::PreparedSession::new(input).unwrap();
+    let fingerprint = prepared.fingerprint();
+    let mut session = prepared.bind(
+        maka_runtime::execution::WorkspaceProjection {
+            target: maka_runtime::execution::WorkspaceTarget::HostPath {
+                path: fixture.workspace.to_string_lossy().into_owned(),
+            },
+            host_cwd: fixture.workspace.to_string_lossy().into_owned(),
+        },
+        model,
+        maka_runtime::execution::SandboxMode::WorkspaceWrite,
+    );
+    session.bound_tools =
+        Some(["Read".into(), "ScheduledTask".into(), "tool_search".into()].into());
+    let log = fixture.log().await;
+    log.create_session(
+        "scheduler-source",
+        &fingerprint,
+        &session,
+        jiff::Timestamp::now().as_millisecond().try_into().unwrap(),
+    )
+    .await
+    .unwrap();
+    log.close().await.unwrap();
 }

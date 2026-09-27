@@ -64,6 +64,11 @@ export interface TerminalTextInputAction {
   readonly text: string;
 }
 
+export interface TerminalPasteInputAction {
+  readonly type: 'paste';
+  readonly text: string;
+}
+
 export interface TerminalKeyInputAction {
   readonly type: 'key';
   readonly key: TerminalInputNamedKey | string;
@@ -96,11 +101,13 @@ export type TerminalMouseInputAction =
 
 export type TerminalInputAction =
   | TerminalTextInputAction
+  | TerminalPasteInputAction
   | TerminalKeyInputAction
   | TerminalMouseInputAction;
 
 export interface TerminalInputModes {
   readonly applicationCursorKeysMode: boolean;
+  readonly bracketedPasteMode?: boolean;
 }
 
 export interface TerminalInputState extends TerminalInputModes {
@@ -161,9 +168,21 @@ export function parseTerminalInputAction(value: unknown): TerminalInputAction {
     }
     return { type: 'text', text: action.text };
   }
+  if (action.type === 'paste') {
+    assertOnlyActionFields(action, ['type', 'text']);
+    if (
+      typeof action.text !== 'string' ||
+      action.text.length === 0 ||
+      !isWellFormedTerminalInput(action.text) ||
+      hasTerminalControlCharacter(action.text.replace(/[\r\n\t]/g, ''))
+    ) {
+      throw new Error('Terminal paste must contain text without controls except whitespace');
+    }
+    return { type: 'paste', text: action.text };
+  }
   if (action.type === 'mouse') return parseMouseAction(action);
   if (action.type !== 'key') {
-    throw new Error('Terminal input action type must be text, key, or mouse');
+    throw new Error('Terminal input action type must be text, paste, key, or mouse');
   }
   assertOnlyActionFields(action, ['type', 'key', 'modifiers']);
   if (typeof action.key !== 'string') throw new Error('Terminal key must be a string');
@@ -185,7 +204,7 @@ export function parseTerminalInputAction(value: unknown): TerminalInputAction {
 export function normalizeTerminalInputActionDefaults(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const normalized = { ...(value as Record<string, unknown>) };
-  if (normalized.type === 'text') {
+  if (normalized.type === 'text' || normalized.type === 'paste') {
     if (normalized.key === '' || normalized.key === null) delete normalized.key;
     deleteProviderDefaults(normalized, ['event', 'x', 'y', 'button', 'direction']);
   } else if (normalized.type === 'key') {
@@ -215,6 +234,7 @@ export function encodedTerminalInputActionsByteLength(
   const encoded = actions
     .map((action) => {
       if (action.type === 'mouse') return encodeSgrTerminalMouseInputAction(action);
+      if (action.type === 'paste') return `\u001b[200~${action.text}\u001b[201~`;
       return encodeTerminalInputAction(action, { applicationCursorKeysMode: false });
     })
     .join('');
@@ -230,6 +250,11 @@ function encodeTerminalInputAction(
   state: TerminalInputModes | TerminalInputState,
 ): string {
   if (action.type === 'text') return action.text;
+  if (action.type === 'paste') {
+    parseTerminalInputAction(action);
+    const text = action.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return state.bracketedPasteMode ? `\u001b[200~${text}\u001b[201~` : text.replace(/\n/g, '\r');
+  }
   if (action.type === 'mouse') {
     return encodeTerminalMouseInputAction(action, requireTerminalInputState(state));
   }
@@ -390,7 +415,7 @@ function xtermModifierParameter(modifiers: ReadonlySet<TerminalInputModifier>): 
 }
 
 function formatTerminalInputAction(action: TerminalInputAction): string {
-  if (action.type === 'text') return JSON.stringify(action.text);
+  if (action.type === 'text' || action.type === 'paste') return JSON.stringify(action.text);
   if (action.type === 'mouse') return formatTerminalMouseInputAction(action);
   const key = isTerminalInputNamedKey(action.key)
     ? formatNamedKey(action.key)
@@ -534,7 +559,27 @@ function isEmptyArray(value: unknown): value is [] {
   return Array.isArray(value) && value.length === 0;
 }
 import {
+  TerminalMouseInputRejectedError,
   encodeSgrTerminalMouseInputAction,
   encodeTerminalMouseInputAction,
   formatTerminalMouseInputAction,
 } from './terminal-mouse-input.js';
+
+/** Human pointer events can race terminal mode and viewport changes. */
+export function encodeTerminalControllerActions(
+  actions: readonly TerminalInputAction[],
+  state: TerminalInputState,
+): string {
+  return actions
+    .map((action) => {
+      // Validate first: malformed actions are never covered by the mode exception.
+      const parsed = parseTerminalInputAction(action);
+      try {
+        return encodeTerminalInputAction(parsed, state);
+      } catch (error) {
+        if (parsed.type === 'mouse' && error instanceof TerminalMouseInputRejectedError) return '';
+        throw error;
+      }
+    })
+    .join('');
+}

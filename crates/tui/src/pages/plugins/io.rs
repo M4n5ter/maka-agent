@@ -24,6 +24,7 @@ use maka_protocol::plugin::{Apply, PackageInstall, PackageTarget};
 #[derive(Clone, Debug, Serialize)]
 pub(super) enum Mutation {
     Install(PackageInstall),
+    Export(maka_protocol::plugin::PackageExport),
     Restart(PackageTarget),
     Uninstall(PackageTarget),
     Apply(Apply),
@@ -121,16 +122,22 @@ pub enum Output {
     Snapshot(Snapshot),
     Preview(PackagePreview),
     Receipt(Receipt),
+    Exported(maka_protocol::plugin::Exported),
 }
 pub async fn execute(client: &Client, request: &Request) -> Result<Output, RequestFailure> {
     Ok(match &request.body {
         Body::Read => Output::Snapshot(super::query::snapshot(client).await?),
         Body::Preview(path) => Output::Preview(client.plugin_package_preview(path.clone()).await?),
+        Body::Write {
+            mutation: Mutation::Export(input),
+            ..
+        } => Output::Exported(client.plugin_package_export(input.clone()).await?),
         Body::Write { mutation, .. } => Output::Receipt(match mutation {
             Mutation::Install(input) => client.plugin_package_install(input.clone()).await?.receipt,
             Mutation::Restart(input) => client.plugin_package_restart(input.clone()).await?,
             Mutation::Uninstall(input) => client.plugin_package_uninstall(input.clone()).await?,
             Mutation::Apply(input) => client.plugin_composition_apply(input.clone()).await?,
+            Mutation::Export(_) => unreachable!("export has a file receipt"),
         }),
     })
 }
@@ -217,7 +224,8 @@ impl App {
                 state.sync_drafts(&snapshot);
                 state.snapshot = Some(snapshot);
                 state.ensure_draft();
-                state.error = None;
+                // Background facts cannot erase a just-rejected write before
+                // its result is read. Explicit Refresh/edit already clears it.
             }
             Ok(Output::Preview(preview)) => {
                 state.preview = Some(preview);
@@ -253,6 +261,27 @@ impl App {
                                     draft.fields[0].text() == key.id && draft.scope == key.scope
                                 }))
                     });
+                }
+            }
+            Ok(Output::Exported(receipt)) => {
+                if let Some(Mutation::Export(input)) = request.mutation() {
+                    state.exported = Some(super::export::Exported {
+                        package: input.extension_id.clone(),
+                        target: receipt.target_path,
+                        digest: input
+                            .expected
+                            .content_digest
+                            .clone()
+                            .expect("reviewed package"),
+                    });
+                    if let Some((_, draft)) = state
+                        .drafts
+                        .iter_mut()
+                        .find(|(place, _)| *place == Place::Export(input.extension_id.clone()))
+                    {
+                        draft.dirty[0] = false;
+                    }
+                    state.error = None;
                 }
             }
             Err(error) => {

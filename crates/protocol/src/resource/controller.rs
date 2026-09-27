@@ -19,7 +19,10 @@
 
 use super::{MAX_RESULT_BYTES, entity, invalid, text};
 use crate::{Operation, Result};
-use maka_runtime::terminal::TerminalSize;
+use maka_runtime::terminal::{
+    TerminalSize,
+    input::{InputAction, encoded_actions_byte_len},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,12 +49,24 @@ impl ControllerIdentity {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PtyControl {
     Input { input: String },
+    Actions { actions: Vec<InputAction> },
     Resize { cols: u16, rows: u16 },
     InputAndResize { input: String, cols: u16, rows: u16 },
 }
+pub enum PtyInput<'a> {
+    Raw(&'a str),
+    Actions(&'a [InputAction]),
+}
 impl PtyControl {
-    pub fn parts(&self) -> Result<(&str, Option<TerminalSize>)> {
+    pub fn parts(&self) -> Result<(PtyInput<'_>, Option<TerminalSize>)> {
+        if let Self::Actions { actions } = self {
+            if encoded_actions_byte_len(actions).map_err(invalid)? > 32 * 1024 {
+                return Err(invalid("encoded controller input exceeds 32 KiB"));
+            }
+            return Ok((PtyInput::Actions(actions), None));
+        }
         let (input, size) = match self {
+            Self::Actions { .. } => unreachable!(),
             Self::Input { input } => (input.as_str(), None),
             Self::Resize { cols, rows } => ("", Some((*cols, *rows))),
             Self::InputAndResize { input, cols, rows } => (input.as_str(), Some((*cols, *rows))),
@@ -60,7 +75,7 @@ impl PtyControl {
             text(input, 32 * 1024)?;
         }
         Ok((
-            input,
+            PtyInput::Raw(input),
             size.map(|(cols, rows)| TerminalSize::new(cols, rows))
                 .transpose()
                 .map_err(invalid)?,
@@ -206,6 +221,7 @@ mod tests {
             json!({"kind":"input","input":"\u{1b}[A\0中\r"}),
             json!({"kind":"input","input":"x".repeat(32 * 1024)}),
             json!({"kind":"resize","cols":240,"rows":100}),
+            json!({"kind":"actions","actions":[{"type":"paste","text":"a\nb"},{"type":"key","key":"arrow_up","modifiers":[]}]}),
             json!({"kind":"input_and_resize","input":" ","cols":2,"rows":1}),
         ] {
             let value = wire(control);
@@ -216,6 +232,12 @@ mod tests {
         }
         for control in [
             json!({"kind":"input","input":""}),
+            json!({"kind":"actions","actions":[]}),
+            json!({"kind":"actions","actions":vec![json!({"type":"text","text":"x"});65]}),
+            json!({"kind":"actions","actions":[{"type":"paste","text":"x".repeat(32 * 1024 - 11)}]}),
+            json!({"kind":"actions","actions":[{"type":"paste","text":"\u{1b}[201~forged"}]}),
+            json!({"kind":"actions","actions":[{"type":"key","key":"enter","modifiers":["alt"]}]}),
+            json!({"kind":"actions","actions":[{"type":"text","text":"x"}],"input":"raw"}),
             json!({"kind":"input","input":"中".repeat(32 * 1024 / 3 + 1)}),
             json!({"kind":"input","input":"x","cols":80}),
             json!({"kind":"resize","cols":1,"rows":24}),

@@ -73,7 +73,7 @@ fn rust_parent_and_installed_js_child_restore_exact_routes_and_independent_draft
     std::fs::write(
         package.join("maka.extension.json"),
         json!({
-            "schemaVersion": 1, "id": PACKAGE, "runtime": {"entry": "host.mjs", "sdkVersion": 2}
+            "schemaVersion": 1, "id": PACKAGE, "runtime": {"entry": "host.mjs", "sdkVersion": 3}
         })
         .to_string(),
     )

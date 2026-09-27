@@ -56,10 +56,23 @@ pub(super) fn publish(owner: Arc<Owner>, staged: &mut Staged) -> Result<(), Stri
         ("panel", Placement::Panel, false),
         ("status", Placement::Status, true),
     ] {
-        let descriptor = Descriptor::new(title(), Context::Session)
+        let mut descriptor = Descriptor::new(title(), Context::Session)
             .placement(placement)
             .icon("▤", "P")
             .changes("terminal_changes");
+        if descriptor.placement == Placement::Page {
+            descriptor = descriptor.command(maka_plugins::terminal_ui::Command {
+                name: "plan".into(),
+                aliases: Vec::new(),
+                title: title(),
+                description: Text::localized(
+                    "View and manage this session's plan",
+                    "查看和管理当前会话的计划",
+                    "檢視和管理目前對話的計畫",
+                ),
+                route: Value::Null,
+            });
+        }
         staged
             .insert(
                 key(ID, name).map_err(super::message)?,

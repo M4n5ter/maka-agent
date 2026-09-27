@@ -74,6 +74,30 @@ enum Completed {
             String,
         >,
     ),
+    Preferences(
+        pages::manage::preferences::Ticket,
+        Result<pages::manage::preferences::Response, maka_client::RequestFailure>,
+    ),
+    Resources(
+        pages::resources::Request,
+        Result<pages::resources::Output, pages::resources::Failure>,
+    ),
+    NativeServices(
+        maka_client::HostIdentity,
+        Result<maka_client::NativeServices, maka_client::RequestFailure>,
+    ),
+    SessionControls(
+        pages::session_controls::Request,
+        Result<pages::session_controls::Output, maka_client::RequestFailure>,
+    ),
+    SessionAnchor(
+        pages::session_controls::anchor::Request,
+        Result<maka_client::transcript::TranscriptBatch, String>,
+    ),
+    Bundle(
+        pages::bundle::Request,
+        Result<pages::bundle::Output, maka_client::RequestFailure>,
+    ),
     Recap(
         pages::recap::Request,
         Result<Option<pages::recap::Receipt>, maka_client::RequestFailure>,
@@ -225,10 +249,16 @@ where
     // Local configuration I/O is not scoped to a Host connection epoch.
     let mut theme_jobs = JoinSet::new();
     let mut attachment_jobs = JoinSet::new();
+    // Lookup owners close their finite Remote documents even when cancelled.
+    let mut completion_jobs = JoinSet::new();
     let mut history_job = None;
     let mut client: Option<Client> = None;
     let mut notifications: Option<mpsc::Receiver<Notification>> = None;
+    let mut notification_batch = Vec::with_capacity(32);
     let mut oauth_service: Option<maka_client::OAuthPresentationService> = None;
+    let mut native_notifications: Option<maka_client::notifications::NativeNotificationService> =
+        None;
+    let (mut resource_runner, mut terminal_events) = pages::resources::terminal::Runner::new();
     let (mut watches, mut changes) = apps::io::Watches::new();
     let (mut transcript_runner, mut transcript_deliveries) = apps::io::transcript::Runner::new();
     let mut effect = app.apply(Action::Connect);
@@ -241,6 +271,10 @@ where
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
+        app.reconcile_resources();
+        if app.closing {
+            app.completion_cancel();
+        }
         if !app.closing && app.shutdown.prompt.is_none() {
             shutdown_target = None;
         }
@@ -252,6 +286,22 @@ where
             } else {
                 break;
             }
+        }
+        if let Some(text) = app
+            .resources
+            .take_copy()
+            .or_else(|| app.attention.take_copy())
+        {
+            let result = terminal::copy(&mut std::io::stdout(), &text);
+            app.notice = Some(Notice::Clipboard {
+                key: if result.is_ok() {
+                    "chat-copy-requested"
+                } else {
+                    "chat-copy-failed"
+                },
+                until: std::time::Instant::now() + Duration::from_secs(3),
+            });
+            dirty = true;
         }
         if let Some(text) = app.apps_transcript_copy() {
             let result = terminal::copy(&mut std::io::stdout(), &text);
@@ -345,6 +395,77 @@ where
                 }
                 dirty = true;
             }
+            if let Some(request) = app.bundle_request() {
+                if request.needs_checkpoint() {
+                    if let Some(state) = &mut state {
+                        state.submit_bundle(request, &mut app);
+                    } else {
+                        app.bundle_after_checkpoint(
+                            &request,
+                            &Err("TUI checkpoint unavailable".into()),
+                        );
+                    }
+                } else {
+                    let client = client.clone();
+                    jobs.spawn(async move {
+                        let result = pages::bundle::execute(&client, &request).await;
+                        Completed::Bundle(request, result)
+                    });
+                }
+                dirty = true;
+            }
+            if let Some(request) = app.session_anchor_request() {
+                let client = client.clone();
+                jobs.spawn(async move {
+                    let result = pages::session_controls::anchor::execute(&client, &request).await;
+                    Completed::SessionAnchor(request, result)
+                });
+            }
+            if let Some(request) = app.completion_request() {
+                let client = client.clone();
+                completion_jobs.spawn(async move {
+                    let result = pages::completion::execute(&client, &request).await;
+                    (request, result)
+                });
+            }
+            if let Some(request) = app.resources.request() {
+                if request.needs_checkpoint() {
+                    if let Some(state) = &mut state {
+                        state.submit_resources(request, &mut app);
+                    } else {
+                        app.resources_after_checkpoint(
+                            &request,
+                            &Err("TUI checkpoint unavailable".into()),
+                        );
+                    }
+                } else {
+                    let client = client.clone();
+                    jobs.spawn(async move {
+                        let result = pages::resources::execute(&client, &request).await;
+                        Completed::Resources(request, result)
+                    });
+                }
+                dirty = true;
+            }
+            if let Some(request) = app.session_controls_request() {
+                if request.needs_checkpoint() {
+                    if let Some(state) = &mut state {
+                        state.submit_session_controls(request, &mut app);
+                    } else {
+                        app.session_controls_after_checkpoint(
+                            &request,
+                            &Err("TUI checkpoint unavailable".into()),
+                        );
+                    }
+                } else {
+                    let client = client.clone();
+                    jobs.spawn(async move {
+                        let result = pages::session_controls::execute(&client, &request).await;
+                        Completed::SessionControls(request, result)
+                    });
+                }
+                dirty = true;
+            }
             if let Some(request) = app.resume_request() {
                 if request.needs_checkpoint() {
                     if let Some(state) = &mut state {
@@ -381,7 +502,13 @@ where
                 }
                 dirty = true;
             }
-            if let Some(request) = app.oauth_request() {
+            if oauth_service.is_some() && native_notifications.is_some() {
+                app.oauth_native_service_ready();
+            }
+            if oauth_service.is_some()
+                && native_notifications.is_some()
+                && let Some(request) = app.oauth_request()
+            {
                 if request.needs_checkpoint() {
                     if let Some(state) = &mut state {
                         state.submit_oauth(request, &mut app);
@@ -629,6 +756,14 @@ where
                     Completed::Credential(request, result)
                 });
             }
+            if let Some(request) = app.preferences_request() {
+                let ticket = request.ticket();
+                let client = client.clone();
+                jobs.spawn(async move {
+                    let result = pages::manage::preferences::execute(&client, &request).await;
+                    Completed::Preferences(ticket, result)
+                });
+            }
             if let Some(request) = app.sandbox_defaults_request() {
                 let client = client.clone();
                 jobs.spawn(async move {
@@ -649,6 +784,10 @@ where
             app.sync_interaction();
             terminal::draw(&mut screen, |frame| view::draw(frame, &mut app))?;
             app.oauth_after_draw();
+            app.attention_frame_committed();
+        }
+        if let Some(client) = &client {
+            app.sync_resource_terminal(client, &mut resource_runner);
         }
         // Paging can depend on the just-measured viewport. Dispatch before
         // waiting for input, including when motion is disabled and the app is idle.
@@ -718,16 +857,20 @@ where
                     dirty = true;
                     continue;
                 }
-                Action::Copy(mode) => {
-                    let result = app
-                        .chat
-                        .reader()
-                        .ok_or("chat-copy-empty")
-                        .and_then(|reader| reader.copy_text(mode, app.chrome.ascii))
-                        .and_then(|text| {
-                            terminal::copy(&mut std::io::stdout(), &text)
-                                .map_err(|_| "chat-copy-failed")
-                        });
+                Action::Copy(_) | Action::CopyMessage { .. } => {
+                    let text = match action {
+                        Action::Copy(mode) => app
+                            .chat
+                            .reader()
+                            .ok_or("chat-copy-empty")
+                            .and_then(|reader| reader.copy_text(mode, app.chrome.ascii)),
+                        Action::CopyMessage { target, mode } => target.text(&app, mode),
+                        _ => unreachable!(),
+                    };
+                    let result = text.and_then(|text| {
+                        terminal::copy(&mut std::io::stdout(), &text)
+                            .map_err(|_| "chat-copy-failed")
+                    });
                     app.notice = Some(Notice::Clipboard {
                         key: result.map_or_else(|key| key, |_| "chat-copy-requested"),
                         until: std::time::Instant::now() + Duration::from_secs(3),
@@ -778,7 +921,13 @@ where
                     app.apps.disconnect();
                     watches.stop();
                     transcript_runner.stop();
+                    resource_runner.stop();
+                    app.resources.disconnect();
+                    app.completion.disconnect();
+                    app.attention.disconnect();
                     app.recap.disconnect();
+                    app.bundle.disconnect();
+                    app.session_controls.disconnect();
                     app.plugins.disconnect();
                     app.resume.disconnect();
                     app.branch.disconnect();
@@ -815,7 +964,13 @@ where
                     app.apps.disconnect();
                     watches.stop();
                     transcript_runner.stop();
+                    resource_runner.stop();
+                    app.resources.disconnect();
+                    app.completion.disconnect();
+                    app.attention.disconnect();
                     app.recap.disconnect();
+                    app.bundle.disconnect();
+                    app.session_controls.disconnect();
                     app.plugins.disconnect();
                     app.resume.disconnect();
                     app.creating = false;
@@ -827,6 +982,7 @@ where
                     }
                     notifications = None;
                     oauth_service = None;
+                    native_notifications = None;
                     app.refreshing = false;
                     let connection = connect(app.root.clone());
                     jobs.spawn(async move { Completed::Connected(connection.await) });
@@ -984,6 +1140,16 @@ where
                     None => std::future::pending().await,
                 }
             } => { checkpoint_impact = state::Impact::Reading; }
+            completed = completion_jobs.join_next(), if !completion_jobs.is_empty() => {
+                match completed {
+                    Some(Ok((request, result))) => app.completion_completed(request, result),
+                    Some(Err(_)) => {
+                        if let Some(client) = &client { client.disconnect(); }
+                    }
+                    None => {}
+                }
+                dirty = true;
+            }
             request = async {
                 match oauth_service.as_mut() {
                     Some(service) => service.recv().await,
@@ -991,8 +1157,37 @@ where
                 }
             } => {
                 if let Some(request) = request { app.oauth_presentation(request); }
-                else { oauth_service = None; app.oauth_service_closed(); }
+                else {
+                    if let Some(client) = &client { client.disconnect(); }
+                    oauth_service = None;
+                    app.oauth_service_closed();
+                }
                 dirty = true;
+            }
+            delivery = async {
+                match native_notifications.as_mut() {
+                    Some(service) => service.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match delivery {
+                    Some(delivery) if !app.closing => {
+                        if let Some(client) = &client {
+                            dirty |= app.attention.receive(&client.identity.root_id, delivery);
+                        }
+                    }
+                    Some(_) => {}
+                    None => {
+                        if let Some(client) = &client { client.disconnect(); }
+                        native_notifications = None;
+                        app.attention.disconnect();
+                    }
+                }
+                checkpoint_impact = state::Impact::Reading;
+            }
+            event = terminal_events.recv() => {
+                if let Some(event) = event { dirty |= app.resources.terminal_event(event); }
+                checkpoint_impact = state::Impact::Reading;
             }
             _ = async {
                 match state_wait {
@@ -1010,7 +1205,7 @@ where
                 // its capture plus any field deltas typed while it was writing.
                 if written.requests.is_empty() && written.apps.is_empty()
                     && written.oauth.is_none() && written.branch.is_none()
-                    && written.recap.is_none() && written.plugins.is_none()
+                    && written.recap.is_none() && written.bundle.is_none() && written.session_controls.is_none() && written.resources.is_none() && written.plugins.is_none()
                     && written.resume.is_none() && written.revision.is_none()
                     && written.attachment.is_none() {
                     checkpoint_impact = state::Impact::Reading;
@@ -1026,6 +1221,27 @@ where
                     jobs.spawn(async move {
                         let result=pages::recap::execute(&client,&request).await;
                         Completed::Recap(request,result)
+                    });
+                }
+                if let Some(request) = written.bundle
+                    && app.bundle_after_checkpoint(&request, &written.result)
+                    && let Some(client) = client.clone() {
+                    jobs.spawn(async move {
+                        let result=pages::bundle::execute(&client,&request).await;
+                        Completed::Bundle(request,result)
+                    });
+                }
+                if let Some(request) = written.resources
+                    && app.resources_after_checkpoint(&request, &written.result)
+                    && let Some(client) = client.clone() {
+                    jobs.spawn(async move { let result = pages::resources::execute(&client, &request).await; Completed::Resources(request, result) });
+                }
+                if let Some(request) = written.session_controls
+                    && app.session_controls_after_checkpoint(&request, &written.result)
+                    && let Some(client) = client.clone() {
+                    jobs.spawn(async move {
+                        let result=pages::session_controls::execute(&client,&request).await;
+                        Completed::SessionControls(request,result)
                     });
                 }
                 if let Some(request) = written.resume
@@ -1192,6 +1408,40 @@ where
                         app.plugins_completed(request, result);
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                     }
+                    Some(Ok(Completed::Preferences(ticket, result))) => {
+                        app.preferences_completed(ticket, result);
+                    }
+                    Some(Ok(Completed::Resources(request, result))) => {
+                        app.resources.complete(request, result);
+                        if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
+                    }
+                    Some(Ok(Completed::NativeServices(identity, result))) => {
+                        if client.as_ref().is_some_and(|client| client.identity == identity) && !app.closing {
+                            match result {
+                                Ok(services) => {
+                                    oauth_service = Some(services.oauth);
+                                    native_notifications = Some(services.notifications);
+                                    app.oauth_native_service_ready();
+                                }
+                                Err(error) => {
+                                    app.notice = Some(Notice::Diagnostic(error.to_string()));
+                                    if let Some(client) = &client { client.disconnect(); }
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Completed::SessionControls(request, result))) => {
+                        app.session_controls_completed(request, result);
+                        if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
+                    }
+                    Some(Ok(Completed::SessionAnchor(request, result))) => {
+                        app.session_anchor_completed(request, result);
+                        if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
+                    }
+                    Some(Ok(Completed::Bundle(request, result))) => {
+                        app.bundle_completed(request, result);
+                        if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
+                    }
                     Some(Ok(Completed::Recap(request,result))) => {
                         app.recap_completed(request,result);
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
@@ -1276,6 +1526,7 @@ where
                     }
                     Some(Ok(Completed::ChatReady(id, Err(error)))) if app.chat.subscription.as_ref() == Some(&id) => app.chat.error = Some(error),
                     Some(Ok(Completed::Connected(Ok((connected, receiver))))) => {
+                        if app.closing { connected.disconnect(); continue; }
                         if state.is_none() {
                             match state::State::open(&app.root, &options.profile).await {
                                 Ok(Some((opened, saved))) => {
@@ -1290,6 +1541,7 @@ where
                             }
                         }
                         if !app.bind_root(&connected.identity.root_id) {
+                            app.attention.clear();
                             connected.disconnect();
                             app.connection = ConnectionState::Failed(app.i18n.text("host-root-changed"));
                             dirty = true;
@@ -1299,6 +1551,9 @@ where
                             root_id: connected.identity.root_id.clone(),
                             epoch: connected.identity.host_epoch.clone(),
                         };
+                        let service_client = connected.clone();
+                        let identity = connected.identity.clone();
+                        jobs.spawn(async move { Completed::NativeServices(identity, service_client.publish_native_services().await) });
                         client = Some(connected);
                         notifications = Some(receiver);
                         app.sessions.refresh();
@@ -1337,6 +1592,12 @@ where
                             Ok(_) => {
                                 if let Some(old) = client.take() { old.disconnect(); }
                                 app.chat.disconnect(app.i18n.text("host-wrong-epoch"));
+                                resource_runner.stop();
+                                app.resources.disconnect();
+                    app.completion.disconnect();
+                                app.attention.disconnect();
+                                oauth_service = None;
+                                native_notifications = None;
                                 app.connection = ConnectionState::WrongEpoch;
                             }
                             Err(error) => app.notice = Some(Notice::Diagnostic(error)),
@@ -1353,19 +1614,25 @@ where
                 }
                 dirty = true;
             }
-            notice = async {
+            count = async {
                 match notifications.as_mut() {
-                    Some(receiver) => receiver.recv().await,
+                    Some(receiver) => receiver.recv_many(&mut notification_batch, 32).await,
                     None => std::future::pending().await,
                 }
             } => {
+                // Apply each ordered notification before rebuilding and painting.
+                // The bounded batch leaves other ready input and work admissible.
+                if count == 0 { notifications = None; }
+                for notice in notification_batch.drain(..) {
                 match notice {
-                    Some(Notification::Catalog(notice)) => {
-                        if notice.kind == "project.catalog.changed" { app.project_catalog_changed(); }
+                    Notification::Catalog(notice) => {
+                        if notice.kind == "project.catalog.changed" { app.project_catalog_changed(); app.bundle_catalog_changed(); }
                         if notice.kind == "plugin.terminal.changed" {
+                            app.completion_catalog_changed();
                             app.apps.reload();
                         }
                         if notice.kind == "plugin.platform.changed" {
+                            app.completion_catalog_changed();
                             app.plugins.changed();
                         }
                         if notice.kind == "model.provider.catalog.changed" {
@@ -1387,7 +1654,11 @@ where
                         }
                         app.notice = Some(Notice::Catalog { kind: notice.kind, revision: notice.revision.to_string() });
                     }
-                    Some(Notification::Observation(frame)) => {
+                    Notification::Observation(frame) => {
+                        if app.chat.subscription.as_deref() == Some(frame.envelope().subscription_id)
+                            && let maka_protocol::subscription::ObservationFrame::Resource(resource) = frame.as_ref() {
+                            app.resources.observe(resource);
+                        }
                         if let Err(error) = app.chat.accept(*frame) {
                             app.chat.error = Some(error.to_string());
                             if let Some(client) = &client { client.disconnect(); }
@@ -1396,7 +1667,7 @@ where
                             app.session_removed(&id, false);
                         }
                     }
-                    None => notifications = None,
+                }
                 }
                 dirty = true;
             }
@@ -1416,7 +1687,13 @@ where
                 app.apps.disconnect();
                 watches.stop();
                     transcript_runner.stop();
+                    resource_runner.stop();
+                    app.resources.disconnect();
+                    app.completion.disconnect();
+                    app.attention.disconnect();
                 app.recap.disconnect();
+                app.bundle.disconnect();
+                app.session_controls.disconnect();
                     app.plugins.disconnect();
                 app.resume.disconnect();
                 app.abandon_management();
@@ -1428,6 +1705,7 @@ where
                 client = None;
                 notifications = None;
                 oauth_service = None;
+                native_notifications = None;
                 app.status = None;
                 app.refreshing = false;
                 app.connection = ConnectionState::Failed(error.to_string());
@@ -1460,11 +1738,18 @@ where
     app.skills.disconnect();
     app.apps.disconnect();
     watches.stop();
+    app.resources.disconnect();
+    app.completion.disconnect();
+    app.attention.disconnect();
+    let resources_settled = resource_runner.shutdown().await;
     let _ = transcript_runner.shutdown().await;
     let _ = watches.shutdown().await;
     app.recap.disconnect();
+    app.bundle.disconnect();
+    app.session_controls.disconnect();
     app.plugins.disconnect();
     app.resume.disconnect();
+    while completion_jobs.join_next().await.is_some() {}
     attachment_jobs.abort_all();
     jobs.abort_all();
     // Once Save was pressed, finish the bounded local write and checkpoint the
@@ -1479,6 +1764,9 @@ where
     }
     if !flushed && let Some(state) = &mut state {
         state.finish(&mut app).await?;
+    }
+    if !resources_settled {
+        return Err(app.i18n.text("resources-cleanup-unknown").into());
     }
     Ok(())
 }

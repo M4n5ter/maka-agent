@@ -38,8 +38,8 @@ const ROOT: &str = "sheet";
 /// The owner-drawn part of a field, beneath its label.
 const INPUT: &str = "input";
 const WIDTH: u16 = 64;
-/// Narrower than this, prose wraps into a column nobody can read.
-const MIN_WIDTH: u16 = 28;
+/// Content remaining inside a supported 30-column terminal after its margins.
+const MIN_WIDTH: u16 = 24;
 /// Rows a capped viewer keeps when its sheet must fit a short terminal.
 const VIEWER: u16 = 3;
 
@@ -339,6 +339,12 @@ impl<M: Clone> Layer<M> {
         self.surface.render(frame, content, tree, context);
         self.area = Some(rect);
         true
+    }
+
+    /// Opaque sheet boundary from the last rendered frame. Consumers can prove
+    /// that a global status entry remained visible behind this modal layer.
+    pub fn bounds(&self) -> Option<Rect> {
+        self.area
     }
 
     /// Where the owner draws field `key`, as committed by the last frame.

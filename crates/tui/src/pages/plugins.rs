@@ -17,11 +17,13 @@
  * under the License.
  */
 
-//! Local-owner plugin package and composition management. Payloads stay in memory.
+//! Local-owner package and composition management. Opaque payloads stay in memory;
+//! nonsecret export paths and uncertain operation identities can be restored.
 mod actions;
 mod confirm;
 mod details;
 mod drafts;
+mod export;
 mod forms;
 pub mod io;
 mod query;
@@ -75,6 +77,7 @@ pub enum Place {
     #[default]
     Overview,
     Package(String),
+    Export(String),
     Entry(EntryKey),
     Install,
     New(String),
@@ -85,7 +88,9 @@ impl Place {
     pub fn valid(&self) -> bool {
         match self {
             Self::Overview | Self::Install => true,
-            Self::Package(id) | Self::New(id) => maka_plugins::identifier(id).is_ok(),
+            Self::Package(id) | Self::Export(id) | Self::New(id) => {
+                maka_plugins::identifier(id).is_ok()
+            }
             Self::Entry(key) | Self::Configure(key) | Self::Services(key) => {
                 maka_plugins::identifier(&key.id).is_ok()
             }
@@ -103,6 +108,7 @@ impl Place {
 #[serde(rename_all = "snake_case")]
 pub enum Change {
     Install,
+    Export,
     Restart,
     Uninstall,
     Enable,
@@ -116,6 +122,7 @@ impl Change {
     fn label(self) -> &'static str {
         match self {
             Self::Install => "plugins-install",
+            Self::Export => "plugins-export",
             Self::Restart => "plugins-restart",
             Self::Uninstall => "plugins-uninstall",
             Self::Enable => "plugins-enable",
@@ -214,6 +221,7 @@ pub struct State {
     withheld: Vec<Place>,
     details: bool,
     receipt: Option<Receipt>,
+    exported: Option<export::Exported>,
     error: Option<String>,
 }
 impl Default for State {
@@ -241,6 +249,7 @@ impl Default for State {
             withheld: vec![],
             details: false,
             receipt: None,
+            exported: None,
             error: None,
         }
     }
@@ -262,9 +271,9 @@ impl State {
         }
     }
     pub(crate) fn has_unsaved(&self) -> bool {
-        self.drafts
-            .iter()
-            .any(|(_, draft)| draft.dirty.iter().any(|dirty| *dirty))
+        self.drafts.iter().any(|(place, draft)| {
+            !matches!(place, Place::Export(_)) && draft.dirty.iter().any(|dirty| *dirty)
+        })
     }
     pub(crate) fn review_exit(&mut self, detach: bool) {
         self.confirmation_details = false;
@@ -331,7 +340,7 @@ impl State {
             self.surface.focus(focus.clone());
         } else {
             match place {
-                Place::Install | Place::New(_) => {
+                Place::Install | Place::New(_) | Place::Export(_) => {
                     self.surface.focus_within("plugins/scroll/body/field-0")
                 }
                 Place::Configure(_) => self.surface.focus_within("plugins/scroll/body/field-1"),

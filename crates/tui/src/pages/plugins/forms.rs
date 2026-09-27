@@ -27,6 +27,10 @@ use view::{button, button_row, review, text};
 
 pub(super) fn rows(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
     let state = &app.plugins;
+    if let Place::Export(id) = &state.place {
+        super::export::rows(app, snapshot, id, rows);
+        return;
+    }
     if state.place == Place::Install {
         if let Some(error) = state.path.error {
             rows.push(text("field-error", app.i18n.text(error), Tone::Warning));
@@ -234,7 +238,13 @@ fn live_state(app: &App, snapshot: &Snapshot, key: &EntryKey, rows: &mut Vec<Nod
         }
     }
 }
-fn field(app: &App, rows: &mut Vec<Node<Command>>, index: usize, label: &str, height: u16) {
+pub(super) fn field(
+    app: &App,
+    rows: &mut Vec<Node<Command>>,
+    index: usize,
+    label: &str,
+    height: u16,
+) {
     rows.push(text(
         format!("label-{index}"),
         app.i18n.text(label),
@@ -248,7 +258,7 @@ fn field(app: &App, rows: &mut Vec<Node<Command>>, index: usize, label: &str, he
 }
 pub(super) fn draw_fields(frame: &mut Frame<'_>, app: &mut App, context: ui::Context) {
     let indices: &[usize] = match app.plugins.place {
-        Place::Install => &[0],
+        Place::Install | Place::Export(_) => &[0],
         Place::New(_) => &[0, 1],
         Place::Configure(_) => &[1],
         Place::Services(_) => &[2],

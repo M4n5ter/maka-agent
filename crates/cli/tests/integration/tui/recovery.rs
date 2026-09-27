@@ -194,6 +194,17 @@ impl LostReply {
         Self::start_operation(root, directory, after_acceptance, "plugin.remote").await
     }
 
+    pub(super) async fn bundle_import(root: &std::path::Path, directory: &std::path::Path) -> Self {
+        Self::start_operation(root, directory, true, "session-bundle.import").await
+    }
+
+    pub(super) async fn package_export(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+    ) -> Self {
+        Self::start_operation(root, directory, true, "plugin.package.export").await
+    }
+
     pub(super) fn requests(&self) -> Vec<serde_json::Value> {
         self.requests.lock().unwrap().clone()
     }
@@ -251,7 +262,20 @@ impl LostReply {
                                     // enrollment/query/cancel exercise the actual Host here.
                                     break;
                                 }
-                                if operation == "plugin.remote" {
+                                if operation == "plugin.package.export" {
+                                    let pending = saved["plugins"]["pending"].as_array().unwrap().iter()
+                                        .find(|pending| pending["change"] == "export").unwrap();
+                                    assert_eq!(pending["binding"]["root"], discovery.root_id);
+                                    assert_eq!(pending["export_target"], value["input"]["targetPath"]);
+                                    assert_eq!(pending["package_digest"], value["input"]["expected"]["contentDigest"]);
+                                    assert_eq!(pending["base"], value["input"]["expected"]["baseGeneration"]);
+                                } else if operation == "session-bundle.import" {
+                                    assert_eq!(saved["root"], discovery.root_id);
+                                    assert_eq!(saved["bundle"]["intent"]["root"], discovery.root_id);
+                                    assert_eq!(saved["bundle"]["outcome"]["kind"], "unknown");
+                                    assert_eq!(saved["bundle"]["outcome"]["write"]["source"], value["input"]["source"]);
+                                    assert_eq!(saved["bundle"]["outcome"]["write"]["expected"], value["input"]["expected"]);
+                                } else if operation == "plugin.remote" {
                                     assert_eq!(saved["root"], discovery.root_id);
                                     assert_eq!(saved["apps"][0]["pending"]["input"], value["input"]["input"]);
                                     assert_eq!(saved["apps"][0]["entry"]["target"], value["input"]["target"]);
@@ -261,7 +285,7 @@ impl LostReply {
                                     assert_eq!(original["origin_epoch"], value["input"]["originHostEpoch"]);
                                     assert_eq!(original["session"], value["input"]["sessionId"]);
                                     assert_eq!(original["id"], value["input"]["messageId"]);
-                                    assert_eq!(saved["version"], 23);
+                                    assert_eq!(saved["version"], 24);
                                     assert_eq!(original["content"], value["input"]["content"]);
                                     assert_eq!(original["placement"], value["input"]["placement"]);
                                     assert_eq!(original["input_selections"], value["input"].get("inputSelections").cloned().unwrap_or_else(|| json!({})));

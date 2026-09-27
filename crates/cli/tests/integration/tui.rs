@@ -23,13 +23,16 @@ mod attachments;
 mod board;
 mod branch;
 mod builtins;
+mod bundle197;
 mod changes;
 mod cold_startup;
+mod completion197;
 mod connection_test;
 mod connections;
 mod credentials;
 mod enabled_models;
 mod environment;
+mod executor197;
 mod extensions;
 mod fault_acceptance;
 mod forms;
@@ -46,6 +49,7 @@ mod navigation;
 mod oauth;
 mod onboarding;
 mod plugins;
+mod preferences197;
 mod projects;
 mod queue;
 mod reading;
@@ -53,6 +57,7 @@ mod recap;
 mod recovery;
 mod references;
 mod removal;
+mod resources197;
 mod revision;
 mod sandbox;
 mod scheduler;
@@ -350,7 +355,7 @@ fn real_host_catalog_subscription_and_remote_updates_reach_clients() {
     tui.wait_for("Message…");
     tui.resize(80, 24);
     tui.wait_until(|screen| !screen.contains("+  New session") && screen.contains("Message…"));
-    tui.click_text("ⓘ");
+    tui.session_view_action("Show / hide session details");
     tui.wait_for(&format!("Session ID: {}", second[0].id));
     tui.click_text("Message…");
     // Bracketed paste, grapheme deletion and scoped undo traverse the real event loop.
@@ -360,10 +365,11 @@ fn real_host_catalog_subscription_and_remote_updates_reach_clients() {
     tui.wait_until(|screen| screen.contains("草稿") && !screen.contains("e\u{301}"));
     tui.send(b"\x1a"); // Ctrl+Z must undo inside the editor, not suspend the client.
     tui.wait_for("草稿 e\u{301}");
+    tui.send(b"\x02"); // Show navigation so F11 has observable layout consequences.
+    tui.wait_for("+  New session");
     tui.send(b"\x1b[23~"); // F11 expands the same session, without replacing its draft.
-    tui.wait_until(|screen| screen.contains("⊡"));
-    tui.wait_for("草稿 e\u{301}");
-    tui.send(b"\x1b[23~\x02"); // Restore, then expand navigation with Ctrl+B.
+    tui.wait_until(|screen| !screen.contains("+  New session") && screen.contains("草稿 e\u{301}"));
+    tui.send(b"\x1b[23~"); // Restore the same navigation and conversation.
     tui.wait_for("+  New session");
     tui.send(b"\x1b"); // Escape leaves the composer without leaving the session.
     runtime.block_on(async {
@@ -402,7 +408,7 @@ fn real_host_catalog_subscription_and_remote_updates_reach_clients() {
         observer.close_subscription(&subscription).await.unwrap();
     });
     tui.wait_for("草稿 e\u{301}"); // Background updates must not replace the draft.
-    tui.click_text("ⓘ"); // Close metadata and expose the conversation.
+    tui.session_view_action("Show / hide session details"); // Close metadata and expose the conversation.
     tui.click_text("➤"); // SGR mouse hits the actual composer send button.
     tui.wait_for("Streamed 中文🦀");
     // A reading tab is not execution ownership. Close it during a live stream,
@@ -502,9 +508,9 @@ fn real_host_catalog_subscription_and_remote_updates_reach_clients() {
     tui.resize(120, 50); // Keep the expanded transcript visible after the added tool cycle.
     tui.wait_for("Answers received");
     tui.wait_for("≈9.5k / 128.0k"); // Current usage sits on the composer, not an extra status row.
-    tui.click_text("ⓘ");
+    tui.session_view_action("Show / hide session details");
     tui.wait_for("Last input 9.5k / 128.0k"); // Diagnostics only, not current context occupancy.
-    tui.click_text("ⓘ");
+    tui.session_view_action("Show / hide session details");
     tui.filter_command("Show execution details");
     tui.click_text("Show execution details");
     tui.wait_for("Completed"); // Durable terminal state is available in the opt-in trace.
@@ -659,7 +665,7 @@ fn real_host_catalog_subscription_and_remote_updates_reach_clients() {
     });
     observer.disconnect();
     tui.send(b"\x1b"); // Leave transcript focus for composer controls, not the session.
-    tui.wait_for("Attachments");
+    tui.wait_for("Add to message");
     assert!(
         tui.screen
             .snapshot()
@@ -1016,6 +1022,44 @@ impl Pty {
     }
     fn click_text(&mut self, text: &str) {
         self.click_matching_text(text, false);
+    }
+    /// Click the rendered overflow in the one-line page header, not its hover hint.
+    fn open_header_actions(&mut self) {
+        self.wait_until(|screen| {
+            screen
+                .lines()
+                .next()
+                .is_some_and(|header| header.contains('⋯') || header.contains("..."))
+        });
+        let snapshot = self.screen.snapshot().unwrap();
+        let header = snapshot.screen.lines().next().expect("visible page header");
+        // The rightmost overflow belongs to the header object; list-row menus and
+        // footer hints are outside this row. Account for wide characters in titles.
+        let byte = header
+            .rfind('⋯')
+            .max(header.rfind("..."))
+            .expect("visible header actions");
+        self.click_at(0, header[..byte].width());
+    }
+    /// Reach the session's view controls even when its object menu must scroll.
+    fn session_view_action(&mut self, label: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.open_header_actions();
+            self.wait_for("Refresh current page");
+            self.send(b"\x1b[F");
+            self.wait_for("Close tab · Ctrl+W");
+            if self.screen.snapshot().unwrap().screen.contains(label) {
+                self.click_text(label);
+                self.wait_until(|screen| !screen.contains("Close tab · Ctrl+W"));
+                return;
+            }
+            // Prefetch can temporarily remove paging actions. Reopen the menu
+            // after it settles instead of trying a stale, frozen action list.
+            self.send(b"\x1b");
+            self.wait_until(|screen| !screen.contains("Close tab · Ctrl+W"));
+            assert!(Instant::now() < deadline, "session action missing: {label}");
+        }
     }
     /// A label the sidebar may also show: the first copy right of its border.
     fn click_page_text(&mut self, text: &str) {

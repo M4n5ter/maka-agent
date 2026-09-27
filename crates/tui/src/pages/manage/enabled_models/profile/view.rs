@@ -96,6 +96,9 @@ fn display(app: &App, draft: &Draft, index: usize, field: Field) -> String {
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| app.i18n.text("thinking-default")),
+        Field::DefaultThinking => app.i18n.text(crate::pages::manage::models::thinking_key(
+            serde_json::from_value(draft.values["defaultThinkingLevel"].clone()).ok(),
+        )),
         Field::Advanced => if index + 1 < draft.fields.len() {
             app.chrome.symbol("⌄", "v")
         } else {

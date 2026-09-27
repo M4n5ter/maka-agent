@@ -126,6 +126,13 @@ export default async function activate(ctx) {
     { access: 'host_paths' },
   );
   await ctx.remote.method('denied-database', database);
+  await ctx.remote.method('projects', (input, caller) =>
+    caller.views.projects(
+      /** @type {import('../../../../packages/plugin-sdk/src/host.js').ProjectSelectionQuery} */ (
+        /** @type {unknown} */ (input)
+      ),
+    ),
+  );
   await ctx.remote.method('uncertain', () => {
     /** @type {import('../../../../packages/plugin-sdk/src/host.js').RemoteFailure} */
     const failure = Object.assign(new Error('publication result needs recovery'), {

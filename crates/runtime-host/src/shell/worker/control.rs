@@ -24,7 +24,10 @@ use crate::shell::{
     terminal::{PendingWrite, Terminal},
 };
 use maka_process::pty::PtyChild;
-use maka_runtime::{shell_run::ShellRun, terminal::input::encode_actions};
+use maka_runtime::{
+    shell_run::ShellRun,
+    terminal::input::{encode_actions_with_paste, encode_controller_actions},
+};
 use std::sync::Arc;
 
 impl Worker {
@@ -40,13 +43,20 @@ impl Worker {
             )));
             return Ok(());
         }
+        let interactive = matches!(&control.input, Input::Interactive(_));
         let bytes = match control.input {
             Input::Raw(bytes) => bytes,
-            Input::Actions(actions) => {
-                match encode_actions(
+            Input::Actions(actions) | Input::Interactive(actions) => {
+                let encode = if interactive {
+                    encode_controller_actions
+                } else {
+                    encode_actions_with_paste
+                };
+                match encode(
                     &actions,
                     terminal.snapshot.input,
                     control.size.unwrap_or(terminal.snapshot.size),
+                    terminal.bracketed_paste(),
                 ) {
                     Ok(bytes) => bytes,
                     Err(error) => {

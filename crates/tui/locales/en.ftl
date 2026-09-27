@@ -592,7 +592,7 @@ default-model-unavailable = This model is no longer available. Close and choose 
 default-model-conflict = Model settings changed elsewhere. Close and choose again.
 default-model-failed = Could not update the default. Refresh and choose again.
 
-connection-configuration = Edit provider configuration
+connection-configuration = Advanced JSON
 connection-configuration-edit-note = Provider configuration as a JSON object. Authentication input belongs in Sign in, not here.
 connection-configuration-note = Review with arrows or scroll; Ctrl+Home/End jumps to either end. The Host validates the provider schema.
 connection-configuration-confirm = Use this provider configuration?
@@ -1067,3 +1067,397 @@ extensions-section-retained = Retained edits and submissions
 extensions-scope-application = Application
 
 extensions-split-hint = Drag to resize · ←/→ adjust
+
+connection-preferences = Provider settings
+
+connection-preferences-note = Edit common fields here. Advanced JSON is available in the connection menu.
+
+connection-preferences-invalid = Check the field values before saving.
+
+connection-preferences-limit = This field exceeds its size limit.
+
+connection-preferences-conflict = Settings changed. Reload the current values before editing again.
+
+connection-preferences-failed = Could not complete the request. Reload the current settings and try again.
+
+provider-base-url = Base URL
+
+preferences-secret-action = Saved value
+
+preferences-secret-keep = Keep existing
+
+preferences-secret-replace = Replace
+
+preferences-secret-delete = Delete
+
+preferences-working = Working…
+
+preferences-saved = Saved.
+
+preferences-reload = Reload and discard edits
+
+proxy-title = Network proxy
+
+proxy-enabled = Use proxy
+
+proxy-protocol = Protocol
+
+proxy-host = Host
+
+proxy-port = Port
+
+proxy-authentication = Authentication
+
+proxy-username = Username
+
+proxy-password = New password
+
+proxy-bypass = Bypass domains
+
+proxy-auto-bypass = Local bypass domains
+
+proxy-test-url = Test URL
+
+proxy-test = Test saved settings
+
+proxy-note = Domains are separated by commas. Turning authentication off deletes the saved password.
+
+proxy-target-changed = The proxy account changed. Replace or delete the saved password before saving.
+
+proxy-save-before-test = Save these changes before testing.
+
+proxy-test-success = Connection succeeded · { $latency } ms · HTTP { $status }
+
+proxy-test-failed = Connection failed · { $latency } ms · HTTP { $status }. Check the proxy address, authentication, and test URL.
+
+headers-title = Request headers
+
+headers-name = Header name
+
+headers-value = New value
+
+headers-add = Add header
+
+headers-note = Existing values stay hidden. Keep, replace, or delete each header. Authorization headers belong in connection authentication.
+
+headers-value-required = A new or renamed header needs a replacement value.
+
+connection-request-overlay = Advanced request body
+
+request-overlay-json = JSON overrides
+
+request-overlay-note = These fields merge into outgoing model requests. Clear overrides restores the provider request body.
+
+request-overlay-clear = Clear overrides
+
+request-overlay-invalid = Enter a JSON object of at most 32 KiB, or clear the field to remove the overrides.
+
+model-profile-adapter = Adapter
+
+model-profile-default-thinking = Default thinking
+
+bundle-export = Export session bundle
+
+bundle-import = Import session bundle
+
+bundle-resume = Session transfer
+
+bundle-preview = Refresh preview
+
+bundle-review = Review transfer
+
+bundle-edit = Back
+
+bundle-confirm = Confirm transfer
+
+bundle-workspace-path = Host directory
+
+bundle-workspace-project = Choose project
+
+bundle-forget = Clear transfer
+
+bundle-forget-confirm = Clear record
+
+bundle-path-invalid = Enter an absolute Host path without control characters.
+
+bundle-save-failed = The transfer was not sent because its recovery record could not be saved.
+
+bundle-failed = The Host could not confirm this transfer.
+
+bundle-receipt-invalid = The Host reply did not match this transfer. Its outcome is unconfirmed.
+
+bundle-count = { $count } sessions, including this session and all subtasks
+
+bundle-source = Bundle file on Host
+
+bundle-destination = New bundle file on Host
+
+bundle-digest = Confirmed subtree digest
+
+bundle-session-id = Session ID
+
+bundle-workspace = Destination directory on Host
+
+bundle-host-path-note = These paths are on the connected Host, not this terminal.
+
+bundle-working = Waiting for Host…
+
+bundle-export-note = Exports complete history and artifacts for this subtree. Existing files are never overwritten.
+
+bundle-import-note = Imports history and artifacts into this workspace using current Host defaults. Source credentials and permissions are not imported.
+
+bundle-export-now = Export
+
+bundle-import-now = Import
+
+bundle-exported = Host exported { $count } sessions · { $amount } compressed bytes
+
+bundle-imported = Host imported { $count } sessions · { $amount } artifact files
+
+bundle-unknown = The Host may have completed this transfer. Its original request is retained and will not be replayed.
+
+bundle-forget-note = Clear this saved draft or receipt? Host files and sessions remain as they are.
+
+bundle-forget-unknown-note = This transfer is still unconfirmed. Clearing its record cannot cancel or undo work on Host. Check its result before starting another transfer.
+
+bundle-query = Check result
+
+bundle-visit = Open session
+
+bundle-no-receipt = No original receipt was found yet. The result remains unconfirmed; this is not permission to repeat the import.
+
+bundle-recovered = Original receipt confirms { $count } imported sessions. It does not include an artifact count.
+
+bundle-import-preview = { $count } sessions · { $artifacts } artifact files in this bundle
+
+bundle-content-digest = Bundle content digest
+
+bundle-binding-digest = Destination binding digest
+
+bundle-resolved-workspace = Resolved directory on Host
+
+session-actions = Session actions
+
+connection-actions = Connection actions
+
+project-actions = Project actions
+
+composer-add = Add to message
+
+composer-options = Model and permissions
+
+controls-anchor-unavailable = This saved message is no longer available.
+
+controls-checkpoint-failed = The request was not sent because recovery state could not be saved.
+
+controls-compact = Compact context
+
+controls-compact-finished = Context compacted.
+
+controls-compact-unchanged = Context was left unchanged.
+
+controls-compact-failed = Context compaction failed.
+
+controls-compact-note = Summarize this conversation for future messages. This uses the selected model and may incur charges.
+
+controls-compact-started = Compaction started. Its result will appear in the conversation.
+
+controls-confirm-forget = Forget recovery record
+
+controls-conflict = The Host state changed. Refresh and review your settings before saving again.
+
+controls-display-name = Your display name
+
+controls-empty-turn = Conversation turn
+
+controls-executor = Conversation executor
+
+controls-executor-model = Executor model (optional)
+
+controls-executor-note = Choose a registered executor. Model names belong to that executor; leave the model empty to use its default.
+
+controls-executor-query = Find an executor
+
+controls-field-limit = This field exceeds its size limit.
+
+controls-filter-executors = More executors are available. Use Next or refine your search.
+
+controls-flag = Flag this conversation
+
+controls-forget = Forget unresolved request…
+
+controls-forget-note = The Host may already have applied this request. Forgetting removes only this recovery record; it does not cancel or undo the Host action.
+
+controls-history = Conversation history
+
+controls-interrupt = Stop and clear queued messages
+
+controls-interrupt-note = Stop this exact active run and atomically retract its pending messages. Retracted messages will not run later.
+
+controls-labels = Labels
+
+controls-labels-note = One label per line. Use Ctrl+J for a new line.
+
+controls-labels-truncated = The Host returned only part of the labels. They will be preserved; the flag can still be changed.
+
+controls-landmarks = Turn landmarks
+
+controls-mark-read = Mark read through this message
+
+controls-mark-read-note = Acknowledge reading through the selected visible saved message. Later messages remain unread.
+
+controls-metadata = Labels and flag
+
+controls-no-executors = No executors match this search.
+
+controls-no-turns = No conversation turns yet.
+
+controls-open-turn = Open this turn
+
+controls-preferences = Personal preferences
+
+controls-retract-queue = Retract all queued messages
+
+controls-retract-queue-note = Retract all pending messages in this conversation. The active run will continue.
+
+controls-save = Save
+
+controls-saved = Applied.
+
+controls-search-executors = Search
+
+controls-tone = Preferred assistant tone
+
+controls-unknown = The result is unknown. No request will be replayed automatically. Refresh shows current state without proving this request committed.
+
+controls-unresolved = Check unresolved session request
+
+controls-working = Waiting for the Host…
+
+controls-workspace-instructions = Use workspace instructions
+
+controls-workspace-note = This switch is saved separately. Personalization changes use Save.
+
+branch-side-title = Side conversation from this turn
+
+branch-side-note = Create a side conversation with history through the selected turn. The original conversation and its draft stay available.
+
+branch-empty-side-title = New empty side conversation
+
+branch-empty-side-note = Create a related conversation with the same settings and workspace, without copying message history.
+
+controls-executors-stale = The executor catalog changed. Search again to choose a current registration.
+
+plugins-export = Export package
+
+plugins-export-source = Source
+
+plugins-export-installed = Installed package on Host
+
+plugins-export-version = Installed content digest
+
+plugins-export-target = New bundle file on Host
+
+plugins-export-path-note = Enter an absolute path on the connected Host. The export contains the installed package files.
+
+plugins-export-impact = Export the reviewed installed package. Existing files are never replaced.
+
+plugins-export-path-invalid = Enter an absolute Host destination without control characters.
+
+plugins-exported = Package exported on Host: { $path }
+
+plugins-export-unknown = This export is unconfirmed. Inspect the original Host file before choosing another destination. The original destination will not be repeated.
+
+plugins-export-back = Package details
+
+attention-dismiss = Dismiss
+attention-empty = No notifications.
+attention-full = Notification history is full. Dismiss older entries to receive more.
+attention-open = Notifications
+attention-read = Mark read
+attention-title = Notifications
+resources-cancelled = Stopped
+resources-captured = Terminal input · Ctrl+] returns to controls
+resources-check = Check original request
+resources-cleanup-unknown = Terminal detach was not confirmed. Reconnect to check the process.
+resources-command = Run command
+resources-command-limit = The command exceeds 32 KiB.
+resources-command-line = Command
+resources-completed = Completed
+resources-control-unknown = Input acceptance is unknown. Reconnect and inspect before typing again.
+resources-controls = Return to controls
+resources-copy = Copy output
+resources-details = Process details
+resources-empty = No processes in this conversation.
+resources-ended = The original process has ended.
+resources-failed = Failed
+resources-forget = Forget recovery record…
+resources-forget-warning = This only removes the recovery record. The original command may still be running; it will not be retried or stopped.
+resources-found = Found the process from the original request.
+resources-input-full = Input exceeds the terminal limit. Paste at most 32 KiB or wait for queued input.
+resources-more = More
+resources-new-terminal = New terminal
+resources-not-dispatched = The request was not dispatched. Check the saved recovery record.
+resources-open-source = Open owning conversation
+resources-original = Original conversation: { $session }
+resources-orphaned = Process state unavailable
+resources-reconnect = Reconnect terminal
+resources-redacted = Output is hidden by the Host.
+resources-run = Run
+resources-running = Running
+resources-screen = Terminal screen · Shift+wheel scrolls
+resources-source-owned = This process belongs to another conversation and is read-only here.
+resources-starting = Starting
+resources-stop = Stop process
+resources-stop-confirm = Stop this process? Closing the terminal only detaches it.
+resources-terminal-failed = Cannot attach to this terminal. It may be controlled elsewhere or no longer running.
+resources-terminal-loading = Connecting terminal…
+resources-timed-out = Timed out
+resources-title = Terminal
+resources-type = Type in terminal
+resources-unknown = The outcome is unknown. Check the original request before starting another process.
+resources-working = Working…
+resources-input-rejected = Input was rejected before sending. Reconnect to continue.
+resources-truncated = Older output was trimmed.
+
+completion-commands = Commands
+completion-context = Context
+completion-workspace = Workspace
+completion-sessions = Sessions
+completion-plugins = Plugins
+completion-added = Added context
+completion-select = Select
+completion-preview = Preview
+completion-browse = Browse folder
+completion-remove = Remove
+completion-reselect = Select again
+completion-keep-excerpt = Keep excerpt only
+completion-loading = Loading…
+completion-empty = No matching items
+completion-directory = Folder
+completion-file = File
+completion-capture-conversation = Capture this conversation excerpt
+completion-captured-excerpt = Snapshot of the loaded messages
+completion-truncated = Excerpt shortened to fit
+completion-failed = Could not load context
+completion-query-long = Search text is too long
+completion-stale = The input or candidate changed. Select it again.
+completion-reference-unavailable = A reference is unavailable. Remove it or select it again.
+completion-source-changed = The source changed. Remove it or select it again.
+completion-source-unavailable = This source is unavailable in the new session. Remove the reference or keep its excerpt.
+completion-input-invalid = These references cannot be submitted together. Review the added context.
+completion-history-trimmed = Older undo history was cleared to make room for context. Your draft is unchanged.
+completion-binding-budget = Context is full. Remove a reference before adding another.
+revision-resource-review = The new session is ready. Review each reference for its new source before running.
+revision-resource-confirm = References are ready. Confirm to run the revised inputs in the new session.
+
+completion-controls = Controls
+completion-results = Results
+
+controls-new-executor = New executor session
+controls-create = Create
+controls-create-name = Session name (optional)
+controls-create-workspace = Workspace
+controls-create-found = The session exists. Open it to inspect its current state; the creation result remains unconfirmed.
+controls-create-missing = The session is not available. The creation result remains unknown.
+controls-open-created = Open found session

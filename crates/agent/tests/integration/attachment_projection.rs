@@ -91,6 +91,7 @@ async fn attachment_references_remain_structured_and_match_the_original_model_fo
                 invocation_id: format!("invocation{index}"),
             },
             Fact::MessageSteered {
+                source: None,
                 message: Box::new(DeliveredMessage {
                     message_id: "same-client-id".into(),
                     content: input.clone(),

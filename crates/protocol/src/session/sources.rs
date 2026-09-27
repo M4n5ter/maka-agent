@@ -47,20 +47,29 @@ pub struct Source {
     pub content: turn::MessageContent,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub input_selections: maka_runtime::input::Selections,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: maka_runtime::input::SelectionSources,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_orchestration: Option<turn::TurnOrchestration>,
 }
 
 impl From<maka_runtime::message::EditableMessage> for Source {
     fn from(message: maka_runtime::message::EditableMessage) -> Self {
-        let (input_selections, turn_orchestration) = message
+        let (input_selections, input_selection_sources, turn_orchestration) = message
             .intent
-            .map(|intent| (intent.input_selections, intent.turn_orchestration))
+            .map(|intent| {
+                (
+                    intent.input_selections,
+                    intent.input_selection_sources,
+                    intent.turn_orchestration,
+                )
+            })
             .unwrap_or_default();
         Self {
             message_id: message.message_id,
             content: message.content.into(),
             input_selections,
+            input_selection_sources,
             turn_orchestration,
         }
     }
@@ -94,8 +103,11 @@ pub fn decode_output(value: &Value) -> Result<Output> {
         if !seen.insert(&message.message_id) {
             return Err(ProtocolError::invalid("Duplicate Turn source"));
         }
-        maka_runtime::input::validate_selections(&message.input_selections)
-            .map_err(ProtocolError::invalid)?;
+        maka_runtime::input::validate_selection_sources(
+            &message.input_selections,
+            &message.input_selection_sources,
+        )
+        .map_err(ProtocolError::invalid)?;
     }
     if serde_json::to_vec(&output)
         .map_err(|error| ProtocolError::invalid(error.to_string()))?

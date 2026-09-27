@@ -101,3 +101,22 @@ test('older platform inspections remain readable and malformed management facts 
     assert.throws(() => decode({ ...old, items: [{ ...entry, ...patch }] }));
   }
 });
+
+test('package export requires the reviewed installed generation and content digest', () => {
+  const decodeExport = PLUGIN_PLATFORM_OPERATION_SPECS['plugin.package.export'].decodeInput;
+  const expected = { baseGeneration: 7, contentDigest: `sha256-${'a'.repeat(64)}` };
+  const input = {
+    extensionId: 'example.board',
+    targetPath: '/host/board.maka-extension',
+    expected,
+  };
+  assert.deepEqual(decodeExport(input), input);
+  for (const patch of [
+    { expected: undefined },
+    { expected: { ...expected, contentDigest: null } },
+    { expected: { ...expected, baseGeneration: -1 } },
+    { targetPath: 'relative/file' },
+    { targetPath: '/host/file\nother' },
+  ])
+    assert.throws(() => decodeExport({ ...input, ...patch }));
+});

@@ -592,7 +592,7 @@ default-model-unavailable = 此模型已不可用，请关闭后重新选择。
 default-model-conflict = 模型配置已被其他客户端修改，请关闭后重新选择。
 default-model-failed = 未能更新默认模型，请刷新后重新选择。
 
-connection-configuration = 编辑提供商配置
+connection-configuration = 高级 JSON
 connection-configuration-edit-note = 以 JSON 对象填写提供商配置。认证输入请在登录时填写，不要放在此处。
 connection-configuration-note = 用方向键或滚轮检查配置，Ctrl+Home/End 跳至首尾。Host 会按提供商的 schema 校验。
 connection-configuration-confirm = 使用此提供商配置？
@@ -1067,3 +1067,397 @@ extensions-section-retained = 保留的编辑与待核对提交
 extensions-scope-application = 应用
 
 extensions-split-hint = 拖动调整宽度 · ←/→ 微调
+
+connection-preferences = 提供商设置
+
+connection-preferences-note = 在此编辑常用字段。连接菜单中保留高级 JSON 编辑。
+
+connection-preferences-invalid = 请检查字段值后再保存。
+
+connection-preferences-limit = 此字段超过大小限制。
+
+connection-preferences-conflict = 设置已变更。请重新载入当前值后再编辑。
+
+connection-preferences-failed = 请求未能完成。请重新载入当前设置后重试。
+
+provider-base-url = 基础 URL
+
+preferences-secret-action = 已保存的值
+
+preferences-secret-keep = 保留已有值
+
+preferences-secret-replace = 替换
+
+preferences-secret-delete = 删除
+
+preferences-working = 正在处理…
+
+preferences-saved = 已保存。
+
+preferences-reload = 重新载入并放弃编辑
+
+proxy-title = 网络代理
+
+proxy-enabled = 使用代理
+
+proxy-protocol = 协议
+
+proxy-host = 主机
+
+proxy-port = 端口
+
+proxy-authentication = 身份认证
+
+proxy-username = 用户名
+
+proxy-password = 新密码
+
+proxy-bypass = 绕过的域名
+
+proxy-auto-bypass = 本地域名绕过
+
+proxy-test-url = 测试 URL
+
+proxy-test = 测试已保存的设置
+
+proxy-note = 域名以逗号分隔。关闭身份认证会删除已保存的密码。
+
+proxy-target-changed = 代理账户已变更。保存前请替换或删除已保存的密码。
+
+proxy-save-before-test = 请先保存修改，再测试。
+
+proxy-test-success = 连接成功 · { $latency } 毫秒 · HTTP { $status }
+
+proxy-test-failed = 连接失败 · { $latency } 毫秒 · HTTP { $status }。请检查代理地址、身份认证和测试 URL。
+
+headers-title = 请求头
+
+headers-name = 请求头名称
+
+headers-value = 新值
+
+headers-add = 添加请求头
+
+headers-note = 已有值不会显示。可逐项保留、替换或删除。授权请求头请在连接身份认证中设置。
+
+headers-value-required = 新增或重命名的请求头需要填写替换值。
+
+connection-request-overlay = 高级请求体
+
+request-overlay-json = JSON 覆盖值
+
+request-overlay-note = 这些字段会合并到模型请求中。清除覆盖值可恢复提供商的请求体。
+
+request-overlay-clear = 清除覆盖值
+
+request-overlay-invalid = 请输入不超过 32 KiB 的 JSON 对象，或清空字段以删除覆盖值。
+
+model-profile-adapter = 适配器
+
+model-profile-default-thinking = 默认思考级别
+
+bundle-export = 导出会话包
+
+bundle-import = 导入会话包
+
+bundle-resume = 会话传输
+
+bundle-preview = 刷新预览
+
+bundle-review = 检查传输
+
+bundle-edit = 返回
+
+bundle-confirm = 确认传输
+
+bundle-workspace-path = Host 目录
+
+bundle-workspace-project = 选择项目
+
+bundle-forget = 清除传输记录
+
+bundle-forget-confirm = 清除记录
+
+bundle-path-invalid = 请输入不含控制字符的 Host 绝对路径。
+
+bundle-save-failed = 恢复记录保存失败，传输未发送。
+
+bundle-failed = Host 未能确认本次传输。
+
+bundle-receipt-invalid = Host 回执与本次传输不符，结果未确认。
+
+bundle-count = 共 { $count } 个会话，包含当前会话及全部子任务
+
+bundle-source = Host 上的会话包文件
+
+bundle-destination = Host 上的新会话包文件
+
+bundle-digest = 已确认的子树摘要
+
+bundle-session-id = 会话 ID
+
+bundle-workspace = Host 上的目标工作目录
+
+bundle-host-path-note = 以下路径位于所连接的 Host，而非当前终端。
+
+bundle-working = 正在等待 Host…
+
+bundle-export-note = 导出这棵子树的完整历史和产物，不覆盖已有文件。
+
+bundle-import-note = 使用当前 Host 默认配置将历史和产物导入此工作区，不导入来源凭证和权限。
+
+bundle-export-now = 导出
+
+bundle-import-now = 导入
+
+bundle-exported = Host 已导出 { $count } 个会话 · 压缩后 { $amount } 字节
+
+bundle-imported = Host 已导入 { $count } 个会话 · { $amount } 个产物文件
+
+bundle-unknown = Host 可能已完成传输。原始请求已保留，不会重复执行。
+
+bundle-forget-note = 清除此草稿或回执？Host 上的文件和会话保持原状。
+
+bundle-forget-unknown-note = 本次传输的结果仍未确认。清除记录无法取消或撤销 Host 上的操作。请先核实结果，再开始新的传输。
+
+bundle-query = 核实结果
+
+bundle-visit = 打开会话
+
+bundle-no-receipt = 尚未找到原始回执，结果仍未确认，不能据此重复导入。
+
+bundle-recovered = 原始回执确认已导入 { $count } 个会话；回执不含产物数量。
+
+bundle-import-preview = 会话包包含 { $count } 个会话 · { $artifacts } 个产物文件
+
+bundle-content-digest = 会话包内容摘要
+
+bundle-binding-digest = 目标工作区绑定摘要
+
+bundle-resolved-workspace = Host 已解析的工作目录
+
+session-actions = 会话操作
+
+connection-actions = 连接操作
+
+project-actions = 项目操作
+
+composer-add = 添加到消息
+
+composer-options = 模型与权限
+
+controls-anchor-unavailable = 此历史消息已不可用。
+
+controls-checkpoint-failed = 恢复状态保存失败，请求未发送。
+
+controls-compact = 压缩上下文
+
+controls-compact-finished = 上下文已压缩。
+
+controls-compact-unchanged = 上下文未改变。
+
+controls-compact-failed = 上下文压缩失败。
+
+controls-compact-note = 为后续消息总结当前会话。此操作会使用所选模型，可能产生费用。
+
+controls-compact-started = 压缩已开始，结果将显示在会话中。
+
+controls-confirm-forget = 放弃核对记录
+
+controls-conflict = Host 状态已改变。请刷新并核对设置后再保存。
+
+controls-display-name = 显示名称
+
+controls-empty-turn = 会话轮次
+
+controls-executor = 会话执行器
+
+controls-executor-model = 执行器模型（可选）
+
+controls-executor-note = 请选择已注册的执行器。模型名称由该执行器定义，留空使用其默认模型。
+
+controls-executor-query = 查找执行器
+
+controls-field-limit = 此字段内容超出大小限制。
+
+controls-filter-executors = 还有更多执行器，请使用“下一页”或缩小搜索范围。
+
+controls-flag = 标记此会话
+
+controls-forget = 放弃未决请求记录…
+
+controls-forget-note = Host 可能已经执行此请求。放弃只会删除此核对记录，不会取消或撤销 Host 操作。
+
+controls-history = 会话历史
+
+controls-interrupt = 停止并撤回队列消息
+
+controls-interrupt-note = 停止当前这次运行，并原子性地撤回其待处理消息。已撤回的消息不会在随后运行。
+
+controls-labels = 标签
+
+controls-labels-note = 每行一个标签，Ctrl+J 换行。
+
+controls-labels-truncated = Host 仅返回了部分标签；标签将保留，仍可修改标记状态。
+
+controls-landmarks = 轮次节点
+
+controls-mark-read = 标为已读至此消息
+
+controls-mark-read-note = 确认已读至当前选中的可见历史消息。其后的消息仍为未读。
+
+controls-metadata = 标签与标记
+
+controls-no-executors = 没有匹配的执行器。
+
+controls-no-turns = 尚无会话轮次。
+
+controls-open-turn = 打开此轮次
+
+controls-preferences = 个人偏好
+
+controls-retract-queue = 撤回全部队列消息
+
+controls-retract-queue-note = 撤回此会话的全部待处理消息。当前运行将继续。
+
+controls-save = 保存
+
+controls-saved = 已应用。
+
+controls-search-executors = 搜索
+
+controls-tone = 助手语气偏好
+
+controls-unknown = 结果未知，不会自动重发请求。刷新只显示当前状态，不代表此请求已提交。
+
+controls-unresolved = 核对未决会话请求
+
+controls-working = 等待 Host…
+
+controls-workspace-instructions = 使用工作区指令
+
+controls-workspace-note = 此开关单独保存；个人偏好的修改请使用“保存”。
+
+branch-side-title = 从此轮次创建旁支会话
+
+branch-side-note = 创建包含所选轮次及之前历史的旁支会话。原会话及其草稿会保留。
+
+branch-empty-side-title = 新建空白旁支会话
+
+branch-empty-side-note = 使用相同设置和工作区创建关联会话，不复制消息历史。
+
+controls-executors-stale = 执行器目录已改变，请重新搜索并选择当前注册项。
+
+plugins-export = 导出插件包
+
+plugins-export-source = 来源
+
+plugins-export-installed = Host 上已安装的插件包
+
+plugins-export-version = 已安装内容摘要
+
+plugins-export-target = Host 上的新插件包文件
+
+plugins-export-path-note = 请输入所连接 Host 上的绝对路径。导出内容为已安装的插件包文件。
+
+plugins-export-impact = 导出已检查的安装版本，不覆盖已有文件。
+
+plugins-export-path-invalid = 请输入不含控制字符的 Host 绝对目标路径。
+
+plugins-exported = 已导出到 Host：{ $path }
+
+plugins-export-unknown = 本次导出结果未确认。选择其他目标前，请核实 Host 上的原目标文件；不会重复导出到原目标。
+
+plugins-export-back = 插件包详情
+
+attention-dismiss = 移除
+attention-empty = 暂无通知。
+attention-full = 通知记录已满，移除旧通知后可继续接收。
+attention-open = 通知
+attention-read = 标为已读
+attention-title = 通知
+resources-cancelled = 已停止
+resources-captured = 终端输入 · Ctrl+] 返回控件
+resources-check = 检查原始请求
+resources-cleanup-unknown = 尚未确认终端分离，请重新连接检查进程。
+resources-command = 运行命令
+resources-command-limit = 命令超过 32 KiB。
+resources-command-line = 命令
+resources-completed = 已完成
+resources-control-unknown = 输入接收结果未知，重新连接并检查后再输入。
+resources-controls = 返回控件
+resources-copy = 复制输出
+resources-details = 进程详情
+resources-empty = 此会话没有进程。
+resources-ended = 原始进程已结束。
+resources-failed = 失败
+resources-forget = 忘记恢复记录…
+resources-forget-warning = 这只会移除恢复记录。原始命令可能仍在运行，不会重试或停止。
+resources-found = 已找到原始请求创建的进程。
+resources-input-full = 输入超过终端限制。单次粘贴请少于 32 KiB，或等待待发输入。
+resources-more = 更多
+resources-new-terminal = 新建终端
+resources-not-dispatched = 请求未发送，请检查已保存的恢复记录。
+resources-open-source = 打开所属会话
+resources-original = 原始会话：{ $session }
+resources-orphaned = 进程状态不可用
+resources-reconnect = 重新连接终端
+resources-redacted = Host 已隐藏输出。
+resources-run = 运行
+resources-running = 运行中
+resources-screen = 终端屏幕 · Shift+滚轮查看历史
+resources-source-owned = 此进程属于其他会话，在此只读。
+resources-starting = 启动中
+resources-stop = 停止进程
+resources-stop-confirm = 停止此进程？关闭终端只会断开连接。
+resources-terminal-failed = 无法连接此终端，可能已由其他客户端控制或已结束。
+resources-terminal-loading = 正在连接终端…
+resources-timed-out = 已超时
+resources-title = 终端
+resources-type = 在终端中输入
+resources-unknown = 结果未知。请先检查原始请求，再启动其他进程。
+resources-working = 处理中…
+resources-input-rejected = 输入在发送前被拒绝，请重新连接后继续。
+resources-truncated = 较早的输出已被裁剪。
+
+completion-commands = 命令
+completion-context = 上下文
+completion-workspace = 工作区
+completion-sessions = 会话
+completion-plugins = 插件
+completion-added = 已添加上下文
+completion-select = 选择
+completion-preview = 预览
+completion-browse = 浏览文件夹
+completion-remove = 移除
+completion-reselect = 重新选择
+completion-keep-excerpt = 仅保留摘录
+completion-loading = 加载中…
+completion-empty = 没有匹配项
+completion-directory = 文件夹
+completion-file = 文件
+completion-capture-conversation = 引用此会话摘录
+completion-captured-excerpt = 已加载消息的快照
+completion-truncated = 摘录已按大小限制截短
+completion-failed = 无法加载上下文
+completion-query-long = 搜索文字过长
+completion-stale = 输入或候选项已变化，请重新选择。
+completion-reference-unavailable = 有引用已不可用，请移除或重新选择。
+completion-source-changed = 来源已变化，请移除或重新选择。
+completion-source-unavailable = 新会话中无法使用此来源，请移除引用或保留其摘录。
+completion-input-invalid = 这些引用无法一起提交，请检查已添加的上下文。
+completion-history-trimmed = 已清理较早的撤销记录以容纳上下文，当前草稿保持不变。
+completion-binding-budget = 上下文已满，请先移除一个引用。
+revision-resource-review = 新会话已就绪。运行前请逐项确认引用的新来源。
+revision-resource-confirm = 引用已就绪。请确认在新会话中运行修改后的输入。
+
+completion-controls = 操作
+completion-results = 候选项
+
+controls-new-executor = 新建执行器会话
+controls-create = 创建
+controls-create-name = 会话名称（可选）
+controls-create-workspace = 工作区
+controls-create-found = 已找到会话，可以打开查看当前状态。此次创建的结果尚未确认。
+controls-create-missing = 暂时无法找到会话，此次创建的结果仍未确定。
+controls-open-created = 打开找到的会话

@@ -795,8 +795,10 @@ export class HostRuntimeResourceCoordinator
 
 function controlWrite(
   control: RuntimeResourcePtyControl,
-): Pick<ShellRunWriteInput, 'input' | 'size'> {
+): Pick<ShellRunWriteInput, 'input' | 'actions' | 'size'> {
   switch (control.kind) {
+    case 'actions':
+      return { actions: control.actions };
     case 'input':
       return { input: control.input };
     case 'resize':

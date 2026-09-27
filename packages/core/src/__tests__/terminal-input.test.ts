@@ -22,6 +22,8 @@ import { it } from 'node:test';
 
 import {
   encodeTerminalInputActions,
+  encodeTerminalControllerActions,
+  parseTerminalInputAction,
   encodedTerminalInputActionsByteLength,
   formatTerminalInputActions,
   type TerminalInputNamedKey,
@@ -178,4 +180,36 @@ it('rejects mouse input outside the application protocol and viewport', () => {
     /has not enabled SGR cell mouse reporting/,
   );
   assert.throws(() => encodeTerminalInputActions(click, { ...state, cols: 2 }), /outside 2x24/);
+});
+
+it('frames paste from the live mode and ignores only unsupported controller pointer events', () => {
+  const paste = parseTerminalInputAction({ type: 'paste', text: 'a\r\nb' });
+  const state = {
+    applicationCursorKeysMode: true,
+    bracketedPasteMode: true,
+    mouseTrackingMode: 'none' as const,
+    mouseEncoding: 'default' as const,
+    cols: 80,
+    rows: 24,
+  };
+  assert.equal(encodeTerminalInputActions([paste], state), '\u001b[200~a\nb\u001b[201~');
+  assert.equal(
+    encodeTerminalInputActions([paste], { ...state, bracketedPasteMode: false }),
+    'a\rb',
+  );
+  assert.equal(encodedTerminalInputActionsByteLength([paste]), 16);
+  assert.throws(() => parseTerminalInputAction({ type: 'paste', text: '\u001b[201~forged' }));
+  const mouse = parseTerminalInputAction({
+    type: 'mouse',
+    event: 'press',
+    button: 'left',
+    x: 1,
+    y: 1,
+  });
+  assert.throws(() => encodeTerminalInputActions([mouse], state));
+  assert.equal(
+    encodeTerminalControllerActions([mouse, paste], state),
+    '\u001b[200~a\nb\u001b[201~',
+  );
+  assert.throws(() => encodeTerminalControllerActions([{ type: 'paste', text: '\u0003' }], state));
 });

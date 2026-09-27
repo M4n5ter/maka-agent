@@ -70,7 +70,7 @@ pub(crate) async fn install(
             .replace("__ACCEPTANCE_TITLE__", title),
     )
     .unwrap();
-    let mut runtime = json!({"entry":"host.mjs", "sdkVersion":2});
+    let mut runtime = json!({"entry":"host.mjs", "sdkVersion":3});
     // Omission deliberately exercises the Host's production Shared default.
     if vm == "dedicated" {
         runtime["vm"] = json!(vm);

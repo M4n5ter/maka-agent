@@ -24,6 +24,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+maka-presentation.workspace = true
 apply-patch.workspace = true
 base64 = "0.22.1"
 chrono = { workspace = true, features = ["clock"] }

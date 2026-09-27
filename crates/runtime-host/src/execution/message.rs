@@ -60,6 +60,7 @@ impl Executions {
             let intent = (!input.input_selections.is_empty() || input.turn_orchestration.is_some())
                 .then(|| SubmittedTurnIntent {
                     input_selections: input.input_selections.clone(),
+                    input_selection_sources: input.input_selection_sources.clone(),
                     turn_orchestration: input.turn_orchestration.clone(),
                 });
             if input.origin_host_epoch == epoch
@@ -169,7 +170,11 @@ impl Executions {
                 .map(|run| run.invocation.clone());
             if let Some(invocation) = active {
                 native.check_active(self, &invocation).await?;
-                let (skills, _input_admission) = if source.submitted_intent.is_none() {
+                let (skills, _input_admission) = if !source
+                    .submitted_intent
+                    .as_ref()
+                    .is_some_and(SubmittedTurnIntent::is_exact_turn)
+                {
                     match queued.take() {
                         Some((owner, candidate)) if owner == invocation => {
                             let candidate = candidate?;
@@ -209,6 +214,7 @@ impl Executions {
                                 .prepare_message_input(
                                     session,
                                     source.message.content.clone(),
+                                    source.submitted_intent.as_ref(),
                                     Some(connection_id),
                                     tools,
                                 )
@@ -268,7 +274,11 @@ impl Executions {
                             )
                             .await?;
                         environment
-                            .expand(input.content.clone().into(), input.input_selections.clone())
+                            .expand(
+                                input.content.clone().into(),
+                                input.input_selections.clone(),
+                                input.input_selection_sources.clone(),
+                            )
                             .await
                     }
                     .await,
@@ -300,6 +310,7 @@ impl Executions {
                         // Original input intent stays in the source identity.
                         // Preparation below uses this Run's actual frozen tools.
                         input_selections: Default::default(),
+                        input_selection_sources: Default::default(),
                         turn_orchestration: input.turn_orchestration,
                         max_steps: None,
                     },

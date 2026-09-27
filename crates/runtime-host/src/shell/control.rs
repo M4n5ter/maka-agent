@@ -93,6 +93,7 @@ impl ControlError {
 
 pub(crate) enum Input {
     Actions(Vec<InputAction>),
+    Interactive(Vec<InputAction>),
     Raw(String),
 }
 

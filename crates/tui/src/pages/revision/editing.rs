@@ -107,6 +107,11 @@ impl State {
                 cursor: 0,
                 anchor: None,
                 upstream: false,
+                marks: if self.display {
+                    input.display_marks.clone()
+                } else {
+                    input.marks.clone()
+                },
             })
             .expect("validated revision text");
             if let Some(position) = saved

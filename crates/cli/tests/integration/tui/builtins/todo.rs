@@ -102,8 +102,7 @@ fn real_model_todo_updates_reach_the_panel_and_unpriced_usage() {
     tui.click_page_text("Message…");
     tui.send(b"Update the isolated checklist\r");
     tui.wait_for("Verify durable checklist");
-    tui.wait_for("◨");
-    tui.click_text("◨");
+    tui.session_view_action("Show panels");
     tui.wait_for("Checklist");
     reveal(&mut tui, "Verify durable checklist");
     let first = fixture.runtime.block_on(stored(
@@ -129,7 +128,7 @@ fn real_model_todo_updates_reach_the_panel_and_unpriced_usage() {
             .all(|item| item["status"] == "completed")
     );
     tui.wait_for("2 of 2 done");
-    category(&mut tui, "Usage & pricing", "unpriced");
+    category(&mut tui, "Usage & pricing", "4 unvalued");
     let activity = fixture.read("maka.insights", "request", json!({"kind":"activity", "operationId":uuid::Uuid::new_v4(),
         "read":{"kind":"start","filter":{"from":0,"to":4_000_000_000_000_u64,"sessionId":"builtin-todo"}}}));
     let summary = fixture.read("maka.insights", "request", json!({"kind":"summary", "operationId":uuid::Uuid::new_v4(),"cursor":activity["page"]["cursor"]}));

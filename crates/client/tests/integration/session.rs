@@ -17,6 +17,9 @@
  * under the License.
  */
 
+mod bundle;
+mod workspace_context;
+
 use super::connection::pair_with;
 use maka_client::{ClientError, RequestFailure};
 use maka_protocol::session::*;

@@ -71,7 +71,7 @@ test('an independent presenter declares a collection and forwards only its commi
     async (input) => (await f.invoke('tasks', input)).value,
   );
   const read = await p.invoke({ kind: 'read', route: null, locale: 'en' });
-  assert.equal(read.view.version, 8);
+  assert.equal(read.view.version, 9);
   assert.equal(read.view.root.kind, 'collection');
   assert.equal(read.view.root.items[0].panel.context.id, 'a');
   const input = {

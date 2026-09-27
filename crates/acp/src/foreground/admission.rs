@@ -44,6 +44,7 @@ impl Foreground {
                 turn_id: turn_id.clone(),
                 content,
                 input_selections: Default::default(),
+                input_selection_sources: Default::default(),
                 turn_orchestration: None,
                 max_steps: None,
             })

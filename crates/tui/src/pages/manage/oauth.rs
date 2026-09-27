@@ -372,31 +372,45 @@ impl App {
             },
         )];
         if self.navigation.current() == Route::Connections
-            && (self.management.oauth.attempt.is_none() || self.management.oauth.terminal())
-            && let Some(row) = self
+            && let Some(command) = self
                 .connections
                 .rows
                 .iter()
                 .find(|row| Some(&row.id) == self.connections.selected.as_ref())
-            && self
+                .and_then(|row| self.connection_reauthentication_command_for(row))
+        {
+            commands.push(command);
+        }
+        commands
+    }
+
+    pub(crate) fn connection_reauthentication_command_for(
+        &self,
+        row: &std::sync::Arc<crate::pages::connections::Row>,
+    ) -> Option<(Action, &'static str)> {
+        let ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return None;
+        };
+        if self.management.oauth.attempt.is_some() && !self.management.oauth.terminal()
+            || !self
                 .providers
                 .find(&row.provider)
                 .is_some_and(|provider| !provider.descriptor.authentication.is_empty())
         {
-            commands.push((
-                Action::Manage(Manage::Open(
-                    Target {
-                        root: root_id.clone(),
-                        epoch: epoch.clone(),
-                        name: row.name.clone(),
-                        entity: Entity::Connection(row.clone()),
-                    },
-                    Kind::Oauth,
-                )),
-                "oauth-reauth",
-            ));
+            return None;
         }
-        commands
+        Some((
+            Action::Manage(Manage::Open(
+                Target {
+                    root: root_id.clone(),
+                    epoch: epoch.clone(),
+                    name: row.name.clone(),
+                    entity: Entity::Connection(row.clone()),
+                },
+                Kind::Oauth,
+            )),
+            "oauth-reauth",
+        ))
     }
 
     pub(super) fn oauth_open(&mut self, target: &Target) {
@@ -703,6 +717,12 @@ impl App {
             self.management.oauth.presentation = None;
             self.management.oauth.display = None;
         }
+    }
+
+    /// Eager native services share one connection-owned registration. Opening
+    /// the sign-in dialog must never publish a second replacement registration.
+    pub(crate) fn oauth_native_service_ready(&mut self) {
+        self.management.oauth.ready = true;
     }
 
     pub fn oauth_service_closed(&mut self) {

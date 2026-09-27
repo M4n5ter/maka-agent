@@ -210,10 +210,11 @@ impl EventLog {
                     "INSERT INTO session_revision_sources
                      SELECT ?1, sequence FROM session_history_events
                      WHERE owner_session_id = ?2 AND sequence <= ?3
-                       AND kind = 'invocation_opened'
                        AND json_extract(event_json, '$.invocation.turn_id') = ?4
-                       AND json_extract(event_json, '$.fact.input.kind') = 'message'
-                       AND json_array_length(event_json, '$.fact.input.source_messages') > 0"
+                       AND ((kind = 'invocation_opened'
+                         AND json_extract(event_json, '$.fact.input.kind') = 'message'
+                         AND json_array_length(event_json, '$.fact.input.source_messages') > 0)
+                         OR (kind = 'message_steered' AND json_type(event_json, '$.fact.source') = 'object'))"
                 ).bind(&request.target_session_id).bind(&request.source_session_id).bind(observed)
                     .bind(turn_id).execute(&mut *tx).await?;
                 if retained.rows_affected() == 0 { return Err(super::invalid("revision Turn has no editable input")); }

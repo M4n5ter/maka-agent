@@ -249,6 +249,7 @@ export class PtyScreenCollector {
     this.throwIfUnavailable();
     return {
       applicationCursorKeysMode: this.terminal.modes.applicationCursorKeysMode,
+      bracketedPasteMode: this.terminal.modes.bracketedPasteMode,
       mouseTrackingMode: this.terminal.modes.mouseTrackingMode,
       mouseEncoding: this.mouseEncoding,
       cols: this.terminal.cols,

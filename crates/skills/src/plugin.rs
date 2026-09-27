@@ -218,7 +218,7 @@ impl Plugin for Builtin {
             staged
                 .insert(
                     ID,
-                    maka_plugins::input::InputPreparation(Arc::new(skills.clone())),
+                    maka_plugins::input::InputPreparation::new(Arc::new(skills.clone())),
                 )
                 .map_err(|error| error.to_string())?;
             Ok(staged)

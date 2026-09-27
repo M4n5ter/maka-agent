@@ -33,7 +33,17 @@ export type ModelChoices = {
   revision: number;
   models: readonly ModelChoice[];
   complete: boolean;
+  nextCursor: ModelCursor | null;
 };
+export type ModelCursor = {
+  query: string;
+  generation: string;
+  configurationRevision: number;
+  providerRevision: number;
+  offset: number;
+};
+export type ModelSearch = { query?: string; cursor?: ModelCursor | null };
+export type ModelSearchResult = { kind: 'page'; page: ModelChoices } | { kind: 'stale' };
 
 export interface ModelGeneration {
   text: string;

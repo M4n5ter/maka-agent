@@ -46,7 +46,9 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod batch;
+mod javascript_resources;
 mod managed;
+mod resources;
 
 #[derive(Clone, Default)]
 struct Business(Arc<AtomicUsize>);
@@ -63,7 +65,7 @@ impl Plugin for Business {
                 )
                 .map_err(|e| e.to_string())?;
             staged
-                .insert("example.prepare", input::InputPreparation(business))
+                .insert("example.prepare", input::InputPreparation::new(business))
                 .map_err(|e| e.to_string())?;
             Ok(staged)
         })

@@ -164,7 +164,7 @@ async fn install(client: &maka_client::Client, directory: &Path, operation: &str
         package.join("maka.extension.json"),
         json!({
             "schemaVersion":1,"id":PACKAGE,
-            "runtime":{"entry":"host.mjs","sdkVersion":2,"vm":"dedicated"}
+            "runtime":{"entry":"host.mjs","sdkVersion":3,"vm":"dedicated"}
         })
         .to_string(),
     )

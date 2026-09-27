@@ -22,7 +22,12 @@ use crate::pages::{references::Target, skills::Picked};
 
 impl State {
     pub(crate) fn skills_source(&self) -> Option<&str> {
-        Some(&self.saved.as_ref()?.copy.source_session_id)
+        let saved = self.saved.as_ref()?;
+        Some(if saved.stage == super::saved::Stage::Bindings {
+            &saved.copy.target_session_id
+        } else {
+            &saved.copy.source_session_id
+        })
     }
     fn skill_input(&self, session: &str, input: &str) -> Option<&Input> {
         self.saved

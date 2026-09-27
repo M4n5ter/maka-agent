@@ -17,6 +17,9 @@
  * under the License.
  */
 
+mod services;
+pub(crate) use services::{NativeDispatch, Publication};
+
 use crate::{Client, ClientError, RequestFailure};
 use maka_protocol::{Outcome, capability, oauth};
 use serde_json::{Value, json};
@@ -69,7 +72,32 @@ impl OAuthPresentation {
     }
 }
 
+/// Both receivers belong to one capability registration. Keep them alive until
+/// the connection ends or the Host releases their shared registration.
+pub struct NativeServices {
+    pub oauth: OAuthPresentationService,
+    pub notifications: crate::notifications::NativeNotificationService,
+}
+
 impl Client {
+    pub async fn publish_native_services(&self) -> Result<NativeServices, RequestFailure> {
+        let registration_id = uuid::Uuid::new_v4().to_string();
+        let (oauth_sender, requests) = mpsc::channel(1);
+        let (notification_sender, notifications) =
+            crate::notifications::NativeNotificationService::channel(registration_id.clone());
+        self.request_presentation(json!({"registrationId":registration_id,"offers":[],"services":[
+            {"serviceId":oauth::PRESENTATION_SERVICE_ID,"version":oauth::PRESENTATION_SERVICE_VERSION},
+            {"serviceId":crate::notifications::SERVICE_ID,"version":crate::notifications::SERVICE_VERSION}
+        ]}), Publication {oauth: oauth_sender, notifications: Some(notification_sender)}).await?;
+        Ok(NativeServices {
+            oauth: OAuthPresentationService {
+                registration_id,
+                requests,
+            },
+            notifications,
+        })
+    }
+
     pub async fn publish_oauth_presentation(
         &self,
     ) -> Result<OAuthPresentationService, RequestFailure> {
@@ -80,7 +108,10 @@ impl Client {
                 "serviceId":oauth::PRESENTATION_SERVICE_ID,
                 "version":oauth::PRESENTATION_SERVICE_VERSION
             }]}),
-            sender,
+            Publication {
+                oauth: sender,
+                notifications: None,
+            },
         )
         .await?;
         Ok(OAuthPresentationService {
@@ -166,6 +197,12 @@ impl Presentation {
             }
         }
         Ok(())
+    }
+
+    pub fn owns(&self, id: &str) -> bool {
+        self.invocation
+            .as_ref()
+            .is_some_and(|invocation| invocation.id == id)
     }
 
     pub fn consumer(&self) -> Option<mpsc::Sender<OAuthPresentation>> {

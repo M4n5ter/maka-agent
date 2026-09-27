@@ -69,7 +69,7 @@ pub(super) fn package(
         path.join("maka.extension.json"),
         serde_json::to_vec(&json!({
             "schemaVersion":1, "id":id, "dependencies":dependencies,
-            "runtime":{"entry":"index.mjs","sdkVersion":2,"vm":mode},
+            "runtime":{"entry":"index.mjs","sdkVersion":3,"vm":mode},
             "composition":{"patch":"maka.composition.yml"}
         }))
         .unwrap(),
@@ -274,9 +274,9 @@ async fn external_shared_and_dedicated_plugins_route_services_persist_data_and_d
             assert!(executors["result"]["items"].as_array().unwrap().iter().any(|executor| executor["id"] == "example.external"));
             let choices = peer.rpc("executor.catalog.query", json!({"query":"external acceptance"})).await;
             assert_eq!(choices["ok"], true, "{choices}");
-            assert_eq!(choices["result"]["executors"], json!([{"id":"example.external","displayName":"External acceptance",
+            assert_eq!(choices["result"]["page"]["executors"], json!([{"id":"example.external","displayName":"External acceptance",
                 "capabilities":{"thinking":true,"toolActivity":true,"attachments":false,"historyCopy":false}}]));
-            assert_eq!(choices["result"]["complete"], true);
+            assert_eq!(choices["result"]["page"]["complete"], true);
             let mut external_runs = vec![("executor-session", false), (external_child.session_id.as_str(), false)];
             if !reopened { external_runs.push((external_child.session_id.as_str(), true)); }
             for (session_id, waiting) in external_runs {

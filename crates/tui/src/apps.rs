@@ -1288,6 +1288,14 @@ impl App {
             Command::View(Intent::Open(session)) => {
                 return self.apply(Action::Visit(Route::Session(session)));
             }
+            Command::View(Intent::OpenMessage {
+                session,
+                turn,
+                message,
+                sequence,
+            }) => {
+                return self.open_session_anchor(session, Some(turn), Some(message), sequence);
+            }
             Command::View(Intent::Submit(id)) => {
                 if asks(instance, &id) {
                     apps.confirming = Some((key, id));
@@ -3259,9 +3267,105 @@ pub(crate) mod tests {
         let screen = draw(&mut app, 170, 40);
         assert!(!screen.contains("Criteria") && screen.contains("3/5"));
         assert!(!app.apps_enabled(&pause));
-        // Too narrow for both, the conversation keeps the room.
+        // A narrow terminal gives explicitly opened panels the reading area,
+        // retaining the composer and the same actionable panel instance.
         app.apply(Action::ToggleInspector);
-        assert!(!draw(&mut app, 100, 40).contains("Criteria"));
+        app.apply(Action::BrowseTranscript);
+        for width in [100, 55] {
+            let screen = draw(&mut app, width, 24);
+            assert_eq!(app.focus, Focus::Inspector);
+            assert!(
+                screen.contains("Criteria") && screen.contains("Pause"),
+                "{screen}"
+            );
+            assert!(screen.contains("Message…"), "{screen}");
+            assert!(app.inspector_shown());
+            assert!(
+                app.chat.area.is_none(),
+                "hidden transcript has no pointer target"
+            );
+            assert!(app.apps_enabled(&pause));
+        }
+        app.input(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!draw(&mut app, 55, 24).contains("Criteria"));
+        assert_eq!(app.focus, Focus::Composer);
+        assert!(!app.apps_enabled(&pause));
+        app.apply(Action::ToggleInspector);
+        draw(&mut app, 55, 24);
+        for _ in 0..8 {
+            app.shell_advance_focus(true);
+            assert_ne!(app.focus, Focus::Transcript);
+        }
+        app.focus = Focus::Inspector;
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL,
+        )));
+        draw(&mut app, 55, 24);
+        assert!(!app.inspector_shown());
+        assert!(app.chat.view.search.is_some());
+        assert!(app.chat.area.is_some());
+        app.apply(Action::ToggleInspector);
+        draw(&mut app, 170, 40);
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL,
+        )));
+        draw(&mut app, 170, 40);
+        assert!(app.inspector_shown() && app.chat.view.search.is_some());
+        draw(&mut app, 55, 24);
+        assert!(app.inspector_replaces_chat());
+        let query = app
+            .chat
+            .view
+            .search
+            .as_ref()
+            .unwrap()
+            .editor
+            .text()
+            .to_owned();
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.chat.view.search.as_ref().unwrap().editor.text(), query);
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL,
+        )));
+        draw(&mut app, 55, 24);
+        assert!(!app.inspector_shown());
+        app.apply(Action::ToggleInspector);
+        draw(&mut app, 55, 24);
+        assert!(app.chat.view.search.is_none());
+        let mut terminal = Terminal::new(TestBackend::new(55, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (column, row) = (0..24)
+            .flat_map(|row| (0..51).map(move |column| (column, row)))
+            .find(|(column, row)| {
+                (0..5)
+                    .map(|offset| buffer[(*column + offset, *row)].symbol())
+                    .collect::<String>()
+                    == "Pause"
+            })
+            .expect("visible narrow panel action");
+        for kind in [
+            crossterm::event::MouseEventKind::Down(MouseButton::Left),
+            crossterm::event::MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.input(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        }
+        assert!(app.apps_requests().iter().any(|request| matches!(
+            &request.work, Work::Call { input: Input::Submit { action, .. }, .. } if action == "pause"
+        )));
     }
 
     #[test]

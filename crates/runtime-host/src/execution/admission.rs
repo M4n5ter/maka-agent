@@ -40,6 +40,7 @@ impl Executions {
                 messages: vec![TurnStartMessage {
                     content: input.content,
                     input_selections: input.input_selections,
+                    input_selection_sources: input.input_selection_sources,
                 }],
                 turn_orchestration: input.turn_orchestration,
                 max_steps: input.max_steps,
@@ -131,6 +132,7 @@ impl Executions {
                                 .expand(
                                     message.content.clone().into(),
                                     message.input_selections.clone(),
+                                    message.input_selection_sources.clone(),
                                 )
                                 .await?;
                             environment = next;
@@ -203,6 +205,7 @@ impl Executions {
                         || input.turn_orchestration.is_some())
                     .then(|| maka_runtime::message::SubmittedTurnIntent {
                         input_selections: message.input_selections.clone(),
+                        input_selection_sources: message.input_selection_sources.clone(),
                         turn_orchestration: input.turn_orchestration.clone(),
                     }),
                 };
@@ -215,6 +218,7 @@ impl Executions {
                 turn_id: input.turn_id,
                 content: content.clone().into(),
                 input_selections: Default::default(),
+                input_selection_sources: Default::default(),
                 turn_orchestration: input.turn_orchestration,
                 max_steps: input.max_steps,
             };

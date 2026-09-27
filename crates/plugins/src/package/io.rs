@@ -36,6 +36,8 @@ pub enum PackageIoError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Invalid(#[from] crate::Error),
+    #[error("package was published but its durability could not be confirmed: {0}")]
+    CommitUnknown(std::io::Error),
 }
 
 impl Package {
@@ -75,6 +77,20 @@ impl Package {
     /// An existing destination is never replaced, and a partial write is never
     /// published as a complete bundle.
     pub fn export_to(&self, target: &Path) -> Result<(), PackageIoError> {
+        self.export_with_sync(target, |parent| {
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
+            #[cfg(not(unix))]
+            let _ = parent;
+            Ok(())
+        })
+    }
+
+    fn export_with_sync(
+        &self,
+        target: &Path,
+        sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<(), PackageIoError> {
         if !target.is_absolute() {
             return Err(invalid("bundle destination must be absolute"));
         }
@@ -88,8 +104,7 @@ impl Package {
         temporary
             .persist_noclobber(target)
             .map_err(|error| error.error)?;
-        #[cfg(unix)]
-        fs::File::open(parent)?.sync_all()?;
+        sync_parent(parent).map_err(PackageIoError::CommitUnknown)?;
         Ok(())
     }
 }
@@ -203,5 +218,28 @@ mod tests {
             std::os::unix::fs::symlink(&bundle, package_root.join("linked")).unwrap();
             assert!(Package::read_from(&package_root).is_err());
         }
+    }
+
+    #[test]
+    fn published_package_survives_parent_sync_failure_as_unknown_without_overwrite() {
+        let package = Package::new(BTreeMap::from([
+            ("maka.extension.json".into(), br#"{"schemaVersion":1,"id":"example","runtime":{"entry":"index.mjs","sdkVersion":1}}"#.to_vec()),
+            ("index.mjs".into(), b"export default {}".to_vec()),
+        ])).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("export.maka-extension");
+        let error = package
+            .export_with_sync(&target, |_| Err(std::io::Error::other("sync failed")))
+            .unwrap_err();
+        assert!(matches!(error, PackageIoError::CommitUnknown(_)));
+        assert_eq!(fs::read(&target).unwrap(), package.to_bundle());
+        assert!(
+            matches!(package.export_to(&target), Err(PackageIoError::Io(error))
+            if error.kind() == std::io::ErrorKind::AlreadyExists)
+        );
+        assert_eq!(
+            Package::read_from(&target).unwrap().digest(),
+            package.digest()
+        );
     }
 }

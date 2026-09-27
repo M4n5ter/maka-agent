@@ -20,7 +20,7 @@
 use super::Command;
 use crate::{
     app::{Action, App, ConnectionState, Focus},
-    ui::{self, Node, On, Tone},
+    ui::{self, Node, On, Size, Tone},
 };
 use ratatui::{
     Frame,
@@ -90,8 +90,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                         identity
                     )
                 };
-                Node::column(
-                    row.id.clone(),
+                let summary = Node::column(
+                    "summary",
                     vec![
                         Node::text("name", title).clip(),
                         Node::text("detail", vec![(detail, Tone::Subtle)]).clip(),
@@ -103,7 +103,21 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 .submit(Action::Connection(Command::Open(row.id.clone())))
                 .follow_focus()
                 .current(selected)
-                .hint(app.i18n.text("connection-rename"))
+                .hint(app.i18n.text("connection-actions"))
+                .size(Size::Fill);
+                Node::row(
+                    row.id.clone(),
+                    vec![
+                        summary,
+                        crate::pages::actions::menu(
+                            app,
+                            "actions",
+                            &format!("connection/{}", row.id),
+                            "connection-actions",
+                            crate::pages::actions::connection_commands(app, row),
+                        ),
+                    ],
+                )
             })
             .collect()
     };
@@ -121,7 +135,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     {
         app.connections
             .surface
-            .focus(format!("connections/rows/{id}"));
+            .focus(format!("connections/rows/{id}/summary"));
     }
     app.connections.surface.render(frame, area, tree, context);
 }

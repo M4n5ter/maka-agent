@@ -81,14 +81,8 @@ fn anonymous_setup_verifies_without_writes_and_creates_first_chat() {
     tui.wait_for(&format!("{label} ▾"));
     tui.click_text("Name (optional)");
     tui.send(b"New connection");
-    tui.click_text("Configuration (JSON)");
-    tui.send(
-        format!(
-            "\x01\x1b[200~{}\x1b[201~",
-            serde_json::json!({"baseUrl":url})
-        )
-        .as_bytes(),
-    );
+    tui.click_text("Base URL");
+    tui.send(format!("\x01\x1b[200~{url}\x1b[201~").as_bytes());
     tui.click_last_text("Verify");
     tui.wait_for("Choose models");
     tui.wait_for("Save connection");
@@ -116,6 +110,7 @@ fn anonymous_setup_verifies_without_writes_and_creates_first_chat() {
         assert_eq!(catalog["defaultTarget"]["modelId"], "fixture-model");
         assert_eq!(catalog["items"][0]["name"], "New connection");
         assert_eq!(catalog["items"][0]["provider"]["name"], "lm-studio");
+        assert_eq!(catalog["items"][0]["configuration"]["baseUrl"], url);
         assert_eq!(catalog["items"][0]["enabledModelIdCount"], 1);
         assert_eq!(catalog["items"][0]["modelCount"], 2);
     });

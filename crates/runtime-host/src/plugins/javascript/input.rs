@@ -16,12 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-use super::callbacks::{Callback, invoke};
+use super::callbacks::{Callback, invoke, invoke_with_grace};
 use futures_util::future::BoxFuture;
 use maka_plugins::{Error, input};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 pub(super) struct Input {
     pub callback: Arc<Callback>,
@@ -62,7 +62,7 @@ impl input::Provider for Input {
                 callback.id,
                 json!({ "sessionId": request.session_id, "cwd": request.cwd,
                     "content": content, "preparation": request.content.preparation,
-                    "selections": request.selections, "tools": request.tools }),
+                    "selections": request.selections, "selectionSources": request.selection_sources, "tools": request.tools }),
                 json!({"readView": view.id}),
                 request.cancellation,
             )
@@ -91,4 +91,51 @@ impl input::Provider for Input {
             })
         })
     }
+}
+
+impl input::resources::Provider for Input {
+    fn query(
+        &self,
+        request: input::resources::Query,
+        context: input::resources::Context,
+    ) -> BoxFuture<'static, Result<input::resources::Page, Error>> {
+        resource(self.callback.clone(), "query", request, context)
+    }
+    fn resolve(
+        &self,
+        request: input::resources::Resolve,
+        context: input::resources::Context,
+    ) -> BoxFuture<'static, Result<input::resources::Value, Error>> {
+        resource(self.callback.clone(), "resolve", request, context)
+    }
+}
+fn resource<
+    I: serde::Serialize + Send + 'static,
+    O: serde::de::DeserializeOwned + Send + 'static,
+>(
+    callback: Arc<Callback>,
+    operation: &'static str,
+    request: I,
+    context: input::resources::Context,
+) -> BoxFuture<'static, Result<O, Error>> {
+    Box::pin(async move {
+        let view = callback.calls.borrow_read(context.workspace)?;
+        let result = invoke_with_grace(
+            &callback.module,
+            callback.id,
+            serde_json::to_value(request).map_err(|e| Error::Invalid(e.to_string()))?,
+            json!({"readView":view.id,"inputResource":operation,"sessionId":context.session_id}),
+            context.cancellation,
+            // Finish or fence the VM before the Remote owner's five-second drain.
+            Duration::from_secs(4),
+        )
+        .await
+        .map_err(|error| match error {
+            maka_runtime::tools::ToolError::CleanupUnconfirmed(reason) => {
+                Error::Cleanup(vec![reason])
+            }
+            other => Error::Invalid(other.to_string()),
+        })?;
+        serde_json::from_value(result).map_err(|e| Error::Invalid(e.to_string()))
+    })
 }

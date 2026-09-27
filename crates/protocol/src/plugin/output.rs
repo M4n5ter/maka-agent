@@ -18,8 +18,8 @@
  */
 
 use super::{
-    CommandProjection, EntryProjection, ExecutorProjection, Failure, PackageProjection,
-    TerminalViewProjection, ToolProjection,
+    CommandProjection, EntryProjection, ExecutorProjection, Failure, InputResourceProjection,
+    PackageProjection, TerminalViewProjection, ToolProjection,
 };
 use crate::{Operation, ProtocolError, Result, codec};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,7 @@ pub enum QueryResult {
     Entries(Page<EntryProjection>),
     Tools(Page<ToolProjection>),
     Commands(Page<CommandProjection>),
+    InputResources(Page<InputResourceProjection>),
     Executors(Page<ExecutorProjection>),
     TerminalViews(Page<TerminalViewProjection>),
     Failures(Page<Failure>),
@@ -176,7 +177,30 @@ pub fn decode_output(operation: Operation, value: &Value) -> Result<Value> {
                 QueryResult::Packages(page) => page.items.len(),
                 QueryResult::Entries(page) => page.items.len(),
                 QueryResult::Tools(page) => page.items.len(),
-                QueryResult::Commands(page) => page.items.len(),
+                QueryResult::Commands(page) => {
+                    for item in &page.items {
+                        super::client::identity(&item.package_id)?;
+                        super::client::identity(&item.method)?;
+                        super::remote::validate_target(&item.target)?;
+                        item.command
+                            .validate()
+                            .map_err(|error| ProtocolError::invalid(error.to_string()))?;
+                    }
+                    page.items.len()
+                }
+                QueryResult::InputResources(page) => {
+                    for item in &page.items {
+                        super::client::identity(&item.package_id)?;
+                        super::client::identity(&item.method)?;
+                        super::remote::validate_target(&item.target)?;
+                        maka_plugins::identifier(&item.provider)
+                            .map_err(|error| ProtocolError::invalid(error.to_string()))?;
+                        item.descriptor
+                            .validate()
+                            .map_err(|error| ProtocolError::invalid(error.to_string()))?;
+                    }
+                    page.items.len()
+                }
                 QueryResult::Executors(page) => page.items.len(),
                 QueryResult::TerminalViews(page) => {
                     for item in &page.items {

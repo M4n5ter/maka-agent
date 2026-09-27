@@ -242,6 +242,7 @@ mod tests {
             slug: "target".into(),
             provider: crate::providers::fixtures::entry("openai-compatible", false).identity,
             configuration: json!({}),
+            request_body_overlay: None,
             enabled: true,
             enabled_models: 0,
             model_ids: vec![],

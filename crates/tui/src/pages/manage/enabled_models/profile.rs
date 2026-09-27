@@ -46,6 +46,7 @@ enum Field {
     Number(&'static str),
     Boolean(&'static str),
     Protocol,
+    DefaultThinking,
     Level(ThinkingLevel),
     Advanced,
     Capability(&'static str),
@@ -58,6 +59,7 @@ impl Field {
         match self {
             Self::Text(key) | Self::Number(key) | Self::Boolean(key) => key,
             Self::Protocol => "apiProtocol",
+            Self::DefaultThinking => "defaultThinkingLevel",
             Self::Level(_) => "thinkingLevels",
             Self::Advanced => "advanced",
             Self::Capability(key) => key,
@@ -78,6 +80,8 @@ impl Field {
             "description" => "model-profile-description",
             "knowledgeCutoff" => "model-profile-cutoff",
             "apiProtocol" => "model-profile-protocol",
+            "adapter" => "model-profile-adapter",
+            "defaultThinkingLevel" => "model-profile-default-thinking",
             "advanced" => "model-profile-advanced",
             "chat" => "model-profile-chat",
             "reasoning" => "model-profile-reasoning",
@@ -120,6 +124,8 @@ impl Draft {
             Boolean("codeMode"),
             Boolean("applyPatch"),
             Protocol,
+            Text("adapter"),
+            DefaultThinking,
         ];
         fields.extend(ThinkingLevel::ALL.map(Level));
         fields.extend([Text("description"), Text("knowledgeCutoff")]);
@@ -253,6 +259,11 @@ impl Draft {
                     ],
                     forward,
                 ),
+                Field::DefaultThinking => {
+                    let mut choices = vec![Value::Null];
+                    choices.extend(ThinkingLevel::ALL.map(|level| json!(level)));
+                    self.cycle(field, &choices, forward);
+                }
                 Field::ServiceTier => self.cycle(field, &[Value::Null, json!("fast")], forward),
                 Field::Modalities => {
                     let value = if self.values["modalities"].is_object() {
@@ -385,6 +396,47 @@ fn tokens(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preferences197_profile_edits_default_thinking_and_public_adapter_without_losing_other_overrides()
+     {
+        let model = Model {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            default_context: None,
+            default_input: None,
+        };
+        let mut draft = Draft::new(
+            &model,
+            ModelOverride {
+                adapter: Some("original.adapter".into()),
+                default_thinking_level: Some(ThinkingLevel::High),
+                vision: Some(false),
+                ..Default::default()
+            },
+        );
+        let thinking = draft
+            .fields
+            .iter()
+            .position(|field| *field == Field::DefaultThinking)
+            .unwrap();
+        draft.apply(Command::Adjust(thinking, true));
+        let adapter = draft
+            .texts
+            .iter_mut()
+            .find(|text| text.field == Field::Text("adapter"))
+            .unwrap();
+        adapter.editor.key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        adapter.editor.insert("plugin.custom.adapter");
+        let result = draft.value().unwrap();
+        assert_eq!(result.default_thinking_level, Some(ThinkingLevel::Xhigh));
+        assert_eq!(result.adapter.as_deref(), Some("plugin.custom.adapter"));
+        assert_eq!(result.vision, Some(false));
+        draft.apply(Command::Default(thinking));
+        assert_eq!(draft.value().unwrap().default_thinking_level, None);
+    }
     #[test]
     fn profile_dialog_keeps_full_inventory_and_keyboard_mouse_geometry_across_sizes() {
         use crate::{

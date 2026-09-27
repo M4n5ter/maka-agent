@@ -22,7 +22,7 @@ import test from 'node:test';
 import { presenter } from './terminal-presenter-harness.mjs';
 import { block, fixture, logicalPage, mount, size } from './terminal-transcript-harness.mjs';
 
-test('v8 builders and immutable document snapshots with contiguous semantic changes', async () => {
+test('v9 builders and immutable document snapshots with contiguous semantic changes', async () => {
   const original = block('first', '你好');
   const f = await fixture({ blocks: [original] });
   original.content.text = 'caller changed its input';
@@ -32,7 +32,7 @@ test('v8 builders and immutable document snapshots with contiguous semantic chan
       revision: '1',
       root: f.tui.transcript('body', f.store.resource),
     }).version,
-    8,
+    9,
   );
   const handle = await f.open();
   assert.deepEqual(await f.next(handle), { kind: 'ready', fence: 0 });
@@ -177,15 +177,31 @@ test('slow readers are invalidated on queue overflow, never silently skipped', a
 });
 
 test('partial registration failure withdraws the page method', async () => {
-  const f = await fixture({}, async (ctx) => {
-    for (let i = 0; i < 127; i++) await ctx.remote.method(`seed${i}`, () => null);
-    await assert.rejects(ctx.tui.transcriptResource('activity'), /capacity/);
-    return null;
-  });
-  assert.equal(f.registrations.length, 127);
-  assert.equal(
-    f.registrations.some((entry) => entry.name === 'activity.read'),
-    false,
+  const published = new Map();
+  const f = await fixture(
+    {},
+    async () => null,
+    TextDecoder,
+    async (method, input) => {
+      if (method === 'contribution.publish') {
+        if (input[0].kind === 'remote_stream') {
+          return { ok: false, error: { code: 'invalid', message: 'stream registration refused' } };
+        }
+        published.set('reader-handle', input[0]);
+        return { ok: true, value: 'reader-handle' };
+      }
+      assert.equal(method, 'contribution.release');
+      assert.equal(input.handle, 'reader-handle');
+      assert.equal(published.get(input.handle).name, 'activity.read');
+      published.delete(input.handle);
+      return { ok: true, value: null };
+    },
+  );
+  await assert.rejects(f.tui.transcriptResource('activity'), /stream registration refused/);
+  assert.equal(published.size, 0, 'the first declaration is withdrawn after the second fails');
+  assert.deepEqual(
+    f.operations.map(({ method }) => method),
+    ['contribution.publish', 'contribution.publish', 'contribution.release'],
   );
   await f.runtime.dispose();
 });
@@ -212,7 +228,7 @@ test('the external Board fixture exposes paged activity without token-driven Vie
   );
   const f = await fixture({}, activate);
   const descriptor = f.registrations.find((entry) => entry.name === 'board').terminalView;
-  assert.equal(descriptor.version, 8);
+  assert.equal(descriptor.version, 9);
   const { default: ui } = await import(
     '../../../crates/cli/tests/fixtures/board-plugin/board-ui.mjs'
   );
@@ -222,7 +238,7 @@ test('the external Board fixture exposes paged activity without token-driven Vie
     return result.value;
   });
   const view = await p.invoke({ kind: 'read', route: { activity: true }, locale: 'en' });
-  assert.equal(view.view.version, 8);
+  assert.equal(view.view.version, 9);
   const resource = view.view.root.children.find((node) => node.kind === 'transcript').resource;
   assert.equal(resource.id, 'board-activity');
   const opened = await f.invoke(resource.stream, {

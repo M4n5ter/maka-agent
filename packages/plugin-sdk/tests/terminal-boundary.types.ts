@@ -28,11 +28,18 @@ const root: TerminalNode = ctx.tui.boundary('review', body, {
   activity: 'busy',
 });
 const view: TerminalViewTree = ctx.tui.view({ title: 'Review', revision: 'r1', root });
-const version: 8 = view.version;
+const version: 9 = view.version;
 void version;
+const exactMessage: TerminalNode = ctx.tui.openMessage('hit', 'Exact result', {
+  session: 'conversation',
+  turn: 'turn',
+  message: 'message',
+  sequence: 17,
+});
+void exactMessage;
 // @ts-expect-error Activity is semantic; arbitrary animations are not a public capability.
 ctx.tui.boundary('invalid', body, { activity: 'flash' });
 // @ts-expect-error Palette colors belong to the terminal kernel.
 ctx.tui.boundary('invalid', body, { emphasis: '#ff0000' });
-// @ts-expect-error A v6 View cannot declare the v8 contract.
+// @ts-expect-error A v6 View cannot declare the v9 contract.
 ctx.tui.view({ version: 6, title: 'Old', revision: 'r1', root });

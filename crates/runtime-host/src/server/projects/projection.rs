@@ -33,7 +33,7 @@ pub(super) async fn available_paths(record: ProjectRecord) -> Result<Vec<String>
     .map_err(internal)
 }
 
-fn available(record: &ProjectRecord) -> Vec<usize> {
+pub(super) fn available(record: &ProjectRecord) -> Vec<usize> {
     let mut locations: Vec<_> = record
         .locations
         .iter()

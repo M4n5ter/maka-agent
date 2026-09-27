@@ -62,17 +62,37 @@ impl Output {
         let bytes = file.metadata().await.map_err(write)?.len();
         drop(file.into_std().await);
         tokio::task::spawn_blocking(move || {
-            temporary
-                .persist_noclobber(&destination)
-                .map_err(|e| write(e.error))?;
-            #[cfg(unix)]
-            std::fs::File::open(destination.parent().expect("validated parent"))
-                .and_then(|directory| directory.sync_all())
-                .map_err(write)?;
+            publish_file(temporary, &destination, sync_parent)?;
             Ok::<_, maka_protocol::OperationError>(bytes)
         })
         .await
-        .map_err(join)?
+        .map_err(|error| failure(Code::CommitOutcomeUnknown, &error.to_string()))?
+    }
+}
+
+fn publish_file(
+    temporary: tempfile::NamedTempFile,
+    destination: &Path,
+    sync: impl FnOnce(&Path) -> io::Result<()>,
+) -> Result<()> {
+    temporary
+        .persist_noclobber(destination)
+        .map_err(|e| write(e.error))?;
+    // The name is already published. A durability failure cannot safely be
+    // reported as a rejected write or authorize replacing the destination.
+    sync(destination.parent().expect("validated parent"))
+        .map_err(|error| failure(Code::CommitOutcomeUnknown, &error.to_string()))
+}
+
+fn sync_parent(parent: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(parent)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Ok(())
     }
 }
 
@@ -169,4 +189,32 @@ fn write(error: io::Error) -> maka_protocol::OperationError {
 }
 fn join(error: tokio::task::JoinError) -> maka_protocol::OperationError {
     failure(Code::InternalFailure, &error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn published_file_survives_durability_failure_and_cannot_be_replayed() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("history.maka-session");
+        let mut first = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        first.write_all(b"original archive").unwrap();
+        first.as_file().sync_all().unwrap();
+        let failure = publish_file(first, &destination, |_| {
+            Err(io::Error::other("fsync fault"))
+        })
+        .unwrap_err();
+        assert_eq!(failure.code, Code::CommitOutcomeUnknown);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original archive");
+        let mut retry = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        retry.write_all(b"replacement archive").unwrap();
+        let failure =
+            publish_file(retry, &destination, |_| panic!("must not publish twice")).unwrap_err();
+        assert_eq!(failure.code, Code::OperationConflict);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original archive");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 }

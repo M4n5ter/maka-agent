@@ -28,6 +28,13 @@ use std::{
 #[test]
 fn header_operations_match_source_normalization_retention_and_closed_results() {
     const ID: &str = "12345678-1234-4234-8234-123456789abc";
+    let connection = json!({"connectionId":ID,"revision":1});
+    let credential = json!({
+        "locator":{"scope":"connection","connectionId":ID,"kind":"request_headers"},
+        "credentialId":"87654321-1234-4234-8234-123456789abc","revision":2
+    });
+    let basis = json!({"connection":connection,"credential":credential});
+    let absent = json!({"connection":connection,"credential":null});
     let mut cases = Vec::new();
     for (operation, output, values) in [
         (
@@ -43,31 +50,42 @@ fn header_operations_match_source_normalization_retention_and_closed_results() {
             "replace",
             false,
             vec![
+                json!({"expected":basis,"headers":[]}),
+                json!({"expected":absent,"headers":[]}),
                 json!({"connectionId":ID,"headers":[]}),
-                json!({"connectionId":ID,"headers":[{"name":"\u{feff} X-Keep \u{feff}"},{"name":"X-New","value":"\tÿ"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":null}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","extra":1}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A"},{"name":"x-a"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"Authorization","value":"token"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"\u{85}X-A","value":"ok"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":"bad\r\nheader"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":"😀"}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":""}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":"x".repeat(8192)}]}),
-                json!({"connectionId":ID,"headers":[{"name":"X-A","value":"x".repeat(8193)}]}),
-                json!({"connectionId":ID,"headers":(0..33).map(|i|json!({"name":format!("X-{i}")})).collect::<Vec<_>>()}),
+                json!({"expected":{"connection":connection},"headers":[]}),
+                json!({"expected":{"connection":connection,"credential":null,"extra":1},"headers":[]}),
+                json!({"expected":{"connection":{"connectionId":ID,"revision":0},"credential":null},"headers":[]}),
+                json!({"expected":{"connection":{"connectionId":ID,"revision":9007199254740992u64},"credential":null},"headers":[]}),
+                json!({"expected":{"connection":connection,"credential":{"locator":{"scope":"network_proxy","kind":"password"},"credentialId":ID,"revision":1}},"headers":[]}),
+                json!({"expected":{"connection":connection,"credential":{"locator":{"scope":"connection","connectionId":ID,"kind":"provider"},"credentialId":ID,"revision":1}},"headers":[]}),
+                json!({"expected":{"connection":connection,"credential":{"locator":{"scope":"connection","connectionId":"87654321-1234-4234-8234-123456789abc","kind":"request_headers"},"credentialId":ID,"revision":1}},"headers":[]}),
+                json!({"expected":basis,"headers":[{"name":"\u{feff} X-Keep \u{feff}"},{"name":"X-New","value":"\tÿ"}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":null}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","extra":1}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A"},{"name":"x-a"}]}),
+                json!({"expected":basis,"headers":[{"name":"Authorization","value":"token"}]}),
+                json!({"expected":basis,"headers":[{"name":"\u{85}X-A","value":"ok"}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":"bad\r\nheader"}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":"😀"}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":""}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":"x".repeat(8192)}]}),
+                json!({"expected":basis,"headers":[{"name":"X-A","value":"x".repeat(8193)}]}),
+                json!({"expected":basis,"headers":(0..33).map(|i|json!({"name":format!("X-{i}")})).collect::<Vec<_>>()}),
             ],
         ),
         (
             "query",
             true,
             vec![
-                json!({"kind":"found","names":["\u{feff} X-Name "]}),
+                json!({"kind":"found","basis":basis,"names":["\u{feff} X-Name "]}),
                 json!({"kind":"connection_not_found"}),
-                json!({"kind":"found","names":["X-A","x-a"]}),
-                json!({"kind":"found","names":["x-api-key"]}),
+                json!({"kind":"found","basis":basis,"names":["X-A","x-a"]}),
+                json!({"kind":"found","basis":basis,"names":["x-api-key"]}),
                 json!({"kind":"found"}),
-                json!({"kind":"found","names":[],"values":{}}),
+                json!({"kind":"found","names":[]}),
+                json!({"kind":"found","basis":absent,"names":[]}),
+                json!({"kind":"found","basis":basis,"names":[],"values":{}}),
                 json!({"kind":"connection_not_found","names":[]}),
             ],
         ),
@@ -75,11 +93,20 @@ fn header_operations_match_source_normalization_retention_and_closed_results() {
             "replace",
             true,
             vec![
+                json!({"kind":"committed","basis":basis,"names":["X-A"]}),
                 json!({"kind":"committed","names":["X-A"]}),
-                json!({"kind":"unchanged","names":[]}),
+                json!({"kind":"connection_stale","expected":connection,"actual":{"connectionId":ID,"revision":2}}),
+                json!({"kind":"connection_stale","expected":connection,"actual":null}),
+                json!({"kind":"connection_stale","expected":connection,"actual":{"connectionId":"87654321-1234-4234-8234-123456789abc","revision":2}}),
+                json!({"kind":"credential_stale","expected":null,"actual":credential}),
+                json!({"kind":"credential_stale","expected":credential,"actual":null}),
+                json!({"kind":"credential_stale","expected":credential}),
+                json!({"kind":"credential_stale","expected":null,"actual":{"locator":{"scope":"network_proxy","kind":"password"},"credentialId":ID,"revision":1}}),
+                json!({"kind":"credential_stale","expected":credential,"actual":{"locator":{"scope":"connection","kind":"request_headers","connectionId":"87654321-1234-4234-8234-123456789abc"},"credentialId":ID,"revision":1}}),
+                json!({"kind":"unchanged","basis":absent,"names":[]}),
                 json!({"kind":"connection_not_found"}),
-                json!({"kind":"found","names":[]}),
-                json!({"kind":"committed","names":[null]}),
+                json!({"kind":"found","basis":basis,"names":[]}),
+                json!({"kind":"committed","basis":basis,"names":[null]}),
             ],
         ),
     ] {

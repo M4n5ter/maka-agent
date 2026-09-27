@@ -74,6 +74,19 @@ pub(super) struct Scroller {
     pub parent: Option<usize>,
 }
 
+impl Scroller {
+    pub(super) fn maximum(&self) -> u16 {
+        // Rows clipped above still separate the content origin from the visible
+        // bottom. Ignoring them lets nested scrolling move the last row away.
+        let height = if self.viewport.is_empty() {
+            self.height
+        } else {
+            (i32::from(self.viewport.bottom()) - self.top).clamp(0, i32::from(self.height)) as u16
+        };
+        self.content.saturating_sub(height)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Axis {
     Vertical,
@@ -386,21 +399,18 @@ impl<'a, M> Pass<'a, M> {
             Kind::Scroll(child) => {
                 let inner = area.width.saturating_sub(1).max(1);
                 let content = height(&child, inner);
-                let offset = self
-                    .offsets
-                    .get(&id)
-                    .copied()
-                    .unwrap_or(0)
-                    .min(content.saturating_sub(visible.height));
-                let index = self.scrollers.len();
-                self.scrollers.push(Scroller {
+                let scroller = Scroller {
                     id: id.clone(),
                     viewport: visible,
                     content,
                     top: area.y,
                     height: area.height,
                     parent: scope.scroller,
-                });
+                };
+                let maximum = scroller.maximum();
+                let offset = self.offsets.get(&id).copied().unwrap_or(0).min(maximum);
+                let index = self.scrollers.len();
+                self.scrollers.push(scroller);
                 let child_id = format!("{id}/{}", child.key);
                 let placed = Area {
                     x: area.x,
@@ -415,8 +425,8 @@ impl<'a, M> Pass<'a, M> {
                     ..scope
                 };
                 self.place(*child, placed, child_id, inner);
-                if content > visible.height && visible.height > 1 {
-                    self.scrollbar(visible, content, offset);
+                if maximum > 0 && visible.height > 1 {
+                    self.scrollbar(visible, maximum, offset);
                 }
             }
         }
@@ -483,12 +493,12 @@ impl<'a, M> Pass<'a, M> {
         }
     }
 
-    fn scrollbar(&mut self, viewport: Rect, content: u16, offset: u16) {
+    fn scrollbar(&mut self, viewport: Rect, maximum: u16, offset: u16) {
         let visible = viewport.height;
-        let thumb = ((u32::from(visible) * u32::from(visible)) / u32::from(content)).max(1) as u16;
+        let content = u32::from(maximum) + u32::from(visible);
+        let thumb = ((u32::from(visible) * u32::from(visible)) / content).max(1) as u16;
         let travel = visible.saturating_sub(thumb);
-        let range = content.saturating_sub(visible).max(1);
-        let top = (u32::from(offset) * u32::from(travel) / u32::from(range)) as u16;
+        let top = (u32::from(offset) * u32::from(travel) / u32::from(maximum)) as u16;
         let x = viewport.right().saturating_sub(1);
         for y in 0..visible {
             let active = (top..top + thumb).contains(&y);

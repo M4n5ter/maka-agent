@@ -39,22 +39,39 @@ impl Executions {
     pub(crate) async fn search_plugin_models(
         &self,
         query: maka_plugins::llm::Search,
-    ) -> Result<maka_plugins::llm::Choices, maka_plugins::Error> {
+    ) -> Result<maka_plugins::llm::SearchResult, maka_plugins::Error> {
         use maka_plugins::{
             Error,
-            llm::{Choice, Choices},
+            llm::{Choice, Choices, Cursor, SearchResult},
         };
         let failed = |error: maka_config::ConfigError| Error::Invalid(error.to_string());
         let catalog = self.configuration.catalog().await.map_err(failed)?;
         let providers = self.plugin_catalog.clone();
         tokio::task::spawn_blocking(move || {
+            let generation = providers.generation();
+            let provider_revision = providers
+                .capture(&maka_plugins::composition::Scope::Profile)
+                .revision;
+            if query.cursor.as_ref().is_some_and(|cursor| {
+                cursor.query != query.query
+                    || cursor.generation != generation
+                    || cursor.configuration_revision != catalog.revision
+                    || cursor.provider_revision != provider_revision
+            }) {
+                return Ok(SearchResult::Stale);
+            }
+            let offset = query.cursor.as_ref().map_or(0, |cursor| cursor.offset);
+            let original_query = query.query.clone();
             let query = query.query.to_lowercase();
             let terms: Vec<_> = query.split_whitespace().collect();
             let mut page = Choices {
                 revision: catalog.revision,
                 models: Vec::new(),
                 complete: true,
+                next_cursor: None,
             };
+            let mut matched = 0;
+            let mut bytes = 0;
             'connections: for row in &catalog.connections {
                 if !row.enabled
                     || row.provider.scope != maka_runtime::scope::Scope::Profile
@@ -79,11 +96,11 @@ impl Executions {
                     if !terms.iter().all(|term| haystack.contains(term)) {
                         continue;
                     }
-                    if page.models.len() == 50 {
-                        page.complete = false;
-                        break 'connections;
+                    matched += 1;
+                    if matched <= offset {
+                        continue;
                     }
-                    page.models.push(Choice {
+                    let choice = Choice {
                         model: maka_runtime::execution::ModelBinding {
                             connection_id: row.connection_id.clone(),
                             connection_slug: row.slug.clone(),
@@ -94,18 +111,39 @@ impl Executions {
                         thinking_levels: entry.thinking_levels,
                         default_thinking_level: entry.default_thinking_level,
                         is_default: entry.is_default,
-                    });
+                    };
+                    let size = serde_json::to_vec(&choice)
+                        .map_err(|error| Error::Invalid(error.to_string()))?
+                        .len();
+                    if page.models.len() == 50 || bytes + size > 46 * 1024 {
+                        if page.models.is_empty() {
+                            return Err(Error::Invalid(
+                                "Model choice exceeds the search page byte budget".into(),
+                            ));
+                        }
+                        page.complete = false;
+                        page.next_cursor = Some(Cursor {
+                            query: original_query,
+                            generation,
+                            configuration_revision: catalog.revision,
+                            provider_revision,
+                            offset: offset + page.models.len() as u64,
+                        });
+                        break 'connections;
+                    }
+                    bytes += size;
+                    page.models.push(choice);
                 }
             }
-            while serde_json::to_vec(&page)
-                .map_err(|error| Error::Invalid(error.to_string()))?
-                .len()
-                > 48 * 1024
+            if offset > matched
+                || providers
+                    .capture(&maka_plugins::composition::Scope::Profile)
+                    .revision
+                    != provider_revision
             {
-                page.models.pop();
-                page.complete = false;
+                return Ok(SearchResult::Stale);
             }
-            Ok(page)
+            Ok(SearchResult::Page { page })
         })
         .await
         .map_err(|error| Error::Invalid(error.to_string()))?

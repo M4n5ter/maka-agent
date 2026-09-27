@@ -35,6 +35,7 @@ import {
   decodeCredentialLocator,
   decodeCredentialStatus,
   decodeCredentialVersionBasis,
+  decodeRequestHeadersBasis,
   decodeProviderIdentity,
   decodeProviderConfiguration,
   normalizeCreateCatalogConnectionInput,
@@ -64,6 +65,7 @@ import {
   type NetworkProxyCredentialTarget,
   type RemoveCatalogConnectionInput,
   type RequestHeaderUpdate,
+  type RequestHeadersBasis,
   type RevisionConflict,
   type RuntimePolicySnapshot,
   type UpdateNetworkProxyInput,
@@ -272,17 +274,31 @@ export interface ConnectionRequestHeadersQueryInput {
 }
 
 export type ConnectionRequestHeadersQueryResult =
-  | { readonly kind: 'found'; readonly names: readonly string[] }
+  | {
+      readonly kind: 'found';
+      readonly names: readonly string[];
+      readonly basis: RequestHeadersBasis;
+    }
   | { readonly kind: 'connection_not_found' };
 
 export interface ConnectionRequestHeadersReplaceInput {
-  readonly connectionId: string;
+  readonly expected: RequestHeadersBasis;
   readonly headers: readonly RequestHeaderUpdate[];
 }
 
 export type ConnectionRequestHeadersReplaceResult =
-  | { readonly kind: 'committed' | 'unchanged'; readonly names: readonly string[] }
-  | { readonly kind: 'connection_not_found' };
+  | {
+      readonly kind: 'committed' | 'unchanged';
+      readonly names: readonly string[];
+      readonly basis: RequestHeadersBasis;
+    }
+  | { readonly kind: 'connection_not_found' }
+  | {
+      readonly kind: 'connection_stale';
+      readonly expected: ConnectionVersionBasis;
+      readonly actual: ConnectionVersionBasis;
+    }
+  | CredentialStale;
 
 interface CredentialCommitted {
   readonly kind: 'committed';
@@ -987,22 +1003,27 @@ function decodeConnectionRequestHeadersQueryResult(
   const found = requireExactRecord(result, 'connection request headers found result', [
     'kind',
     'names',
+    'basis',
   ]);
   if (found.kind !== 'found') {
     throw invalidProtocolFrame('Invalid connection request headers query result');
   }
-  return { kind: 'found', names: decodeRequestHeaderNames(found.names) };
+  return {
+    kind: 'found',
+    names: decodeRequestHeaderNames(found.names),
+    basis: decodeDomain(() => decodeRequestHeadersBasis(found.basis)),
+  };
 }
 
 function decodeConnectionRequestHeadersReplaceInput(
   value: unknown,
 ): ConnectionRequestHeadersReplaceInput {
   const input = requireExactRecord(value, 'connection request headers replace input', [
-    'connectionId',
+    'expected',
     'headers',
   ]);
   return {
-    connectionId: decodeDomain(() => decodeRuntimePolicyEntityId(input.connectionId)),
+    expected: decodeDomain(() => decodeRequestHeadersBasis(input.expected)),
     headers: decodeRequestHeaderUpdates(input.headers),
   };
 }
@@ -1015,14 +1036,51 @@ function decodeConnectionRequestHeadersReplaceResult(
     requireExactRecord(result, 'connection request headers connection not found result', ['kind']);
     return { kind: 'connection_not_found' };
   }
+  if (result.kind === 'connection_stale') {
+    const item = requireExactRecord(result, 'request headers connection conflict', [
+      'kind',
+      'expected',
+      'actual',
+    ]);
+    const expected = decodeDomain(() => decodeConnectionVersionBasis(item.expected));
+    const actual = decodeDomain(() => decodeConnectionVersionBasis(item.actual));
+    if (expected.connectionId !== actual.connectionId) {
+      throw invalidProtocolFrame('Request headers connection mismatch');
+    }
+    return { kind: 'connection_stale', expected, actual };
+  }
+  if (result.kind === 'credential_stale') {
+    const conflict = credentialStale(result);
+    for (const basis of [conflict.expected, conflict.actual]) {
+      if (
+        basis &&
+        (basis.locator.scope !== 'connection' || basis.locator.kind !== 'request_headers')
+      ) {
+        throw invalidProtocolFrame('Invalid request headers credential');
+      }
+    }
+    if (
+      conflict.expected?.locator.scope === 'connection' &&
+      conflict.actual?.locator.scope === 'connection' &&
+      conflict.expected.locator.connectionId !== conflict.actual.locator.connectionId
+    ) {
+      throw invalidProtocolFrame('Request headers credential mismatch');
+    }
+    return conflict;
+  }
   const saved = requireExactRecord(result, 'connection request headers saved result', [
     'kind',
     'names',
+    'basis',
   ]);
   if (saved.kind !== 'committed' && saved.kind !== 'unchanged') {
     throw invalidProtocolFrame('Invalid connection request headers replace result');
   }
-  return { kind: saved.kind, names: decodeRequestHeaderNames(saved.names) };
+  return {
+    kind: saved.kind,
+    names: decodeRequestHeaderNames(saved.names),
+    basis: decodeDomain(() => decodeRequestHeadersBasis(saved.basis)),
+  };
 }
 
 function decodeRequestHeaderNames(value: unknown): readonly string[] {

@@ -45,7 +45,7 @@ pub struct Capabilities {
 
 /// Non-secret choices visible in the plugin's scope; discovery grants no execution authority.
 pub trait Executors: Send + Sync {
-    fn search(&self, query: Search) -> BoxFuture<'_, Result<Choices, crate::Error>>;
+    fn search(&self, query: Search) -> BoxFuture<'_, Result<SearchResult, crate::Error>>;
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -53,10 +53,30 @@ pub trait Executors: Send + Sync {
 pub struct Search {
     #[serde(default)]
     pub query: String,
+    #[serde(default)]
+    pub cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Cursor {
+    pub query: String,
+    pub generation: uuid::Uuid,
+    pub revision: u64,
+    pub scope: crate::composition::Scope,
+    pub offset: u64,
 }
 impl Search {
     pub fn validate(&self) -> Result<(), crate::Error> {
-        if self.query.len() > 512 || self.query.chars().any(char::is_control) {
+        if self.query.len() > 512
+            || self.query.chars().any(char::is_control)
+            || self.cursor.as_ref().is_some_and(|cursor| {
+                cursor.query.len() > 512
+                    || cursor.query.chars().any(char::is_control)
+                    || cursor.revision > (1 << 53) - 1
+                    || cursor.offset > (1 << 53) - 1
+            })
+        {
             return Err(crate::Error::Invalid(
                 "invalid executor search query".into(),
             ));
@@ -79,6 +99,14 @@ pub struct Choices {
     pub revision: u64,
     pub executors: Vec<Choice>,
     pub complete: bool,
+    pub next_cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SearchResult {
+    Page { page: Choices },
+    Stale,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +116,8 @@ pub struct Query {
     pub scope: crate::composition::Scope,
     #[serde(default)]
     pub query: String,
+    #[serde(default)]
+    pub cursor: Option<Cursor>,
 }
 
 /// Embedding query; plugins receive `Executors` bound to their own scope.
@@ -95,21 +125,38 @@ pub fn search(
     catalog: &crate::contributions::Catalog,
     scope: &crate::composition::Scope,
     query: Search,
-) -> Result<Choices, crate::Error> {
+) -> Result<SearchResult, crate::Error> {
     query.validate()?;
     let snapshot = catalog.snapshot::<Executor>(scope);
+    let generation = catalog.generation();
+    if query.cursor.as_ref().is_some_and(|cursor| {
+        cursor.query != query.query
+            || cursor.generation != generation
+            || cursor.revision != snapshot.revision
+            || &cursor.scope != scope
+    }) {
+        return Ok(SearchResult::Stale);
+    }
+    let offset = query.cursor.as_ref().map_or(0, |cursor| cursor.offset);
+    let original_query = query.query.clone();
     let query = query.query.to_lowercase();
     let terms: Vec<_> = query.split_whitespace().collect();
     let mut page = Choices {
         revision: snapshot.revision,
         executors: Vec::new(),
         complete: true,
+        next_cursor: None,
     };
     let mut bytes = 0;
+    let mut matched = 0;
     for entry in snapshot.entries.into_values() {
         let executor = &entry.value;
         let haystack = format!("{} {}", executor.id.as_str(), executor.display_name).to_lowercase();
         if !terms.iter().all(|term| haystack.contains(term)) {
+            continue;
+        }
+        matched += 1;
+        if matched <= offset {
             continue;
         }
         let choice = Choice {
@@ -117,16 +164,32 @@ pub fn search(
             display_name: executor.display_name.clone(),
             capabilities: executor.capabilities,
         };
-        bytes += serde_json::to_vec(&choice)
+        let size = serde_json::to_vec(&choice)
             .map_err(|error| crate::Error::Invalid(error.to_string()))?
             .len();
-        if page.executors.len() == 50 || bytes > 48 * 1024 - 1024 {
+        if page.executors.len() == 50 || bytes + size > 46 * 1024 {
+            if page.executors.is_empty() {
+                return Err(crate::Error::Invalid(
+                    "Executor choice exceeds the search page byte budget".into(),
+                ));
+            }
             page.complete = false;
+            page.next_cursor = Some(Cursor {
+                query: original_query,
+                generation,
+                revision: snapshot.revision,
+                scope: scope.clone(),
+                offset: offset + page.executors.len() as u64,
+            });
             break;
         }
+        bytes += size;
         page.executors.push(choice);
     }
-    Ok(page)
+    if offset > matched {
+        return Ok(SearchResult::Stale);
+    }
+    Ok(SearchResult::Page { page })
 }
 
 #[derive(Clone)]

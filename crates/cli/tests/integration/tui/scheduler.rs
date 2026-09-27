@@ -24,6 +24,7 @@ use maka_protocol::{
 };
 use serde_json::{Value, json};
 
+mod notifications197;
 mod recovery;
 
 #[test]
@@ -86,8 +87,6 @@ fn scheduler_form_edits_multiline_and_fences_stale_writes_without_running_a_mode
     // The shell renders before the asynchronous Host handshake; plugin
     // commands become actionable only after the catalog is loaded.
     tui.wait_for("No sessions yet");
-    tui.filter_command("Plugin pages");
-    tui.click_text("Plugin pages");
     tui.wait_for("Scheduled tasks");
     tui.click_text("Scheduled tasks");
     tui.wait_for("Scheduled fixture");
@@ -251,15 +250,22 @@ fn scheduler_creation_requires_consent_then_reuses_only_a_live_grant() {
     tui.wait_for("Reminder source");
     tui.click_text("Reminder source");
     tui.wait_for("fixture-model");
-    tui.filter_command("Plugin pages");
-    tui.click_text("Plugin pages");
     tui.wait_for("Scheduled tasks");
     tui.click_text("Scheduled tasks");
-    tui.wait_for("New reminder");
-    tui.click_text("New reminder");
-    tui.wait_for("Interval");
-    tui.click_text("Interval");
-    tui.wait_for("Every (seconds)");
+    tui.wait_for("New task");
+    tui.click_text("New task");
+    tui.wait_for("Local notification");
+    tui.click_text("Local notification");
+    tui.wait_for("Schedule type");
+    tui.click_text("Schedule type");
+    tui.wait_for("○ Interval");
+    tui.click_text("○ Interval");
+    tui.wait_until(|screen| {
+        !screen.contains("○ Interval")
+            && screen
+                .lines()
+                .any(|line| line.contains("Schedule type") && line.contains("Interval ▾"))
+    });
     tui.click_text("Title");
     tui.send(b"\x1b[200~Consent fixture\x1b[201~");
     tui.click_text("Content");
@@ -273,6 +279,7 @@ fn scheduler_creation_requires_consent_then_reuses_only_a_live_grant() {
         .join(&client.identity.root_id)
         .join("default/state.json");
     let saved: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(saved["apps"][0]["drafts"]["schedule"], "interval");
     let draft_revision = saved["apps"][0]["view"]["revision"].clone();
     assert!(
         saved["apps"][0]["pending"].is_null(),
@@ -289,9 +296,10 @@ fn scheduler_creation_requires_consent_then_reuses_only_a_live_grant() {
     tui.wait_for("Draft ready");
     tui.wait_for("First reminder");
     assert!(list()["tasks"].as_array().unwrap().is_empty());
-    tui.click_text("Create reminder");
+    tui.click_text("Create task");
     tui.wait_for("Allow plugin access?");
     let resumed: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(resumed["apps"][0]["drafts"]["schedule"], "interval");
     assert_ne!(
         resumed["apps"][0]["view"]["revision"], draft_revision,
         "an unsubmitted creation uses the fresh form identity; uncertain submissions cannot enter this path"
@@ -308,7 +316,7 @@ fn scheduler_creation_requires_consent_then_reuses_only_a_live_grant() {
             .unwrap()
             .is_empty()
     );
-    tui.click_text("Create reminder");
+    tui.click_text("Create task");
     tui.wait_for("Allow plugin access?");
     tui.click_text("Allow and continue");
     tui.wait_for("Pause");
@@ -323,18 +331,22 @@ fn scheduler_creation_requires_consent_then_reuses_only_a_live_grant() {
     assert_eq!(grants.as_array().unwrap().len(), 1);
 
     // Fresh reads keep creation identity separate while reusing actual authority.
-    // Back from a created task leads to where the app starts.
+    // Back from a created task returns to the task type chooser.
     tui.send(b"\x1b");
-    tui.wait_for("New reminder");
-    tui.click_text("New reminder");
-    tui.wait_for("Once");
-    tui.click_text("Once");
+    tui.wait_until(|screen| {
+        screen
+            .lines()
+            .next()
+            .is_some_and(|header| header.contains("Task type"))
+    });
+    tui.wait_for("Local notification");
+    tui.click_text("Local notification");
     tui.wait_for("Content");
     tui.click_text("Title");
     tui.send(b"\x1b[200~Second reminder\x1b[201~");
     tui.click_text("Content");
     tui.send(b"\x1b[200~No second consent\x1b[201~");
-    tui.click_text("Create reminder");
+    tui.click_text("Create task");
     tui.wait_for("Pause");
     assert_eq!(list()["tasks"].as_array().unwrap().len(), 2);
     assert_eq!(

@@ -45,6 +45,13 @@ pub enum Intent {
     Commit(String),
     /// Open a Maka session the view names.
     Open(String),
+    /// Locate an exact message using canonical Host history.
+    OpenMessage {
+        session: String,
+        turn: String,
+        message: String,
+        sequence: u64,
+    },
 }
 
 /// A text field's well in the laid-out tree; its owner paints the editor.
@@ -482,6 +489,20 @@ impl<M: Clone> Builder<'_, M> {
                     Target::Route { route } => (Intent::Navigate(route.clone()), true),
                     Target::Action { action } => (Intent::Submit(action.clone()), false),
                     Target::Session { session } => (Intent::Open(session.clone()), true),
+                    Target::SessionMessage {
+                        session,
+                        turn,
+                        message,
+                        sequence,
+                    } => (
+                        Intent::OpenMessage {
+                            session: session.clone(),
+                            turn: turn.clone(),
+                            message: message.clone(),
+                            sequence: *sequence,
+                        },
+                        true,
+                    ),
                 };
                 let mut head = vec![
                     Node::text("title", vec![(title.clone(), tone(*item_tone))])

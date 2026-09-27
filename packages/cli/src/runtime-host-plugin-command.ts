@@ -102,11 +102,35 @@ async function execute(
       return await connection.request('plugin.package.reload', {
         extensionId: requireSubject(command),
       });
-    case 'export':
+    case 'export': {
+      const extensionId = requireSubject(command);
+      let cursor: string | undefined;
+      let expected: { baseGeneration: number; contentDigest: string } | undefined;
+      do {
+        const page = await connection.request('plugin.platform.query', {
+          view: 'packages',
+          ...(cursor ? { cursor } : {}),
+        });
+        if (page.view !== 'packages') throw new Error('Host did not return its package directory');
+        const installed = page.items.find((item) => item.extensionId === extensionId);
+        if (installed) {
+          if (installed.baseGeneration === undefined)
+            throw new Error('Host did not expose the installed package generation');
+          expected = {
+            baseGeneration: installed.baseGeneration,
+            contentDigest: installed.contentDigest,
+          };
+          break;
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      if (!expected) throw new Error(`Plugin package is not installed: ${extensionId}`);
       return await connection.request('plugin.package.export', {
-        extensionId: requireSubject(command),
+        extensionId,
         targetPath: resolve(command.targetPath ?? missing('Plugin export target path')),
+        expected,
       });
+    }
     case 'apply': {
       const decoded = JSON.parse(await readText(resolve(requireSubject(command)))) as unknown;
       return await connection.request('plugin.composition.apply', decoded as never);

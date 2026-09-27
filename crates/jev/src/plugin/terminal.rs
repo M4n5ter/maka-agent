@@ -20,6 +20,8 @@
 //! Jev as a settings category: where the evaluator runs, with which model
 //! and patience, its key (never shown back), and a test of the setup.
 
+mod credentials;
+
 use super::{ID, remote::Service};
 use crate::decision::Jev;
 use futures_util::future::BoxFuture;
@@ -29,7 +31,7 @@ use maka_plugins::{
     terminal_ui::{
         Context, Descriptor, Placement, Text, VERSION,
         app::{self, App, Cx, Submission, Words},
-        view::{self, Action, Confirm, Control, Field, Reply, Role, Tone, View, build::*},
+        view::{self, Action, Control, Reply, Role, Tone, View, build::*},
     },
 };
 use serde::Deserialize;
@@ -65,7 +67,7 @@ struct Snapshot {
     revision: Option<u64>,
     settings: Setup,
     credential_revision: Option<u64>,
-    configured: bool,
+    api_key_configured: bool,
     header_names: Vec<String>,
 }
 #[derive(Deserialize, serde::Serialize)]
@@ -112,6 +114,13 @@ impl App for Settings {
         let this = Settings(self.0.clone());
         Box::pin(async move {
             let snapshot = this.snapshot(&cx.caller).await?;
+            if route.get("header").is_some() {
+                return Ok(credentials::header(
+                    &cx.words,
+                    &snapshot,
+                    route["header"].as_str(),
+                ));
+            }
             let tested = route.get("tested").and_then(Value::as_str).map(clean);
             Ok(form(&cx.words, &snapshot, tested.as_deref()))
         })
@@ -123,6 +132,12 @@ impl App for Settings {
             let snapshot = this.snapshot(&cx.caller).await?;
             if stamp(&snapshot) != submission.revision {
                 return Ok(Reply::Conflict);
+            }
+            if matches!(
+                submission.action.as_str(),
+                "save-key" | "save-header" | "forget"
+            ) {
+                return credentials::submit(&this, &snapshot, &submission, cx).await;
             }
             match submission.action.as_str() {
                 "save" => {
@@ -141,7 +156,6 @@ impl App for Settings {
                         model: submission.text("model")?.trim().to_owned(),
                         timeout_ms,
                     };
-                    let url = setup.url.clone();
                     if let Err(error) = this
                         .call(
                             json!({"kind":"configure","expectedRevision":snapshot.revision,"settings":setup}),
@@ -151,32 +165,8 @@ impl App for Settings {
                     {
                         return rejected(error);
                     }
-                    let secret = submission.text("key")?.trim().to_owned();
-                    if !secret.is_empty()
-                        && let Err(error) = this
-                            .call(
-                                json!({"kind":"credential","url":url,
-                                    "expectedRevision":snapshot.credential_revision,
-                                    "secret":{"apiKey":secret}}),
-                                cx.caller,
-                            )
-                            .await
-                    {
-                        return rejected(error);
-                    }
                     Ok(Reply::Applied { route: Value::Null })
                 }
-                "forget" => match this
-                    .call(
-                        json!({"kind":"credential","url":snapshot.settings.url,
-                            "expectedRevision":snapshot.credential_revision,"secret":null}),
-                        cx.caller,
-                    )
-                    .await
-                {
-                    Ok(_) => Ok(Reply::Applied { route: Value::Null }),
-                    Err(error) => rejected(error),
-                },
                 "test" => match this
                     .call(
                         json!({"kind":"test","operationId":uuid::Uuid::new_v4()}),
@@ -205,29 +195,11 @@ impl App for Settings {
 
 fn form(words: &Words, snapshot: &Snapshot, tested: Option<&str>) -> View {
     let setup = &snapshot.settings;
-    let fields = vec![
+    let mut fields = vec![
         toggle("enabled", setup.enabled),
-        view::build::line("url", clean(&setup.url), 2048),
+        view::build::line("url", clean(&setup.url), 8192),
         view::build::line("model", clean(&setup.model), 256),
         view::build::line("timeout", setup.timeout_ms.to_string(), 8),
-        Field {
-            control: Control::Text {
-                value: String::new(),
-                max_bytes: 4096,
-                multiline: false,
-                placeholder: if snapshot.configured {
-                    words.t(
-                        "Saved · type to replace",
-                        "已保存 · 输入以替换",
-                        "已儲存 · 輸入以替換",
-                    )
-                } else {
-                    words.t("Paste the API key", "粘贴 API 密钥", "貼上 API 金鑰")
-                },
-                secret: true,
-            },
-            ..view::build::line("key", "", 4096)
-        },
     ];
     let mut children = vec![text(
         "intro",
@@ -261,22 +233,10 @@ fn form(words: &Words, snapshot: &Snapshot, tested: Option<&str>) -> View {
                 "timeout",
                 words.t("Timeout (ms)", "超时（毫秒）", "逾時（毫秒）"),
             ),
-            input("key", "key", words.t("API key", "API 密钥", "API 金鑰")),
         ],
     ));
-    if !snapshot.header_names.is_empty() {
-        children.push(text(
-            "headers",
-            words.t(
-                &format!("Extra headers: {}", snapshot.header_names.join(", ")),
-                &format!("附加请求头：{}", snapshot.header_names.join("，")),
-                &format!("附加請求標頭：{}", snapshot.header_names.join("，")),
-            ),
-            Tone::Subtle,
-        ));
-    }
     let mut actions = vec![Action {
-        fields: ["enabled", "url", "model", "timeout", "key"]
+        fields: ["enabled", "url", "model", "timeout"]
             .map(String::from)
             .to_vec(),
         ..view::build::action("save", words.t("Save", "保存", "儲存"))
@@ -286,22 +246,8 @@ fn form(words: &Words, snapshot: &Snapshot, tested: Option<&str>) -> View {
         actions.push(view::build::action("test", words.t("Test", "测试", "測試")));
         buttons.push(button("test", "test", Role::Normal));
     }
-    if snapshot.configured {
-        actions.push(Action {
-            confirm: Some(Confirm {
-                title: words.t("Remove the Jev key?", "移除 Jev 密钥？", "移除 Jev 金鑰？"),
-                message: words.t(
-                    "Checks that use Jev fail until a key is saved again.",
-                    "在重新保存密钥之前，使用 Jev 的检查会失败。",
-                    "在重新儲存金鑰之前，使用 Jev 的檢查會失敗。",
-                ),
-                destructive: true,
-            }),
-            ..view::build::action("forget", words.t("Remove key", "移除密钥", "移除金鑰"))
-        });
-        buttons.push(button("forget", "forget", Role::Destructive));
-    }
     children.push(row("controls", buttons));
+    credentials::append(words, snapshot, &mut fields, &mut actions, &mut children);
     View {
         version: VERSION,
         title: "Jev".into(),
@@ -328,14 +274,14 @@ mod tests {
                 timeout_ms: 30_000,
             },
             credential_revision: None,
-            configured: false,
+            api_key_configured: false,
             header_names: vec![],
         };
         let view = form(&words, &snapshot, None);
         view.validate().unwrap();
         assert!(view.action("test").is_none());
         snapshot.settings.enabled = true;
-        snapshot.configured = true;
+        snapshot.api_key_configured = true;
         snapshot.header_names = vec!["X-Team".into()];
         let view = form(&words, &snapshot, Some("true"));
         view.validate().unwrap();

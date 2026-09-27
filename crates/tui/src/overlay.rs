@@ -45,6 +45,10 @@ pub(crate) enum Overlay {
     Reference,
     Revision,
     Recap,
+    Bundle,
+    SessionControls,
+    Resources,
+    Attention,
     Resume,
     Branch,
     Onboarding,
@@ -73,6 +77,12 @@ impl Overlay {
             Self::Reference | Self::Management => Action::Manage(manage::Command::Close),
             Self::Revision => Action::Revision(revision::Command::Close),
             Self::Recap => Action::Recap(recap::Command::Close),
+            Self::Bundle => Action::Bundle(crate::pages::bundle::Command::Close),
+            Self::SessionControls => {
+                Action::SessionControls(crate::pages::session_controls::Command::Close)
+            }
+            Self::Resources => Action::Resources(crate::pages::resources::Command::Close),
+            Self::Attention => Action::Attention(crate::pages::attention::Command::Close),
             Self::Resume => Action::Resume(resume::Command::Close),
             Self::Branch => Action::Branch(branch::Command::Close),
             Self::Onboarding => Action::Onboard(onboarding::Command::Close),
@@ -100,6 +110,10 @@ impl App {
             (Reference, self.directory_reference_active()),
             (Revision, self.revision.visible),
             (Recap, self.recap.visible),
+            (Bundle, self.bundle.visible),
+            (SessionControls, self.session_controls.visible),
+            (Attention, self.attention.visible),
+            (Resources, self.resources.visible),
             (Resume, self.resume.visible),
             (Branch, self.branch.visible),
             (Onboarding, self.onboarding.dialog.is_some()),
@@ -126,6 +140,10 @@ impl App {
             Overlay::QueueEdit => crate::pages::queue::edit::sheet(self),
             Overlay::Resume => crate::pages::resume::sheet(self),
             Overlay::Recap => crate::pages::recap::sheet(self),
+            Overlay::Bundle => crate::pages::bundle::sheet(self),
+            Overlay::SessionControls => crate::pages::session_controls::sheet(self),
+            Overlay::Resources => crate::pages::resources::sheet(self),
+            Overlay::Attention => crate::pages::attention::sheet(self),
             Overlay::Branch => crate::pages::branch::sheet(self),
             Overlay::Skills => crate::pages::skills::sheet(self),
             Overlay::Theme => crate::theme::editor::sheet(self),
@@ -148,6 +166,10 @@ impl App {
             Overlay::Reference | Overlay::Management => self.management.presented(shown),
             Overlay::Resume => self.resume.presented(shown),
             Overlay::Recap => self.recap.presented(shown),
+            Overlay::Bundle => self.bundle.presented(shown),
+            Overlay::SessionControls => self.session_controls.presented(shown),
+            Overlay::Resources => self.resources_presented = shown,
+            Overlay::Attention => self.attention_presented = shown,
             Overlay::Branch => self.branch.presented(shown),
             Overlay::Skills => {
                 if let Some(dialog) = &mut self.skills.dialog {
@@ -202,6 +224,14 @@ impl App {
             Overlay::Onboarding => self.onboarding_sheet_input(&event),
             Overlay::Attachments => self.attachment_sheet_input(&event),
             Overlay::Revision => self.revision_sheet_input(&event),
+            Overlay::Bundle => self.bundle_sheet_input(&event),
+            Overlay::SessionControls => crate::pages::session_controls::input(self, &event),
+            Overlay::Resources => {
+                crate::pages::resources::input(self, &event).map(|changed| (changed, None))
+            }
+            Overlay::Attention => {
+                crate::pages::attention::input(self, &event).map(|changed| (changed, None))
+            }
             Overlay::Interactions => self.interaction_sheet_input(&event),
             Overlay::Palette => self.palette_sheet_input(&event),
             _ => None,
@@ -271,6 +301,10 @@ pub(crate) fn draw(
             Overlay::Onboarding => pages::onboarding::draw_field(frame, app),
             Overlay::Attachments => pages::attachments::draw_field(frame, app),
             Overlay::Revision => pages::revision::draw_field(frame, app),
+            Overlay::Bundle => pages::bundle::draw_fields(frame, app),
+            Overlay::SessionControls => pages::session_controls::draw_fields(frame, app),
+            Overlay::Resources => pages::resources::paint(app, frame, colors),
+            Overlay::Attention => pages::attention::paint(app, frame, colors),
             Overlay::Interactions => pages::interactions::draw_field(frame, app),
             Overlay::Palette => pages::commands::draw_field(frame, app),
             _ => {}

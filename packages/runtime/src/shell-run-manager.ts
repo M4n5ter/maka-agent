@@ -19,7 +19,10 @@
 
 import { constants as osConstants } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
-import { encodeTerminalInputActions } from '@maka/core/terminal-input';
+import {
+  encodeTerminalInputActions,
+  encodeTerminalControllerActions,
+} from '@maka/core/terminal-input';
 import {
   isActiveShellRunStatus,
   isShellRunSourceToolCallId,
@@ -402,7 +405,9 @@ export class ShellRunProcessManager
       const terminalInput =
         input.input ??
         (input.actions
-          ? encodeTerminalInputActions(input.actions, {
+          ? (input.caller === 'client'
+              ? encodeTerminalControllerActions
+              : encodeTerminalInputActions)(input.actions, {
               ...live.collector.currentInputState(),
               ...(input.size ? { cols: input.size.cols, rows: input.size.rows } : {}),
             })

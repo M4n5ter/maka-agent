@@ -41,6 +41,8 @@ pub struct View {
     pub collaboration_mode: maka_runtime::execution::CollaborationMode,
     pub behavior: maka_runtime::execution::BehaviorId,
     pub bound_tools: Option<BTreeSet<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_profile: Option<maka_runtime::execution::ToolProfile>,
 }
 
 /// Session behavior prepares its scoped capabilities. It cannot modify an

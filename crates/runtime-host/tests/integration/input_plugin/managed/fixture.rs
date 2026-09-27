@@ -74,7 +74,7 @@ impl Plugin for Manager {
                     .unwrap();
             }
             staged
-                .insert("example.prepare", input::InputPreparation(owner))
+                .insert("example.prepare", input::InputPreparation::new(owner))
                 .unwrap();
             Ok(staged)
         })

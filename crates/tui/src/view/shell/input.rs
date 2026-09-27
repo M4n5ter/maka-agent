@@ -25,69 +25,102 @@ use crossterm::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use ratatui::layout::Position;
 
 impl App {
+    pub(crate) fn captured_shell_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
+        if self.chrome.header.captures()
+            && let Route::Session(id) = self.navigation.current()
+        {
+            let object = crate::pages::actions::session_scope(self, &id);
+            let identity = crate::pages::actions::identity(self, &object);
+            if self.chrome.header.dismiss_menu_unless(&identity) {
+                return Some((true, None));
+            }
+        }
+        if self.chrome.header.captures_event(event) || self.chrome.composer.captures_event(event) {
+            self.shell_surface_input(event)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn shell_surface_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
-        let (outcome, focus) = match event {
-            Event::Mouse(mouse) => {
-                let editor = match self.navigation.current() {
-                    Route::Session(ref id) => self.drafts.get(id),
-                    _ => None,
-                };
-                let editing = editor
-                    .is_some_and(|editor| editor.contains(Position::new(mouse.column, mouse.row)));
-                // Every shell region sees pointer movement, even when another
-                // one consumes it, so no retired hover survives across regions.
-                let header = self.chrome.header.input(event);
-                let footer = self.chrome.footer.input(event);
-                let feedback = self.chrome.feedback.input(event);
-                let composer = if editing {
-                    self.chrome.composer.input(&Event::FocusLost)
-                } else {
-                    self.chrome.composer.input(event)
-                };
-                let down = mouse.kind == MouseEventKind::Down(MouseButton::Left);
-                if header.consumed {
-                    (header, down.then_some(Focus::Header))
-                } else if footer.consumed {
-                    (footer, None)
-                } else if feedback.consumed {
-                    (feedback, None)
-                } else if composer.consumed {
-                    // Stop and reconciliation do not pass through submission's
-                    // editor-focus restoration. Blank/disabled input chrome
-                    // must likewise leave typing in the draft. Other actions
-                    // keep their existing submission or dialog focus policy.
-                    let focus = if composer.message.is_none()
-                        || matches!(
-                            composer.message,
-                            Some(Action::StopTurn(_) | Action::ReconcileSubmission)
-                        ) {
-                        Focus::Composer
-                    } else {
-                        Focus::Page
+        // A menu owns the entire input event, including positions over another
+        // shell region or the editor. Never probe underlying surfaces first.
+        let captured = if self.chrome.header.captures_event(event) {
+            Some((self.chrome.header.input(event), None))
+        } else if self.chrome.composer.captures_event(event) {
+            Some((self.chrome.composer.input(event), None))
+        } else {
+            None
+        };
+        let (outcome, focus) = if let Some(captured) = captured {
+            captured
+        } else {
+            match event {
+                Event::Mouse(mouse) => {
+                    let editor = match self.navigation.current() {
+                        Route::Session(ref id) => self.drafts.get(id),
+                        _ => None,
                     };
-                    (composer, down.then_some(focus))
-                } else {
-                    return None;
-                }
-            }
-            Event::Key(_) if self.focus == Focus::Header => (self.chrome.header.input(event), None),
-            Event::Key(key)
-                if matches!(self.navigation.current(), Route::Session(_))
-                    && (self.focus == Focus::Page
-                        || self.focus == Focus::Composer
-                            && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
-            {
-                let outcome = self.chrome.composer.input(event);
-                let focus = outcome.consumed.then_some(
-                    if self.chrome.composer.focused() == Some(super::EDITOR) {
-                        Focus::Composer
+                    let editing = editor.is_some_and(|editor| {
+                        editor.contains(Position::new(mouse.column, mouse.row))
+                    });
+                    // Every shell region sees pointer movement, even when another
+                    // one consumes it, so no retired hover survives across regions.
+                    let header = self.chrome.header.input(event);
+                    let footer = self.chrome.footer.input(event);
+                    let feedback = self.chrome.feedback.input(event);
+                    let composer = if editing {
+                        self.chrome.composer.input(&Event::FocusLost)
                     } else {
-                        Focus::Page
-                    },
-                );
-                (outcome, focus)
+                        self.chrome.composer.input(event)
+                    };
+                    let down = mouse.kind == MouseEventKind::Down(MouseButton::Left);
+                    if header.consumed {
+                        (header, down.then_some(Focus::Header))
+                    } else if footer.consumed {
+                        (footer, None)
+                    } else if feedback.consumed {
+                        (feedback, None)
+                    } else if composer.consumed {
+                        // Stop and reconciliation do not pass through submission's
+                        // editor-focus restoration. Blank/disabled input chrome
+                        // must likewise leave typing in the draft. Other actions
+                        // keep their existing submission or dialog focus policy.
+                        let focus = if composer.message.is_none()
+                            || matches!(
+                                composer.message,
+                                Some(Action::StopTurn(_) | Action::ReconcileSubmission)
+                            ) {
+                            Focus::Composer
+                        } else {
+                            Focus::Page
+                        };
+                        (composer, down.then_some(focus))
+                    } else {
+                        return None;
+                    }
+                }
+                Event::Key(_) if self.focus == Focus::Header => {
+                    (self.chrome.header.input(event), None)
+                }
+                Event::Key(key)
+                    if matches!(self.navigation.current(), Route::Session(_))
+                        && (self.focus == Focus::Page
+                            || self.focus == Focus::Composer
+                                && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
+                {
+                    let outcome = self.chrome.composer.input(event);
+                    let focus = outcome.consumed.then_some(
+                        if self.chrome.composer.focused() == Some(super::EDITOR) {
+                            Focus::Composer
+                        } else {
+                            Focus::Page
+                        },
+                    );
+                    (outcome, focus)
+                }
+                _ => return None,
             }
-            _ => return None,
         };
         if !outcome.consumed {
             return None;
@@ -100,7 +133,11 @@ impl App {
         if outcome.message.as_ref().is_some_and(|action| {
             !matches!(
                 action,
-                Action::Back | Action::Palette | Action::ToggleDetails
+                Action::Back
+                    | Action::Palette
+                    | Action::ToggleDetails
+                    | Action::Copy(_)
+                    | Action::CopyMessage { .. }
             )
         }) {
             self.chat
@@ -119,7 +156,7 @@ impl App {
         match route {
             Route::Session(_) => {
                 order.push(Focus::Composer);
-                if !self.chrome.details {
+                if !self.chrome.details && !self.inspector_replaces_chat() {
                     order.push(Focus::Transcript);
                 }
                 if self.inspector_shown() {

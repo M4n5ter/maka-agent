@@ -81,6 +81,9 @@ impl Publisher {
     pub fn withdraw_many<T: Send + Sync + 'static>(&self, names: &[String]) -> Result<(), Error> {
         self.catalog.withdraw_many::<T>(&self.owner, names)
     }
+    pub(crate) fn withdraw_group(&self, keys: &[(TypeId, String)]) -> Result<(), Error> {
+        self.catalog.withdraw_group(&self.owner, keys)
+    }
 }
 
 impl Default for Catalog {
@@ -89,6 +92,11 @@ impl Default for Catalog {
     }
 }
 impl Catalog {
+    /// Namespace for read continuations; a restarted catalog cannot reuse them.
+    pub fn generation(&self) -> uuid::Uuid {
+        self.0.id
+    }
+
     /// Embedding dispatch configuration, never a plugin publication capability.
     pub fn with_calls(calls: crate::call::Issuer) -> Self {
         Self::new(Some(calls))
@@ -105,7 +113,12 @@ impl Catalog {
 
 #[derive(Default)]
 pub struct Staged {
-    entries: Vec<(TypeId, String, Arc<dyn Any + Send + Sync>)>,
+    entries: Vec<(
+        TypeId,
+        String,
+        Arc<dyn Any + Send + Sync>,
+        CancellationToken,
+    )>,
 }
 
 impl Staged {
@@ -120,11 +133,43 @@ impl Staged {
         if self
             .entries
             .iter()
-            .any(|(ty, key, _)| *ty == kind && *key == name)
+            .any(|(ty, key, _, _)| *ty == kind && *key == name)
         {
             return Err(Error::ContributionConflict(name));
         }
-        self.entries.push((kind, name, Arc::new(value)));
+        self.entries
+            .push((kind, name, Arc::new(value), CancellationToken::new()));
+        Ok(())
+    }
+    /// Related capabilities share retirement without retiring other siblings.
+    pub(crate) fn insert_pair<A: Send + Sync + 'static, B: Send + Sync + 'static>(
+        &mut self,
+        first_name: impl Into<String>,
+        first: A,
+        second_name: impl Into<String>,
+        second: B,
+        retired: CancellationToken,
+    ) -> Result<(), Error> {
+        let first_name = first_name.into();
+        let second_name = second_name.into();
+        let kinds = [TypeId::of::<A>(), TypeId::of::<B>()];
+        for (kind, name) in [(kinds[0], &first_name), (kinds[1], &second_name)] {
+            crate::name(name)?;
+            if self
+                .entries
+                .iter()
+                .any(|(ty, key, _, _)| *ty == kind && key == name)
+            {
+                return Err(Error::ContributionConflict(name.clone()));
+            }
+        }
+        if kinds[0] == kinds[1] && first_name == second_name {
+            return Err(Error::ContributionConflict(first_name));
+        }
+        self.entries
+            .push((kinds[0], first_name, Arc::new(first), retired.clone()));
+        self.entries
+            .push((kinds[1], second_name, Arc::new(second), retired));
         Ok(())
     }
 }
@@ -223,11 +268,20 @@ impl Catalog {
         owner: &Context,
         names: &[String],
     ) -> Result<(), Error> {
+        self.withdraw_group(
+            owner,
+            &names
+                .iter()
+                .map(|name| (TypeId::of::<T>(), name.clone()))
+                .collect::<Vec<_>>(),
+        )
+    }
+    fn withdraw_group(&self, owner: &Context, keys: &[(TypeId, String)]) -> Result<(), Error> {
         let _admission = owner.admit()?;
         let identity = owner.identity()?;
-        let keys: Vec<_> = names
+        let keys: Vec<_> = keys
             .iter()
-            .map(|name| (TypeId::of::<T>(), identity.scope.clone(), name.clone()))
+            .map(|(kind, name)| (*kind, identity.scope.clone(), name.clone()))
             .collect();
         let mut state = self.0.state.lock().unwrap();
         for key in &keys {
@@ -283,7 +337,7 @@ impl Catalog {
         // Never drop a revocation Effect while holding the catalog lock.
         let registration = Registration::new(owner, revoke)?;
         let mut state = self.0.state.lock().unwrap();
-        for (kind, name, _) in &staged.entries {
+        for (kind, name, _, _) in &staged.entries {
             if scope == Scope::DesktopUi && state.host_only.contains(kind) {
                 return Err(Error::Invalid(
                     "desktop-ui cannot publish Host capabilities".into(),
@@ -297,11 +351,11 @@ impl Catalog {
                 return Err(Error::ContributionConflict(name.clone()));
             }
         }
-        for (kind, name, value) in staged.entries {
+        for (kind, name, value, retired) in staged.entries {
             state.records.insert(
                 (kind, scope.clone(), name),
                 Record {
-                    retired: CancellationToken::new(),
+                    retired,
                     batch,
                     owner: owner.clone(),
                     value,
@@ -335,7 +389,9 @@ impl Catalog {
             .records
             .iter()
             .filter(|((kind, _, _), record)| {
-                *kind == TypeId::of::<T>() && record.owner.is_effective()
+                *kind == TypeId::of::<T>()
+                    && record.owner.is_effective()
+                    && !record.retired.is_cancelled()
             })
             .map(|(_, record)| Contribution {
                 registration: record.batch,
@@ -368,6 +424,7 @@ impl Catalog {
                 if selected.is_some_and(|selected| selected != *kind)
                     || entry_scope != root
                     || !record.owner.is_effective()
+                    || record.retired.is_cancelled()
                 {
                     continue;
                 }

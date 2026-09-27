@@ -110,7 +110,8 @@ fn revision_edits_ordered_inputs_preserves_attachments_and_reopens_without_resub
     tui.send(b"Composer stays here");
     tui.wait_for("Composer stays here");
     tui.click_text("Original reply.");
-    tui.filter_command("Revise this turn");
+    tui.open_header_actions();
+    tui.wait_for("Revise this turn");
     tui.click_text("Revise this turn");
     tui.wait_for("Input  1 / 2");
     tui.send("\x1b[200~中文 \x1b[201~".as_bytes());
@@ -149,7 +150,7 @@ fn revision_edits_ordered_inputs_preserves_attachments_and_reopens_without_resub
     tui.close_terminal();
     tui.finish();
     let saved: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
-    assert_eq!(saved["version"], 23);
+    assert_eq!(saved["version"], 24);
     assert_eq!(saved["revision"]["stage"], "draft");
     assert!(saved["attachments"].as_object().unwrap().is_empty());
     for input in saved["revision"]["inputs"].as_array().unwrap() {
@@ -180,7 +181,8 @@ fn revision_edits_ordered_inputs_preserves_attachments_and_reopens_without_resub
     let mut reopened = Pty::spawn(&["--root", host.root.to_str().unwrap()]);
     reopened.wait_for("Composer stays here");
     reopened.wait_for("Original reply.");
-    reopened.filter_command("Continue revision");
+    reopened.open_header_actions();
+    reopened.wait_for("Continue revision");
     reopened.click_text("Continue revision");
     reopened.wait_for("Input  2 / 2");
     reopened.send(b"\x1b[200~revised \x1b[201~");
@@ -273,7 +275,8 @@ fn revision_edits_ordered_inputs_preserves_attachments_and_reopens_without_resub
     );
     let mut recovered = Pty::spawn(&["--root", host.root.to_str().unwrap()]);
     recovered.wait_for("Original reply.");
-    recovered.filter_command("Continue revision");
+    recovered.open_header_actions();
+    recovered.wait_for("Continue revision");
     recovered.click_text("Continue revision");
     recovered.wait_for("Result not confirmed.");
     recovered.click_text("Check result");

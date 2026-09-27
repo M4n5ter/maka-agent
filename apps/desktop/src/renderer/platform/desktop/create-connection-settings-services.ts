@@ -71,8 +71,8 @@ export function createDesktopConnectionSettingsServices(
           fetchModels: (connection) => bridge().connections.fetchModels(connection, host),
           hasSecret: (connection) => bridge().connections.hasSecret(connection, host),
           getRequestHeaders: (connection) => bridge().connections.getRequestHeaders(connection, host),
-          setRequestHeaders: (connection, headers) =>
-            bridge().connections.setRequestHeaders(connection, headers, host),
+          setRequestHeaders: (connection, expected, headers) =>
+            bridge().connections.setRequestHeaders(connection, expected, headers, host),
           subscribeEvents: (handler) => bridge().connections.subscribeEvents(handler, host),
         },
         apiKeyOnboarding: {

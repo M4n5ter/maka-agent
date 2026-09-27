@@ -179,6 +179,11 @@ describe('Runtime Resource protocol', () => {
     );
     for (const control of [
       { kind: 'input', input: '' },
+      { kind: 'actions', actions: [] },
+      { kind: 'actions', actions: Array.from({ length: 65 }, () => ({ type: 'text', text: 'x' })) },
+      { kind: 'actions', actions: [{ type: 'paste', text: 'x'.repeat(32 * 1024 - 11) }] },
+      { kind: 'actions', actions: [{ type: 'paste', text: '\u001b[201~forged' }] },
+      { kind: 'actions', actions: [{ type: 'text', text: 'x' }], input: 'raw' },
       {
         kind: 'input',
         input: '界'.repeat(Math.floor(RUNTIME_RESOURCE_CONTROL_INPUT_MAX_BYTES / 3) + 1),

@@ -26,7 +26,7 @@ fn manage(fixture: &Fixture, input: Value) -> Value {
     fixture.read(PACKAGE, "manage", input)
 }
 
-fn source(fixture: &Fixture, count: usize) -> Value {
+pub(super) fn source(fixture: &Fixture, count: usize) -> Value {
     let directory = fixture.directory.path().join("recovery-source");
     std::fs::create_dir_all(directory.join("sessions")).unwrap();
     for index in 1..=count {
@@ -48,9 +48,10 @@ fn source(fixture: &Fixture, count: usize) -> Value {
 }
 
 fn prepare(fixture: &Fixture, source: &Value, index: usize) -> Value {
-    let model = manage(fixture, json!({"kind":"models","query":{"query":""}}))["choices"]["models"]
-        [0]
-    .clone();
+    let model =
+        manage(fixture, json!({"kind":"models","query":{"query":""}}))["choices"]["page"]["models"]
+            [0]
+        .clone();
     let id = format!("recovery-{index:02}");
     let operation = uuid::Uuid::from_u128(index as u128).to_string();
     let result = manage(
@@ -194,7 +195,7 @@ fn real_host_import_recovery_pages_resume_exact_identity_and_show_abandonment() 
     assert!(host.wait_for_exit().success());
 }
 
-fn models(fixture: &Fixture, count: usize) {
+pub(super) fn models(fixture: &Fixture, count: usize) {
     fixture.runtime.block_on(async {
         let catalog = fixture.client.connection_catalog(ConnectionCatalogQueryInput::Start).await.unwrap();
         let row = &catalog["items"][0];
@@ -228,7 +229,7 @@ fn real_host_import_uses_late_default_pages_models_and_searches_beyond_discovery
     models(&fixture, 60);
     let source = source(&fixture, 2);
     let choices = manage(&fixture, json!({"kind":"models","query":{"query":""}}));
-    let default = choices["choices"]["models"]
+    let default = choices["choices"]["page"]["models"]
         .as_array()
         .unwrap()
         .iter()
@@ -238,7 +239,7 @@ fn real_host_import_uses_late_default_pages_models_and_searches_beyond_discovery
         default >= 32,
         "fixture must expose the rejected-default regression"
     );
-    assert_eq!(choices["choices"]["complete"], false);
+    assert_eq!(choices["choices"]["page"]["complete"], false);
     let mut tui = fixture.tui();
     category(&mut tui, "Conversation import", "Recovery source");
     tui.click_page_text("Recovery source");

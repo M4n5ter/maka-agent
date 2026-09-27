@@ -264,7 +264,15 @@ impl App for Hub {
                 }),
                 error => Err(error),
             };
-            if submission.action == "search" || submission.action == "save-target" {
+            if matches!(
+                submission.action.as_str(),
+                "search"
+                    | "choices-next"
+                    | "choices-previous"
+                    | "choices-more-models"
+                    | "choices-more-executors"
+                    | "save-target"
+            ) {
                 return match setup::submit(&this, submission, &cx).await {
                     Err(Error::Invalid(message)) => Ok(Reply::Rejected {
                         message: clean(&message, false).chars().take(256).collect(),

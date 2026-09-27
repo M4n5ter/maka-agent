@@ -74,8 +74,8 @@ impl App {
     }
     pub(super) fn project_management_commands(
         &self,
-        root: &str,
-        epoch: &str,
+        _root: &str,
+        _epoch: &str,
     ) -> Vec<(Action, &'static str)> {
         let mut commands = self
             .register_project_action()
@@ -88,31 +88,43 @@ impl App {
             .iter()
             .find(|item| Some(&item.id) == self.projects.selected.as_ref())
         {
-            let target = Target {
-                root: root.into(),
-                epoch: epoch.into(),
-                name: item.name.clone(),
-                entity: Entity::Project {
-                    id: item.id.clone(),
-                },
-            };
-            for kind in [
-                Kind::Locations,
-                Kind::Rename,
-                Kind::Relink,
-                if item.archived {
-                    Kind::Restore
-                } else {
-                    Kind::Archive
-                },
-            ] {
-                commands.push((
-                    Action::Manage(Command::Open(target.clone(), kind)),
-                    kind.label(&target),
-                ));
-            }
+            commands.extend(self.project_management_commands_for(item));
         }
         commands
+    }
+    pub(crate) fn project_management_commands_for(
+        &self,
+        item: &crate::pages::projects::Item,
+    ) -> Vec<(Action, &'static str)> {
+        let ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return vec![];
+        };
+        let target = Target {
+            root: root_id.clone(),
+            epoch: epoch.clone(),
+            name: item.name.clone(),
+            entity: Entity::Project {
+                id: item.id.clone(),
+            },
+        };
+        [
+            Kind::Locations,
+            Kind::Rename,
+            Kind::Relink,
+            if item.archived {
+                Kind::Restore
+            } else {
+                Kind::Archive
+            },
+        ]
+        .into_iter()
+        .map(|kind| {
+            (
+                Action::Manage(Command::Open(target.clone(), kind)),
+                kind.label(&target),
+            )
+        })
+        .collect()
     }
 }
 

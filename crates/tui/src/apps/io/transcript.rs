@@ -182,7 +182,7 @@ async fn deliver(
 }
 
 #[cfg(test)]
-pub(in crate::apps::io) mod test_peer;
+pub(crate) mod test_peer;
 
 #[cfg(test)]
 mod tests {

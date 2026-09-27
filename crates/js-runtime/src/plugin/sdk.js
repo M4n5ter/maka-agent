@@ -258,8 +258,8 @@
     return capability;
   };
   const callback = (fn) => {
-    if (typeof fn !== 'function' || callbacks.size >= 256 || next >= 0xffff_ffff) {
-      throw new TypeError('Invalid callback or plugin callback limit exceeded');
+    if (typeof fn !== 'function' || next >= 0xffff_ffff) {
+      throw new TypeError('Invalid callback or exhausted callback identity');
     }
     const id = ++next;
     callbacks.set(id, fn);
@@ -272,11 +272,8 @@
     ) {
       throw new TypeError('Remote registrations cannot declare terminalView; use tui.app()');
     }
-    if (
-      !['loading', 'prepared', 'active'].includes(phase) ||
-      (phase === 'loading' && registrations.length >= 128)
-    ) {
-      throw new Error('Invalid contribution registration phase or capacity');
+    if (!['loading', 'prepared', 'active'].includes(phase)) {
+      throw new Error('Invalid contribution registration phase');
     }
     const descriptor = { ...definition, kind, callback: callback(fn) };
     let handle;
@@ -953,7 +950,7 @@
         if (!Array.isArray(resources)) throw new TypeError('Invalid terminal app resources');
         return register(
           'terminal_app',
-          { ...options, name, entry, resources, terminalView: { ...descriptor, version: 8 } },
+          { ...options, name, entry, resources, terminalView: { ...descriptor, version: 9 } },
           (input, caller) =>
             remoteResult(() => {
               const locale = input?.locale ?? 'en';
@@ -1082,12 +1079,37 @@
         withAuthorization: (id, callback) =>
           authorized(host('authorization.open', { id }), signal, callback),
         input: Object.freeze({
-          prepare: (name, prepare) =>
-            register('input_preparation', { name }, (request, call) =>
-              prepare(
-                Object.freeze({ ...request, workspace: call.workspace, signal: call.signal }),
-              ),
-            ),
+          prepare: (name, prepare, options = {}) => {
+            const resources = options.resources;
+            if (
+              resources &&
+              (typeof resources.query !== 'function' || typeof resources.resolve !== 'function')
+            ) {
+              throw new TypeError('Input resources require query and resolve callbacks');
+            }
+            return register(
+              resources ? 'input_resources' : 'input_preparation',
+              resources ? { name, descriptor: { title: resources.title } } : { name },
+              (request, call) => {
+                if (call?.inputResource) {
+                  if (!resources || !['query', 'resolve'].includes(call.inputResource)) {
+                    throw new TypeError('Unknown input resource operation');
+                  }
+                  return resources[call.inputResource](
+                    Object.freeze(request),
+                    Object.freeze({
+                      sessionId: call.sessionId,
+                      workspace: call.workspace,
+                      signal: call.signal,
+                    }),
+                  );
+                }
+                return prepare(
+                  Object.freeze({ ...request, workspace: call.workspace, signal: call.signal }),
+                );
+              },
+            );
+          },
         }),
         tools: Object.freeze({
           register: (definition, invoke) => register('tool', definition, invoke),
@@ -1329,6 +1351,8 @@
             },
             queryDatabase: (input) =>
               host('remote.queryDatabase', { authority: call.remoteAuthority, input }),
+            projects: (input) =>
+              host('remote.projects', { authority: call.remoteAuthority, input }),
           });
         }
         if (call?.authority) {

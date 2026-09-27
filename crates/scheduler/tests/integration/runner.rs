@@ -58,7 +58,7 @@ async fn queued_form_revision_fences_same_task_before_authorization_but_not_unre
         let controller = Controller::open(repository, "UTC".into(), 1000)
             .await
             .unwrap();
-        let (entered, _calls) = mpsc::unbounded_channel();
+        let (entered, mut calls) = mpsc::unbounded_channel();
         let dispatcher = Arc::new(DeliveryHost {
             authorizations: AtomicUsize::new(0),
             calls: Mutex::default(),
@@ -66,12 +66,9 @@ async fn queued_form_revision_fences_same_task_before_authorization_but_not_unre
             release: Notify::new(),
         });
         let stop = CancellationToken::new();
-        let (handle, worker) = owner::start(
-            controller,
-            dispatcher.clone(),
-            Arc::new(ManualClock(AtomicI64::new(1000))),
-            stop.clone(),
-        );
+        let clock = Arc::new(ManualClock(AtomicI64::new(10_000)));
+        let (handle, worker) =
+            owner::start(controller, dispatcher.clone(), clock.clone(), stop.clone());
         let worker = tokio::spawn(worker);
         until(&handle, |view| view.ready).await;
         let create = || Mutation::Create {
@@ -107,6 +104,9 @@ async fn queued_form_revision_fences_same_task_before_authorization_but_not_unre
             .mutate(create(), Origin::User { grant: None })
             .await
             .unwrap();
+        // A real terminal regression observed the wall clock step back 5240 ms.
+        let wall_now = 10_000 - 5240;
+        clock.0.store(wall_now, Ordering::SeqCst);
         handle
             .mutate_if_current(
                 Mutation::Pause {
@@ -121,7 +121,7 @@ async fn queued_form_revision_fences_same_task_before_authorization_but_not_unre
         assert_eq!(paused.status, Status::Paused);
         assert_eq!(
             paused.updated_at, task.updated_at,
-            "two writes can share a millisecond"
+            "wall-clock rollback must not invalidate committed task metadata"
         );
         assert_ne!(current, original);
         let count = dispatcher.authorizations.load(Ordering::SeqCst);
@@ -173,6 +173,76 @@ async fn queued_form_revision_fences_same_task_before_authorization_but_not_unre
             (Ok(_), Err(maka_scheduler::Error::RevisionConflict))
                 | (Err(maka_scheduler::Error::RevisionConflict), Ok(_))
         ));
+        for mutation in [
+            Mutation::Update {
+                task_id: task.id.clone(),
+                patch: Update {
+                    intent_body: Some("First line\nSecond line".into()),
+                    schedule: Some(Schedule::Once {
+                        run_at: wall_now + 1000,
+                    }),
+                    ..Default::default()
+                },
+            },
+            Mutation::Resume {
+                task_id: task.id.clone(),
+            },
+            Mutation::Snooze {
+                task_id: task.id.clone(),
+                delay_ms: 1000,
+            },
+        ] {
+            handle
+                .mutate(mutation, Origin::User { grant: None })
+                .await
+                .unwrap();
+            assert_eq!(read().0.updated_at, 10_000);
+        }
+        assert_eq!(
+            read().0.next_fire_at,
+            Some(wall_now + 2000),
+            "scheduling uses actual wall time"
+        );
+        assert_eq!(read().0.intent.body(), "First line\nSecond line");
+        handle
+            .mutate(
+                Mutation::TriggerNow {
+                    task_id: task.id.clone(),
+                },
+                Origin::User { grant: None },
+            )
+            .await
+            .unwrap();
+        let fire = calls.recv().await.unwrap();
+        assert_eq!(fire.task_id, task.id);
+        assert_eq!(
+            fire.scheduled_at, wall_now,
+            "Run now is not postponed to the old clock"
+        );
+        until(&handle, |view| view.tasks[&task.id].fire_count == 1).await;
+        assert_eq!(read().0.updated_at, 10_000);
+        handle
+            .mutate(
+                Mutation::ClearHistory {
+                    task_id: task.id.clone(),
+                },
+                Origin::User { grant: None },
+            )
+            .await
+            .unwrap();
+        let saved = read().0;
+        assert_eq!(saved.updated_at, 10_000);
+        assert_eq!(saved.fire_count, 1);
+        assert!(saved.runs.is_empty());
+        let reopened = Controller::open(
+            Repository::new(Arc::new(SqlStore(log.clone())), "main").unwrap(),
+            "UTC".into(),
+            wall_now,
+        )
+        .await
+        .unwrap()
+        .view(&Default::default());
+        assert_eq!(reopened.tasks[&task.id].as_ref(), saved.as_ref());
         let (_, current) = read();
         handle
             .mutate_if_current(

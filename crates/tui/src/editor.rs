@@ -20,7 +20,9 @@
 //! Bounded, grapheme-aware composer. Inspired by grok-build's separation of byte
 //! editing and display geometry; implemented here against Ratatui 0.30.
 //! No Host state or submission authority belongs in this widget.
+pub mod completion;
 mod layout;
+pub mod marks;
 mod preview;
 pub mod saved;
 
@@ -55,19 +57,26 @@ struct Edit {
     inserted: String,
     before: Selection,
     after: Selection,
+    before_marks: Vec<marks::Mark>,
+    after_marks: Vec<marks::Mark>,
 }
 
 impl Edit {
     fn bytes(&self) -> usize {
-        self.removed.len() + self.inserted.len()
+        self.removed.len()
+            + self.inserted.len()
+            + marks::bytes(&self.before_marks)
+            + marks::bytes(&self.after_marks)
     }
 }
 
 pub struct Editor {
+    revision: u64,
     byte_limit: usize,
     limit_error: &'static str,
     text: String,
     selection: Selection,
+    marks: Vec<marks::Mark>,
     undo: VecDeque<Edit>,
     redo: Vec<Edit>,
     history_bytes: usize,
@@ -83,10 +92,12 @@ pub struct Editor {
 impl Default for Editor {
     fn default() -> Self {
         Self {
+            revision: 0,
             byte_limit: MAX_TEXT_BYTES,
             limit_error: "composer-too-large",
             text: String::new(),
             selection: Selection::default(),
+            marks: Vec::new(),
             undo: VecDeque::new(),
             redo: Vec::new(),
             history_bytes: 0,
@@ -112,7 +123,7 @@ impl Editor {
         &self.text
     }
     pub fn retained_bytes(&self) -> usize {
-        self.text.len() + self.history_bytes
+        self.text.len() + self.history_bytes + marks::bytes(&self.marks)
     }
     pub fn clear_history(&mut self) {
         self.undo.clear();
@@ -140,6 +151,20 @@ impl Editor {
     pub fn invalidate_geometry(&mut self) {
         self.area = None;
         self.dragging = false;
+    }
+
+    /// The visible caret in the last drawn editor area, with its current wrap.
+    pub fn cursor_position(&self) -> Option<Position> {
+        let area = self.area.filter(|area| !area.is_empty())?;
+        let (row, column) = self
+            .layout
+            .cursor(self.selection.cursor, self.selection.upstream);
+        (row >= self.top && row < self.top + usize::from(area.height)).then(|| {
+            Position::new(
+                area.x + column.min(area.width - 1),
+                area.y + (row - self.top) as u16,
+            )
+        })
     }
 
     pub fn contains(&self, point: Position) -> bool {
@@ -222,10 +247,18 @@ impl Editor {
             self.reveal_cursor();
             return;
         }
+        self.revision = self.revision.wrapping_add(1);
         let before = self.selection;
+        let before_marks = self.marks.clone();
         let removed = self.text[range.clone()].to_owned();
         self.text.replace_range(range.clone(), inserted);
         self.reflow();
+        self.marks = marks::rebase(
+            &before_marks,
+            &range,
+            inserted.len(),
+            &self.layout.boundaries,
+        );
         self.selection = Selection {
             cursor: self.layout.snap_right(range.start + inserted.len()),
             anchor: None,
@@ -241,15 +274,21 @@ impl Editor {
             inserted: inserted.to_owned(),
             before,
             after: self.selection,
+            before_marks,
+            after_marks: self.marks.clone(),
         };
         self.history_bytes += edit.bytes();
         self.undo.push_back(edit);
+        self.trim_history();
+        self.reveal_cursor();
+    }
+
+    fn trim_history(&mut self) {
         while self.history_bytes > MAX_HISTORY_BYTES || self.undo.len() > MAX_HISTORY_EDITS {
             if let Some(edit) = self.undo.pop_front() {
                 self.history_bytes -= edit.bytes();
             }
         }
-        self.reveal_cursor();
     }
 
     fn undo(&mut self, redo: bool) {
@@ -261,14 +300,17 @@ impl Editor {
         let Some(edit) = edit else {
             return;
         };
+        self.revision = self.revision.wrapping_add(1);
         if redo {
             self.text
                 .replace_range(edit.start..edit.start + edit.removed.len(), &edit.inserted);
             self.selection = edit.after;
+            self.marks = edit.after_marks.clone();
         } else {
             self.text
                 .replace_range(edit.start..edit.start + edit.inserted.len(), &edit.removed);
             self.selection = edit.before;
+            self.marks = edit.before_marks.clone();
         }
         self.reflow();
         self.preferred_column = None;

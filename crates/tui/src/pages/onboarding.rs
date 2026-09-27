@@ -17,6 +17,7 @@
  * under the License.
  */
 
+mod configuration;
 mod input;
 mod view;
 pub(crate) use view::{draw_field, sheet};
@@ -36,6 +37,9 @@ pub enum Command {
     Provider(usize),
     /// Focuses a setup field.
     Field(usize),
+    ConfigurationField(usize),
+    ConfigurationChoice(usize, usize),
+    Advanced(bool),
     Verify,
     Toggle(String),
     Save,
@@ -48,6 +52,11 @@ impl Command {
             Self::Close => "session-cancel",
             Self::Provider(_) => "onboard-provider",
             Self::Field(_) => "onboard-title",
+            Self::ConfigurationField(_) | Self::ConfigurationChoice(_, _) => {
+                "connection-preferences"
+            }
+            Self::Advanced(true) => "connection-configuration",
+            Self::Advanced(false) => "connection-preferences",
             Self::Verify => "onboard-verify",
             Self::Toggle(_) => "onboard-models",
             Self::Save => "onboard-save",
@@ -97,6 +106,7 @@ impl Onboarding {
             for field in &mut form.fields {
                 field.invalidate_geometry();
             }
+            form.configuration.invalidate_geometry();
         }
     }
 }
@@ -106,6 +116,7 @@ pub struct Form {
     providers: Vec<maka_protocol::model_provider::Entry>,
     default_slug: String,
     fields: [Editor; 3],
+    configuration: configuration::Mode,
     models: Option<Vec<ModelInfo>>,
     selected: BTreeSet<String>,
     pub visible: bool,
@@ -120,8 +131,7 @@ impl Form {
         OnboardingInput {
             target: maka_protocol::oauth::Target::Create {
                 provider: provider.identity.clone(),
-                configuration: serde_json::from_str(self.fields[1].text())
-                    .expect("reviewed configuration"),
+                configuration: self.configuration_value().expect("reviewed configuration"),
                 name: if name.is_empty() {
                     provider.descriptor.label.clone()
                 } else {
@@ -169,13 +179,9 @@ impl App {
         match c {
             Command::Verify => {
                 form.models.is_none()
-                    && form.fields.iter().all(|field| field.error.is_none())
-                    && serde_json::from_str::<serde_json::Value>(form.fields[1].text()).is_ok_and(
-                        |value| {
-                            maka_protocol::configuration::validation::provider_configuration(&value)
-                                .is_ok()
-                        },
-                    )
+                    && form.fields[0].error.is_none()
+                    && form.fields[2].error.is_none()
+                    && form.configuration_value().is_ok()
                     && (form.fields[2].text().trim().is_empty()
                         || maka_protocol::configuration::validation::slug(
                             form.fields[2].text().trim(),
@@ -188,7 +194,32 @@ impl App {
                 .as_ref()
                 .is_some_and(|m| m.iter().any(|m| m.id == *id)),
             Command::Back => form.models.is_some(),
-            Command::Field(index) => form.models.is_none() && *index < 3,
+            Command::Field(index) => {
+                form.models.is_none()
+                    && *index < 3
+                    && (*index != 1 || form.configuration.advanced())
+            }
+            Command::ConfigurationField(index) => {
+                form.models.is_none()
+                    && form.configuration.fields().is_some_and(|fields| {
+                        fields
+                            .fields
+                            .get(*index)
+                            .is_some_and(|field| field.editor.is_some())
+                    })
+            }
+            Command::ConfigurationChoice(index, choice) => {
+                form.models.is_none()
+                    && form.configuration.fields().is_some_and(|fields| {
+                        fields
+                            .fields
+                            .get(*index)
+                            .is_some_and(|field| *choice < field.choices.len())
+                    })
+            }
+            Command::Advanced(advanced) => {
+                form.models.is_none() && *advanced != form.configuration.advanced()
+            }
             Command::Provider(index) => form.models.is_none() && *index < form.providers.len(),
             _ => false,
         }
@@ -215,6 +246,7 @@ impl App {
                         Editor::bounded(64 * 1024, "onboard-field-invalid"),
                         Editor::bounded(64, "onboard-field-invalid"),
                     ],
+                    configuration: configuration::Mode::new(&serde_json::json!({}), None),
                     models: None,
                     selected: BTreeSet::new(),
                     visible: false,
@@ -237,15 +269,29 @@ impl App {
                             return None;
                         }
                         f.provider = index;
-                        f.fields[1] = Editor::bounded(64 * 1024, "onboard-field-invalid");
-                        f.fields[1].insert(
-                            &f.providers[f.provider]
-                                .descriptor
-                                .configuration_defaults
-                                .to_string(),
-                        );
+                        f.reset_configuration();
                     }
                     Command::Field(index) => self.layer.focus_path(&view::row_path(index)),
+                    Command::ConfigurationField(index) => {
+                        self.layer.focus_path(&configuration::row_path(index))
+                    }
+                    Command::ConfigurationChoice(index, choice) => {
+                        if let configuration::Mode::Fields(fields) = &mut f.configuration {
+                            fields.choose(index, choice);
+                        }
+                    }
+                    Command::Advanced(advanced) => {
+                        if let Err(error) = f.switch_configuration(advanced) {
+                            f.error = Some(error);
+                        } else {
+                            let path = if advanced {
+                                view::row_path(1)
+                            } else {
+                                format!("{}/configuration-mode", view::FORM)
+                            };
+                            self.layer.focus_path(&path);
+                        }
+                    }
                     Command::Toggle(id) => {
                         if !f.selected.contains(&id) && f.selected.len() >= 512 {
                             f.error = Some("onboard-model-limit");
@@ -279,8 +325,8 @@ impl App {
             .filter(|provider| provider.descriptor.anonymous)
             .cloned()
             .collect();
-        if let Some(provider) = form.providers.first() {
-            form.fields[1].insert(&provider.descriptor.configuration_defaults.to_string());
+        if !form.providers.is_empty() {
+            form.reset_configuration();
         }
     }
     pub fn onboarding_request(&mut self, save: bool) -> Option<Request> {
@@ -418,6 +464,8 @@ mod tests {
         app.providers = crate::providers::fixtures::catalog();
         app.onboarding_catalog_loaded();
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
+        app.apply(Action::Onboard(Command::Advanced(true)));
+        terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
         for (index, text) in [
             "Private fixture",
             r#"{"baseUrl":"http://127.0.0.1/v1"}"#,
@@ -513,6 +561,8 @@ mod tests {
             "closed reply cannot reopen the modal"
         );
         app.apply(Action::Onboard(Command::Open));
+        terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
+        app.apply(Action::Onboard(Command::Advanced(true)));
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
         for (index, text) in [
             (1, r#"{"baseUrl":"http://127.0.0.1/v1"}"#),
@@ -634,15 +684,15 @@ mod tests {
         app.apply(Action::Onboard(Command::Open));
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
-        app.layer.focus_path("form/provider");
+        app.layer.focus_path("form/rows/provider");
         app.input(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
         assert!(app.layer.captures());
-        // The chooser's first row lies over the configuration field.
-        let owner = app.layer.rect("form/provider").unwrap();
+        // The chooser's first row lies over another editable field.
+        let owner = app.layer.rect("form/rows/provider").unwrap();
         for kind in [
             MouseEventKind::Down(MouseButton::Left),
             MouseEventKind::Up(MouseButton::Left),
@@ -655,6 +705,6 @@ mod tests {
             }));
         }
         assert!(!app.layer.captures(), "the choice was made");
-        assert_eq!(app.layer.focused_path(), Some("form/provider"));
+        assert_eq!(app.layer.focused_path(), Some("form/rows/provider"));
     }
 }

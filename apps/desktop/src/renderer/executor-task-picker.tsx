@@ -19,7 +19,7 @@
 
 import { useCallback, useState } from 'react';
 import { Button, ExecutorSelection } from '@maka/ui/plugin';
-import type { ExecutionTarget } from '@maka-agent/plugin-sdk/host';
+import type { ExecutionTarget, ExecutorSearch } from '@maka-agent/plugin-sdk/host';
 import type { DesktopNewTaskTarget } from '../preload/bridge-contract.js';
 
 export type ExecutorTarget = Extract<ExecutionTarget, { kind: 'executor' }>;
@@ -35,7 +35,7 @@ export function ExecutorTaskPicker({ target, locale, value, disabled, onChange }
   const [open, setOpen] = useState(false);
   const host = target.kind === 'new' ? target.host : undefined;
   const sessionId = target.kind === 'session' ? target.sessionId : undefined;
-  const search = useCallback((query: { query: string }) => sessionId
+  const search = useCallback((query: ExecutorSearch) => sessionId
     ? window.maka.sessions.searchExecutors(sessionId, query)
     : window.maka.newTasks.searchExecutors(host!, query), [host?.profileId, host?.hostId, sessionId]);
   return (

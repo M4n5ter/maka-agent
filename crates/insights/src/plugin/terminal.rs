@@ -32,8 +32,12 @@ use maka_plugins::{
         view::{self, Action, Confirm, Node, Reply, Role, Tone, View, build::*},
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::Arc;
+
+mod activity;
+mod preferences;
 
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -59,7 +63,7 @@ pub(super) fn publish(
         (
             "terminal",
             app::endpoint(
-                Overview(insights),
+                Overview(Arc::new(insights)),
                 Descriptor::new(
                     Text::localized("Usage & pricing", "用量与价格", "用量與價格"),
                     Context::Application,
@@ -207,9 +211,9 @@ fn cost(words: &Words, totals: &Totals) -> String {
         known
     } else {
         words.t(
-            &format!("{known} + {} unpriced", totals.cost.unvalued),
-            &format!("{known} + {} 次未定价", totals.cost.unvalued),
-            &format!("{known} + {} 次未定價", totals.cost.unvalued),
+            &format!("{known} + {} unvalued", totals.cost.unvalued),
+            &format!("{known} + {} 次费用未知", totals.cost.unvalued),
+            &format!("{known} + {} 次費用未知", totals.cost.unvalued),
         )
     }
 }
@@ -365,9 +369,9 @@ fn session_view(words: &Words, summary: &Summary) -> View {
 }
 
 /// Usage over time and the prices behind it.
-struct Overview(Insights);
+struct Overview(Arc<dyn Method>);
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 struct Place {
     tab: Option<String>,
@@ -375,6 +379,18 @@ struct Place {
     model: Option<String>,
     offset: Option<u64>,
     revision: Option<u64>,
+    cursor: Option<String>,
+    selection: maka_plugins::usage::Selection,
+    session: Option<String>,
+    refine: bool,
+    page: usize,
+    attempt: Option<String>,
+}
+
+impl Place {
+    fn route(&self) -> Value {
+        serde_json::to_value(self).expect("usage route")
+    }
 }
 
 #[derive(Deserialize)]
@@ -439,7 +455,7 @@ impl Overview {
         &self,
         caller: &Caller,
         place: &Place,
-    ) -> Result<(u64, Vec<Entry>, Option<u64>), Error> {
+    ) -> Result<Option<(u64, Vec<Entry>, Option<u64>)>, Error> {
         let query = match (place.offset, place.revision) {
             (Some(offset), Some(revision)) => {
                 json!({"kind":"continue","revision":revision,"offset":offset})
@@ -456,8 +472,8 @@ impl Overview {
                 revision,
                 entries,
                 next_offset,
-            } => Ok((revision, entries, next_offset)),
-            Prices::RevisionChanged {} => Err(Error::Provider("Prices changed; refresh".into())),
+            } => Ok(Some((revision, entries, next_offset))),
+            Prices::RevisionChanged {} => Ok(None),
         }
     }
 }
@@ -467,39 +483,62 @@ impl App for Overview {
         let this = Overview(self.0.clone());
         Box::pin(async move {
             let words = &cx.words;
-            let place: Place = serde_json::from_value(route).unwrap_or_default();
+            let saved = preferences::read(this.0.as_ref(), &cx.caller).await?;
+            let place = preferences::place(route, &saved.preferences)?;
             if place.tab.as_deref() == Some("pricing") {
-                let (revision, entries, next) = this.prices(&cx.caller, &place).await?;
+                let Some((revision, entries, next)) = this.prices(&cx.caller, &place).await? else {
+                    return Ok(activity::restart(words, &place));
+                };
                 if let Some(model) = &place.model {
                     let entry = entries
                         .iter()
                         .find(|entry| &entry.pricing().model_key == model);
+                    if !model.is_empty() && entry.is_none() {
+                        return Ok(activity::restart(words, &place));
+                    }
                     return Ok(price(words, revision, model, entry));
                 }
-                return Ok(pricing(words, revision, &entries, next));
+                return preferences::decorate(
+                    pricing(words, revision, &entries, next, &place),
+                    saved.revision,
+                    words,
+                );
             }
-            let range = place.range.unwrap_or_else(|| "7d".into());
-            let span = RANGES
-                .iter()
-                .find(|(id, _)| *id == range)
-                .map_or(RANGES[1].1, |(_, span)| *span);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|error| Error::Provider(error.to_string()))?
-                .as_millis() as f64;
-            let from = if span.is_finite() {
-                (now - span).max(0.0)
-            } else {
-                0.0
+            let Some(page) = activity::read(this.0.as_ref(), &cx.caller, &place).await? else {
+                return Ok(activity::restart(words, &place));
             };
-            let summary = summary(&this.0, &cx.caller, from, None).await?;
-            Ok(overview(words, &range, &summary))
+            let place = Place {
+                cursor: Some(page.cursor.clone()),
+                refine: false,
+                ..place
+            };
+            if place.tab.as_deref() == Some("activity") {
+                let view = activity::view(words, &place, &page)?;
+                return if place.attempt.is_none() {
+                    preferences::decorate(view, saved.revision, words)
+                } else {
+                    Ok(view)
+                };
+            }
+            let result = this.0.call(json!({"kind":"summary","operationId":uuid::Uuid::new_v4(),"cursor":page.cursor}), cx.caller).await?;
+            if result["kind"] == "refresh_required" {
+                return Ok(activity::restart(words, &place));
+            }
+            let summarized: Summarized = decode(result)?;
+            preferences::decorate(
+                overview(words, &place, &summarized.summary),
+                saved.revision,
+                words,
+            )
         })
     }
 
     fn submit(&self, submission: Submission, cx: Cx) -> BoxFuture<'static, Result<Reply, Error>> {
         let this = Overview(self.0.clone());
         Box::pin(async move {
+            if matches!(submission.action.as_str(), "filter" | "save-view") {
+                return preferences::submit(this.0.as_ref(), submission, cx.caller).await;
+            }
             let revision: u64 = submission
                 .revision
                 .parse()
@@ -577,26 +616,37 @@ impl App for Overview {
     }
 }
 
-fn tabs_for(words: &Words, current: &str) -> Node {
+fn tabs_at(words: &Words, current: &str, place: &Place) -> Node {
     tabs(
         "tabs",
         current,
-        vec![
-            (
-                "overview".into(),
-                words.t("Usage", "用量", "用量"),
-                json!({"tab":"overview"}),
-            ),
-            (
-                "pricing".into(),
-                words.t("Pricing", "价格", "價格"),
-                json!({"tab":"pricing"}),
-            ),
-        ],
+        [
+            ("overview", words.t("Usage", "用量", "用量")),
+            ("activity", words.t("Activity", "活动", "活動")),
+            ("pricing", words.t("Pricing", "价格", "價格")),
+        ]
+        .into_iter()
+        .map(|(tab, label)| {
+            let next = Place {
+                tab: Some(tab.into()),
+                page: 0,
+                attempt: None,
+                model: None,
+                offset: None,
+                revision: None,
+                ..place.clone()
+            };
+            (tab.into(), label, next.route())
+        })
+        .collect(),
     )
 }
 
-fn overview(words: &Words, range: &str, summary: &Summary) -> View {
+fn overview(words: &Words, place: &Place, summary: &Summary) -> View {
+    let range = place.range.as_deref().unwrap_or("7d");
+    if matches!(place.tab.as_deref(), Some("providers" | "models" | "tools")) {
+        return activity::groups(words, place, summary);
+    }
     let ranges = tabs(
         "range",
         range,
@@ -609,13 +659,26 @@ fn overview(words: &Words, range: &str, summary: &Summary) -> View {
                     "30d" => words.t("Month", "一个月", "一個月"),
                     _ => words.t("All", "全部", "全部"),
                 };
-                ((*id).into(), label, json!({"tab":"overview","range":id}))
+                (
+                    (*id).into(),
+                    label,
+                    Place {
+                        tab: Some("overview".into()),
+                        range: Some((*id).into()),
+                        cursor: None,
+                        refine: false,
+                        page: 0,
+                        attempt: None,
+                        ..place.clone()
+                    }
+                    .route(),
+                )
             })
             .collect(),
     );
     let models = &summary.models;
     let mut children = vec![
-        tabs_for(words, "overview"),
+        tabs_at(words, "overview", place),
         ranges,
         heading("cost", cost(words, models)),
         text("tokens", tokens(words, models), Tone::Muted),
@@ -661,6 +724,28 @@ fn overview(words: &Words, range: &str, summary: &Summary) -> View {
             })
             .collect(),
     ));
+    for (tab, label) in [
+        (
+            "providers",
+            words.t("All providers", "所有提供商", "所有提供者"),
+        ),
+        ("models", words.t("All models", "所有模型", "所有模型")),
+        ("tools", words.t("All tools", "所有工具", "所有工具")),
+    ] {
+        children.push(
+            link(
+                format!("all-{tab}"),
+                label,
+                Place {
+                    tab: Some(tab.into()),
+                    page: 0,
+                    ..place.clone()
+                }
+                .route(),
+            )
+            .into(),
+        );
+    }
     children.extend(rows(
         "models",
         words.t("By model", "按模型", "按模型"),
@@ -704,15 +789,53 @@ fn rates(pricing: &Pricing) -> String {
     format!("${} / ${}", pricing.input, pricing.output)
 }
 
-fn pricing(words: &Words, revision: u64, entries: &[Entry], next: Option<u64>) -> View {
+fn price_key(model: &str) -> String {
+    format!(
+        "price-{}",
+        maka_runtime::artifact::content_digest(model.as_bytes())
+    )
+}
+
+fn price_title(model: &str) -> String {
+    let model = view::build::clean(model, false);
+    if model.len() <= 256 {
+        model
+    } else {
+        format!(
+            "{}…{}",
+            &model[..model.floor_char_boundary(120)],
+            &model[model.ceil_char_boundary(model.len() - 120)..]
+        )
+    }
+}
+
+fn pricing(
+    words: &Words,
+    revision: u64,
+    entries: &[Entry],
+    next: Option<u64>,
+    place: &Place,
+) -> View {
+    const WINDOW: usize = 12;
+    let offset = place.offset.unwrap_or(0);
+    let page = place.page.min(entries.len().saturating_sub(1) / WINDOW);
     let mut items: Vec<Node> = entries
         .iter()
+        .skip(page * WINDOW)
+        .take(WINDOW)
         .map(|entry| {
             let pricing = entry.pricing();
             link(
-                format!("price-{}", pricing.model_key).replace('/', ":"),
-                view::build::clean(&pricing.model_key, false),
-                json!({"tab":"pricing","model":pricing.model_key}),
+                price_key(&pricing.model_key),
+                price_title(&pricing.model_key),
+                Place {
+                    tab: Some("pricing".into()),
+                    model: Some(pricing.model_key.clone()),
+                    offset: Some(offset),
+                    revision: Some(revision),
+                    ..place.clone()
+                }
+                .route(),
             )
             .detail(words.t(
                 &format!("{} per million tokens in / out", rates(pricing)),
@@ -730,16 +853,60 @@ fn pricing(words: &Words, revision: u64, entries: &[Entry], next: Option<u64>) -
         link(
             "add",
             words.t("Price another model", "为其它模型定价", "為其他模型定價"),
-            json!({"tab":"pricing","model":""}),
+            Place {
+                tab: Some("pricing".into()),
+                model: Some(String::new()),
+                ..place.clone()
+            }
+            .route(),
         )
         .into(),
     );
-    if let Some(offset) = next {
+    for (id, label, target) in [
+        (
+            "previous",
+            words.t("Previous prices", "上一页价格", "上一頁價格"),
+            page.checked_sub(1),
+        ),
+        (
+            "more-local",
+            words.t("More prices", "更多价格", "更多價格"),
+            ((page + 1) * WINDOW < entries.len()).then_some(page + 1),
+        ),
+    ] {
+        if let Some(page) = target {
+            items.push(
+                link(
+                    id,
+                    label,
+                    Place {
+                        tab: Some("pricing".into()),
+                        offset: Some(offset),
+                        revision: Some(revision),
+                        page,
+                        ..place.clone()
+                    }
+                    .route(),
+                )
+                .into(),
+            );
+        }
+    }
+    if (page + 1) * WINDOW >= entries.len()
+        && let Some(offset) = next
+    {
         items.push(
             link(
                 "more",
-                words.t("More", "更多", "更多"),
-                json!({"tab":"pricing","offset":offset,"revision":revision}),
+                words.t("More prices", "更多价格", "更多價格"),
+                Place {
+                    tab: Some("pricing".into()),
+                    offset: Some(offset),
+                    revision: Some(revision),
+                    page: 0,
+                    ..place.clone()
+                }
+                .route(),
             )
             .into(),
         );
@@ -751,7 +918,7 @@ fn pricing(words: &Words, revision: u64, entries: &[Entry], next: Option<u64>) -
         vec![],
         column(
             "root",
-            vec![tabs_for(words, "pricing"), stack("prices", items)],
+            vec![tabs_at(words, "pricing", place), stack("prices", items)],
         ),
     )
 }
@@ -768,7 +935,7 @@ fn price(words: &Words, revision: u64, model: &str, entry: Option<&Entry>) -> Vi
     let mut inputs = vec![];
     let mut sent = vec![];
     if model.is_empty() {
-        fields.insert(0, view::build::line("model", "", 256));
+        fields.insert(0, view::build::line("model", "", 512));
         inputs.push(input("model", "model", words.t("Model", "模型", "模型")));
         sent.push("model".to_owned());
     }
@@ -804,8 +971,14 @@ fn price(words: &Words, revision: u64, model: &str, entry: Option<&Entry>) -> Vi
     let title = if model.is_empty() {
         words.t("New price", "新价格", "新價格")
     } else {
-        view::build::clean(model, false)
+        price_title(model)
     };
+    if !model.is_empty() {
+        inputs.insert(
+            0,
+            text("model-key", view::build::clean(model, false), Tone::Normal),
+        );
+    }
     view(
         title,
         revision.to_string(),
@@ -881,9 +1054,11 @@ mod tests {
         let view = session_view(&words, &summary());
         view.validate().unwrap();
         let text = serde_json::to_string(&view).unwrap();
-        assert!(text.contains("$0.4213 + 1 unpriced") && text.contains("12.3K in"));
+        assert!(text.contains("$0.4213 + 1 unvalued") && text.contains("12.3K in"));
         assert!(text.contains("1 calls unreported") && text.contains("1 failed"));
-        overview(&words, "7d", &summary()).validate().unwrap();
+        overview(&words, &Place::default(), &summary())
+            .validate()
+            .unwrap();
         let entries = vec![Entry::Custom {
             pricing: Pricing {
                 model_key: "openai/gpt".into(),
@@ -893,7 +1068,9 @@ mod tests {
                 cache_write: None,
             },
         }];
-        pricing(&words, 3, &entries, Some(20)).validate().unwrap();
+        pricing(&words, 3, &entries, Some(20), &Place::default())
+            .validate()
+            .unwrap();
         let edit = price(&words, 3, "openai/gpt", entries.first());
         edit.validate().unwrap();
         assert!(edit.action("reset").unwrap().confirm.is_some());
@@ -902,3 +1079,6 @@ mod tests {
         assert_eq!(new.fields.len(), 5);
     }
 }
+
+#[cfg(test)]
+mod workflows;

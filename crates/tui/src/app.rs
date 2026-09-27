@@ -68,8 +68,17 @@ pub enum Action {
     BrowseTranscript,
     Search(crate::ui::transcript::search::Command),
     Copy(crate::ui::transcript::selection::CopyMode),
+    CopyMessage {
+        target: crate::pages::actions::CopyTarget,
+        mode: crate::ui::transcript::selection::CopyMode,
+    },
     CopyFile(String),
     Branch(crate::pages::branch::Command),
+    Bundle(crate::pages::bundle::Command),
+    SessionControls(crate::pages::session_controls::Command),
+    Resources(crate::pages::resources::Command),
+    Completion(crate::pages::completion::Command),
+    Attention(crate::pages::attention::Command),
     Recap(crate::pages::recap::Command),
     Resume(crate::pages::resume::Command),
     Settings(crate::pages::settings::Message),
@@ -148,6 +157,13 @@ pub struct App {
     pub management: crate::pages::manage::Management,
     pub branch: crate::pages::branch::State,
     pub recap: crate::pages::recap::State,
+    pub bundle: crate::pages::bundle::State,
+    pub session_controls: crate::pages::session_controls::State,
+    pub resources: crate::pages::resources::State,
+    pub completion: crate::pages::completion::State,
+    pub attention: crate::pages::attention::State,
+    pub(crate) resources_presented: bool,
+    pub(crate) attention_presented: bool,
     pub resume: crate::pages::resume::State,
     pub attachments: crate::pages::attachments::State,
     pub skills: crate::pages::skills::State,
@@ -208,6 +224,13 @@ impl App {
             management: Default::default(),
             branch: Default::default(),
             recap: Default::default(),
+            bundle: Default::default(),
+            session_controls: Default::default(),
+            resources: Default::default(),
+            completion: Default::default(),
+            attention: Default::default(),
+            resources_presented: false,
+            attention_presented: false,
             resume: Default::default(),
             attachments: Default::default(),
             skills: Default::default(),
@@ -282,6 +305,9 @@ impl App {
         commands.extend(self.management_commands());
         commands.extend(self.branch_commands());
         commands.extend(self.recap_commands());
+        commands.extend(self.bundle_commands());
+        commands.extend(self.session_control_commands());
+        commands.extend(self.side_branch_commands());
         commands.extend(self.resume_commands());
         commands.extend(self.revision_commands());
         commands.extend(self.oauth_commands());
@@ -421,6 +447,136 @@ impl App {
         commands.extend(self.apps_commands());
         commands
     }
+    /// Freeze the ordinary Terminal entry to the displayed conversation.
+    pub fn resources_action(&self) -> Option<Action> {
+        let ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return None;
+        };
+        let Route::Session(session) = self.navigation.current() else {
+            return None;
+        };
+        let crate::pages::sessions::Detail::Ready(item) = &self.sessions.detail else {
+            return None;
+        };
+        if item.id != session || self.session_is_managed(&session) || self.chat.removed {
+            return None;
+        }
+        Some(Action::Resources(crate::pages::resources::Command::Open(
+            Box::new(crate::pages::resources::Target {
+                root: root_id.clone(),
+                epoch: epoch.clone(),
+                session,
+                workspace: item.workspace.host_cwd.clone(),
+                policy: self.i18n.text(crate::pages::manage::sandbox::current_label(
+                    item.sandbox_mode,
+                    item.approval_policy,
+                )),
+            }),
+        )))
+    }
+    fn resources_current(&self) -> bool {
+        self.resources.target().is_some_and(|target| {
+            self.navigation.current() == Route::Session(target.session.clone())
+                && !self.chat.removed
+                && matches!(&self.connection, ConnectionState::Connected { root_id, epoch } if root_id == &target.root && epoch == &target.epoch)
+        })
+    }
+    fn resources_enabled(&self, command: &crate::pages::resources::Command) -> bool {
+        use crate::pages::resources::Command;
+        match command {
+            Command::Open(target) => {
+                self.resources_action().as_ref()
+                    == Some(&Action::Resources(Command::Open(target.clone())))
+            }
+            Command::Close => self.resources.visible,
+            _ => {
+                !self.closing
+                    && self.resources_current()
+                    && self.resources_presented
+                    && self.overlay() == Some(crate::overlay::Overlay::Resources)
+                    && self.resources.enabled(command)
+            }
+        }
+    }
+    pub(crate) fn reconcile_resources(&mut self) {
+        if self.resources.visible && (self.closing || !self.resources_current()) {
+            self.resources
+                .action(crate::pages::resources::Command::Close);
+            self.resources_presented = false;
+        }
+    }
+    pub(crate) fn sync_resource_terminal(
+        &mut self,
+        client: &maka_client::Client,
+        runner: &mut crate::pages::resources::terminal::Runner,
+    ) {
+        let visible = !self.closing
+            && self.resources_current()
+            && self.resources_presented
+            && self.overlay() == Some(crate::overlay::Overlay::Resources)
+            && self.chat.session.as_deref()
+                == self
+                    .resources
+                    .target()
+                    .map(|target| target.session.as_str());
+        let subscription = visible
+            .then_some(self.chat.subscription.as_deref())
+            .flatten();
+        self.resources.sync_terminal(client, subscription, runner);
+    }
+    pub(crate) fn resources_after_checkpoint(
+        &mut self,
+        request: &crate::pages::resources::Request,
+        result: &Result<(), String>,
+    ) -> bool {
+        let current = !self.closing
+            && self.resources_current()
+            && self.navigation.current() == Route::Session(request.target.session.clone())
+            && matches!(&self.connection, ConnectionState::Connected { root_id, epoch } if root_id == &request.target.root && epoch == &request.target.epoch);
+        if current {
+            self.resources.after_checkpoint(request, result)
+        } else {
+            self.resources.after_checkpoint(
+                request,
+                &Err("Resource destination changed before dispatch".into()),
+            )
+        }
+    }
+    /// Called only after the terminal backend has successfully committed this frame.
+    pub(crate) fn attention_frame_committed(&mut self) {
+        if self.closing {
+            return;
+        }
+        let badge = self.attention_badge_visible();
+        let inbox =
+            self.overlay() == Some(crate::overlay::Overlay::Attention) && self.attention_presented;
+        self.attention.presented(badge || inbox);
+    }
+    pub(crate) fn attention_badge_visible(&self) -> bool {
+        self.frame_size.is_some_and(|(w, h)| w >= 30 && h >= 10)
+            && self
+                .chrome
+                .header
+                .rect("header/right/attention")
+                .is_some_and(|rect| {
+                    rect.width >= 5
+                        && rect.height > 0
+                        && !self.completion_occludes(rect)
+                        && !self.chrome.header.popover_occludes(rect)
+                        && match self.navigation.current() {
+                            Route::Session(_) => !self.chrome.composer.popover_occludes(rect),
+                            Route::Connections => !self.connections.surface.popover_occludes(rect),
+                            Route::Projects => !self.projects.surface.popover_occludes(rect),
+                            _ => true,
+                        }
+                        && (self.overlay().is_none()
+                            || !self.layer.captures()
+                                && self
+                                    .layer
+                                    .bounds()
+                                    .is_some_and(|sheet| sheet.intersection(rect).is_empty()))
+                })
+    }
     pub(crate) fn bind_root(&mut self, root: &str) -> bool {
         if let Some(known) = &self.known_root {
             return known == root;
@@ -481,6 +637,12 @@ impl App {
         self.attachments.begin_frame();
         self.branch.invalidate_geometry();
         self.recap.invalidate_geometry();
+        self.bundle.invalidate_geometry();
+        self.session_controls.invalidate_geometry();
+        self.resources.invalidate_geometry();
+        self.completion.begin_frame();
+        self.resources_presented = false;
+        self.attention_presented = false;
         self.resume.invalidate_geometry();
         self.revision.begin_frame();
         for item in &self.sessions.items {
@@ -628,6 +790,11 @@ impl App {
             Action::Skills(command) => self.skills_action(command),
             Action::Apps(message) => return self.apps_action(message),
             Action::Branch(command) => return self.branch_action(command),
+            Action::Bundle(command) => return self.bundle_action(command),
+            Action::SessionControls(command) => return self.session_controls_action(command),
+            Action::Resources(command) => crate::pages::resources::apply(self, command),
+            Action::Completion(command) => return self.completion_action(command),
+            Action::Attention(command) => self.attention.action(command),
             Action::Recap(command) => return self.recap_action(command),
             Action::Resume(command) => return self.resume_action(command),
             Action::Settings(message) => return self.settings_action(message),
@@ -639,7 +806,9 @@ impl App {
             Action::Project(command) => return self.project_action(command),
             Action::Connection(command) => return self.connection_action(command),
             Action::Queue(command) => return self.queue_action(command),
-            Action::Copy(_) | Action::CopyFile(_) => return Some(action),
+            Action::Copy(_) | Action::CopyMessage { .. } | Action::CopyFile(_) => {
+                return Some(action);
+            }
             Action::OpenInteraction => self.open_interaction(),
             Action::Interaction(_) => return Some(action),
             Action::Visit(route) => self.navigate(crate::navigation::Intent::Visit(route)),
@@ -699,7 +868,12 @@ impl App {
                 self.navigate(crate::navigation::Intent::Inspector(
                     !self.navigation.location().inspector,
                 ));
-                if !self.navigation.location().inspector && self.focus == Focus::Inspector {
+                if self.navigation.location().inspector {
+                    self.chrome.details = false;
+                    self.chat
+                        .search_command(crate::ui::transcript::search::Command::Close);
+                    self.focus = Focus::Inspector;
+                } else if self.focus == Focus::Inspector {
                     self.focus = Focus::Composer;
                 }
                 self.apps.inspector.invalidate();
@@ -711,6 +885,7 @@ impl App {
                 self.focus = Focus::Composer;
             }
             Action::BrowseTranscript => {
+                self.reveal_chat();
                 self.chat
                     .search_command(crate::ui::transcript::search::Command::Close);
                 self.chrome.details = false;
@@ -718,6 +893,13 @@ impl App {
                 self.focus = Focus::Transcript;
             }
             Action::Search(command) => {
+                if matches!(
+                    command,
+                    crate::ui::transcript::search::Command::Open
+                        | crate::ui::transcript::search::Command::Scope
+                ) {
+                    self.reveal_chat();
+                }
                 if matches!(
                     command,
                     crate::ui::transcript::search::Command::Open
@@ -742,9 +924,18 @@ impl App {
                 self.sessions.refresh_detail();
                 return Some(action);
             }
-            Action::OlderMessages => self.chat.request_older(),
-            Action::NewerMessages => self.chat.request_newer(),
-            Action::LatestMessages => self.chat.latest(),
+            Action::OlderMessages => {
+                self.reveal_chat();
+                self.chat.request_older();
+            }
+            Action::NewerMessages => {
+                self.reveal_chat();
+                self.chat.request_newer();
+            }
+            Action::LatestMessages => {
+                self.reveal_chat();
+                self.chat.latest();
+            }
             Action::ToggleMessage(key) => {
                 self.chat
                     .search_command(crate::ui::transcript::search::Command::Close);
@@ -840,11 +1031,34 @@ impl App {
             return match message {
                 Message::Palette(_) | Message::CustomTheme => !self.theme.busy(),
                 Message::SandboxDefaults => self.sandbox_defaults_action().is_some(),
+                Message::NetworkProxy => self.network_proxy_action().is_some(),
+                Message::PersonalPreferences => self.personal_preferences_action().is_some(),
                 _ => true,
             };
         }
         if let Action::Branch(command) = action {
             return self.branch_enabled(command);
+        }
+        if let Action::Bundle(command) = action {
+            return self.bundle_enabled(command);
+        }
+        if let Action::SessionControls(command) = action {
+            return self.session_controls_enabled(command);
+        }
+        if let Action::Completion(command) = action {
+            return self.completion_enabled(command);
+        }
+        if let Action::Resources(command) = action {
+            return self.resources_enabled(command);
+        }
+        if let Action::Attention(command) = action {
+            return self.attention.enabled(command)
+                && (matches!(
+                    command,
+                    crate::pages::attention::Command::Open
+                        | crate::pages::attention::Command::Close
+                ) || self.attention_presented
+                    && self.overlay() == Some(crate::overlay::Overlay::Attention));
         }
         if let Action::Connection(command) = action {
             return self.connection_enabled(command);
@@ -863,7 +1077,7 @@ impl App {
         }
         if *action == Action::SteerMessage {
             if let Route::Session(id) = self.navigation.current()
-                && self.has_skills(&id)
+                && (self.has_skills(&id) || self.completion_requires_idle(&id))
             {
                 return false;
             }
@@ -899,6 +1113,10 @@ impl App {
                         }
                     })
             }
+            Action::CopyMessage { target, mode } => {
+                *mode != crate::ui::transcript::selection::CopyMode::Selection
+                    && target.current(self)
+            }
             Action::StopTurn(target) => {
                 self.stop_target().as_ref() == Some(target) && !self.chat.stop.pending(target)
             }
@@ -919,7 +1137,7 @@ impl App {
                             editor.text().is_empty()
                                 && !self.attachments.has(id)
                                 && !self.has_directories(id)
-                                && !self.has_skills(id)
+                                && !(self.has_skills(id) || self.completion_requires_idle(id))
                                 && !self.tabs.contains(id)
                                 && !self
                                     .sending
@@ -947,10 +1165,11 @@ impl App {
                     && !(self.chat.session.as_deref() == Some(&id) && self.chat.removed)
                     && !matches!(&self.sessions.detail, crate::pages::sessions::Detail::Missing { id: missing } if *missing == id)
                     && self.attachments.ready(&id)
-                    && (!self.has_skills(&id) || self.stop_target().is_none())
+                    && (!(self.has_skills(&id) || self.completion_requires_idle(&id))
+                        || self.stop_target().is_none())
                     && (self.attachments.has(&id)
                         || self.has_directories(&id)
-                        || self.has_skills(&id)
+                        || (self.has_skills(&id) || self.completion_requires_idle(&id))
                         || self
                             .drafts
                             .get(&id)
@@ -1153,7 +1372,7 @@ impl App {
                     editor.text().is_empty()
                         && !self.attachments.has(id)
                         && !self.has_directories(id)
-                        && !self.has_skills(id)
+                        && !(self.has_skills(id) || self.completion_requires_idle(id))
                         && !self.tabs.contains(id)
                         && !self
                             .sending
@@ -1202,6 +1421,12 @@ impl App {
         self.management.oauth.invalidate_identity_geometry();
         self.branch.invalidate_geometry();
         self.recap.invalidate_geometry();
+        self.bundle.invalidate_geometry();
+        self.session_controls.invalidate_geometry();
+        self.resources.invalidate_geometry();
+        self.completion.invalidate_geometry();
+        self.resources_presented = false;
+        self.attention_presented = false;
         self.resume.invalidate_geometry();
         self.revision.invalidate_geometry();
         self.onboarding.invalidate_geometry();
@@ -1286,7 +1511,20 @@ impl App {
                 crate::view::widget_hover(self).map(|hover| (hover.key.to_owned(), hover.area))
             })
             .flatten();
+        let completion_event = if matches!(event, Event::Paste(_)) {
+            Event::Paste(String::new())
+        } else {
+            event.clone()
+        };
         let mut outcome = self.dispatch_input(event);
+        if self.completion_editor_active() {
+            let was_open = self.completion_open();
+            self.completion_refresh(&completion_event);
+            outcome.0 |= was_open != self.completion_open();
+        } else {
+            outcome.0 |= self.completion_open();
+            self.completion_cancel();
+        }
         outcome.0 |= mouse
             && queue_hover
                 != self
@@ -1334,9 +1572,11 @@ impl App {
     /// presented by the kernel. Unconsumed events continue to the shell.
     fn surface_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
         if matches!(event, Event::Mouse(_))
-            && (self.chat.reader().is_some_and(|reader| {
-                reader.text_selection.dragging() || reader.scrollbar_dragging()
-            }) || matches!(self.navigation.current(), Route::Session(ref id) if self.drafts.get(id).is_some_and(|editor| editor.dragging())))
+            && (self.chat.area.is_some()
+                && self.chat.reader().is_some_and(|reader| {
+                    reader.text_selection.dragging() || reader.scrollbar_dragging()
+                })
+                || matches!(self.navigation.current(), Route::Session(ref id) if self.drafts.get(id).is_some_and(|editor| editor.dragging())))
         {
             // A captured native drag owns motion and release across every
             // shell/page region until its original widget releases it.
@@ -1346,6 +1586,7 @@ impl App {
             return Some(outcome);
         }
         if !self.chrome.details
+            && !self.inspector_replaces_chat()
             && matches!(self.navigation.current(), Route::Session(_))
             && self.chat.view.search.as_ref().is_some_and(|search| {
                 matches!(event, Event::Key(_) | Event::Paste(_))
@@ -1433,6 +1674,9 @@ impl App {
     /// Local choosers and captured pointer drags keep their original owner
     /// across shell regions.
     fn captured_surface_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
+        if let Some(outcome) = self.captured_shell_input(event) {
+            return Some(outcome);
+        }
         if !matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
             return None;
         }
@@ -1500,11 +1744,34 @@ impl App {
         (redraw || action.is_some(), action)
     }
 
+    pub(crate) fn completion_editor_active(&self) -> bool {
+        match self.overlay() {
+            None => {
+                self.focus == Focus::Composer
+                    && matches!(self.navigation.current(), Route::Session(_))
+            }
+            Some(crate::overlay::Overlay::Revision) => {
+                !self.layer.captures()
+                    && (self.completion_open() || self.layer.focused_path() == Some("editor"))
+            }
+            _ => false,
+        }
+    }
+
     fn dispatch_input(&mut self, event: Event) -> (bool, Option<Action>) {
         if let Some(overlay) = self.overlay()
             && !matches!(event, Event::Resize(_, _))
         {
+            if overlay == crate::overlay::Overlay::Revision
+                && !self.layer.captures()
+                && let Some(outcome) = self.completion_input(&event)
+            {
+                return outcome;
+            }
             return self.overlay_input(overlay, event);
+        }
+        if let Some(outcome) = self.completion_input(&event) {
+            return outcome;
         }
         if self.palette.is_none()
             && let Event::Key(key) = &event
@@ -1537,6 +1804,7 @@ impl App {
         }
         if self.palette.is_none()
             && !self.chrome.details
+            && !self.inspector_replaces_chat()
             && matches!(self.navigation.current(), Route::Session(_))
         {
             if let Event::Key(key) = &event
@@ -1637,6 +1905,7 @@ impl App {
         }
         if self.palette.is_none()
             && !self.chrome.details
+            && !self.inspector_replaces_chat()
             && matches!(self.navigation.current(), Route::Session(_))
             && let Some(outcome) = self.chat.search_input(&event)
         {
@@ -1784,8 +2053,7 @@ impl App {
                             None
                         }
                         KeyCode::Esc if self.focus == Focus::Inspector => {
-                            self.focus = Focus::Composer;
-                            None
+                            Some(Action::ToggleInspector)
                         }
                         KeyCode::Esc if self.focus == Focus::Transcript => {
                             self.focus = Focus::Page;

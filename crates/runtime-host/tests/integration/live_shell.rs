@@ -143,9 +143,9 @@ async fn managed_pty_commits_screen_resize_and_mode_aware_input_through_final_dr
             printf '\033[6n'
             reply=$(dd bs=1 count=6 2>/dev/null | od -An -tx1 | tr -d ' \n')
             test "$reply" = 1b5b313b3152 || exit 3
-            printf '\033[?1h\033[?1003h\033[?1006hready'
-            input=$(dd bs=1 count=17 2>/dev/null | od -An -tx1 | tr -d ' \n')
-            test "$input" = 1b5b3c303b39313b314d1b4f41e4b8ad0d || exit 4
+            printf '\033[?1h\033[?1003h\033[?1006h\033[?2004hready'
+            input=$(dd bs=1 count=32 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            test "$input" = 1b5b3c303b39313b314d1b4f41e4b8ad0d1b5b3230307e610a621b5b3230317e || exit 4
             test "$(stty size)" = '30 100' || exit 5
             i=0; while test "$i" -lt 4096; do printf 'draining %s\r\n' "$i"; i=$((i+1)); done
             printf 'final-中'
@@ -163,10 +163,11 @@ async fn managed_pty_commits_screen_resize_and_mode_aware_input_through_final_dr
             json!({"type":"key","key":"arrow_up"}),
             json!({"type":"text","text":"中"}),
             json!({"type":"key","key":"enter"}),
+            json!({"type":"paste","text":"a\nb"}),
         ].into_iter().map(InputAction::parse).collect::<Result<Vec<_>,_>>().unwrap();
         let size = TerminalSize::new(100,30).unwrap();
         let receipt = handle.input_and_resize(actions, Some(size)).await.unwrap();
-        assert_eq!(receipt.accepted_bytes, 17);
+        assert_eq!(receipt.accepted_bytes, 32);
         assert!(receipt.resized && receipt.resize_changed);
         assert_eq!(screen(&receipt.record).size, size);
         assert_eq!(screen(&log.read_shell_run("session", "native").await.unwrap().unwrap()).size, size);

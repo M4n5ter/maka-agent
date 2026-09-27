@@ -148,6 +148,7 @@ pub fn steering(session: &str, id: &str) -> EventWrite {
     write(
         session,
         Fact::MessageSteered {
+            source: None,
             message: Box::new(DeliveredMessage {
                 message_id: id.into(),
                 content,

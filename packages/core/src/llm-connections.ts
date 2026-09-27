@@ -715,4 +715,8 @@ export interface UpdateConnectionInput {
   extras?: Record<string, unknown>;
 }
 
-export type { RequestHeaderUpdate, SavedRequestHeaders } from './request-customization.js';
+export type {
+  RequestHeaderUpdate,
+  RequestHeadersBasis,
+  SavedRequestHeaders,
+} from './request-customization.js';

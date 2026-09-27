@@ -367,11 +367,13 @@ function createBridge(input: {
     async hasSecret() {
       return true;
     },
-    async getRequestHeaders() {
-      return { names: [] };
+    async getRequestHeaders(identity) {
+      return { names: [], basis: {
+        connection: { connectionId: identity.connectionId, revision: 1 }, credential: null,
+      } };
     },
-    async setRequestHeaders(_slug, headers) {
-      return { names: headers.map(({ name }) => name) };
+    async setRequestHeaders(_slug, basis, headers) {
+      return { names: headers.map(({ name }) => name), basis };
     },
     subscribeEvents() {
       return () => undefined;

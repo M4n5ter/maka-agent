@@ -205,6 +205,13 @@ pub enum Target {
     Action { action: String },
     /// Open a Maka session in the shell, such as one a plugin started.
     Session { session: String },
+    /// Open an exact canonical message; missing identities never select a neighbor.
+    SessionMessage {
+        session: String,
+        turn: String,
+        message: String,
+        sequence: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -894,6 +901,20 @@ impl View {
             Target::Action { action } if actions.contains(action.as_str()) => Ok(()),
             Target::Action { .. } => Err(invalid()),
             Target::Session { session } => identifier(session),
+            Target::SessionMessage {
+                session,
+                turn,
+                message,
+                sequence,
+            } => {
+                identifier(session)?;
+                identifier(turn)?;
+                identifier(message)?;
+                if !(1..=maka_runtime::interaction::MAX_SAFE_INTEGER).contains(sequence) {
+                    return Err(invalid());
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1504,6 +1525,33 @@ mod tests {
                     button("save", "save", Role::Primary),
                 ],
             ),
+        }
+    }
+
+    #[test]
+    fn exact_message_targets_keep_all_identity_fields_and_a_safe_sequence() {
+        let view = view();
+        let target = |session: &str, turn: &str, message: &str, sequence| Target::SessionMessage {
+            session: session.into(),
+            turn: turn.into(),
+            message: message.into(),
+            sequence,
+        };
+        let valid = target("session", "turn", "message", 17);
+        let wire = serde_json::to_value(&valid).unwrap();
+        assert_eq!(
+            wire,
+            json!({"kind":"session_message","session":"session", "turn":"turn", "message":"message", "sequence":17})
+        );
+        view.target(&valid, &BTreeSet::new()).unwrap();
+        for invalid in [
+            target("", "turn", "message", 17),
+            target("session", "", "message", 17),
+            target("session", "turn", "", 17),
+            target("session", "turn", "message", 0),
+            target("session", "turn", "message", u64::MAX),
+        ] {
+            assert!(view.target(&invalid, &BTreeSet::new()).is_err());
         }
     }
 

@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     New,
+    Action(Box<Action>),
     Open(String),
     Group(String),
     Filter(bool),
@@ -45,6 +46,7 @@ pub enum Message {
     /// Every plugin view, when more pages exist than the sidebar pins.
     Apps,
     Settings,
+    Projects,
     Host,
 }
 
@@ -68,12 +70,17 @@ impl State {
         if let Some(session) = id.strip_prefix(SESSION) {
             return Some(Route::Session(session.to_owned()));
         }
-        (id == "sidebar/settings").then_some(Route::Settings)
+        match id {
+            "sidebar/settings" => Some(Route::Settings),
+            "sidebar/projects" => Some(Route::Projects),
+            _ => None,
+        }
     }
     pub(crate) fn focus_route(&mut self, route: &Route) {
         match route {
             Route::Session(id) => self.surface.focus(format!("{SESSION}{id}")),
             Route::Settings => self.surface.focus("sidebar/settings".into()),
+            Route::Projects => self.surface.focus("sidebar/projects".into()),
             _ => {}
         }
     }
@@ -273,11 +280,25 @@ fn tree(app: &App, orbit: Option<&'static str>, height: u16, drawer: bool) -> No
         filter,
         Node::text("gap", vec![]).size(Size::Fixed(1)),
         if drawer {
-            list.size(Size::Upto(height.saturating_sub(6).max(3)))
+            list.size(Size::Upto(height.saturating_sub(8).max(3)))
         } else {
             list
         },
     ];
+    if let Some(action) = app.new_executor_session_action() {
+        children.insert(
+            1,
+            labelled(
+                "new-executor",
+                "+",
+                crate::view::action_label(app, &action),
+                Tone::Accent,
+            )
+            .on(On::Activate(Message::Action(Box::new(action.clone()))))
+            .enabled(app.enabled(&action))
+            .size(Size::Fixed(1)),
+        );
+    }
     if height >= PINNED {
         children.extend(apps(app));
     }
@@ -288,6 +309,16 @@ fn tree(app: &App, orbit: Option<&'static str>, height: u16, drawer: bool) -> No
                 .hint(i18n.text("sidebar-host-hint")),
         );
     }
+    children.push(
+        labelled(
+            "projects",
+            app.chrome.symbol("▦", "P"),
+            i18n.text("route-projects"),
+            Tone::Normal,
+        )
+        .on(On::Activate(Message::Projects))
+        .current(app.navigation.current() == Route::Projects),
+    );
     children.push(
         labelled(
             "settings",
@@ -484,10 +515,12 @@ impl App {
         if matches!(
             message,
             Message::New
+                | Message::Action(_)
                 | Message::Open(_)
                 | Message::App(_)
                 | Message::Apps
                 | Message::Settings
+                | Message::Projects
                 | Message::Host
         ) {
             self.sidebar.drawer = false;
@@ -508,6 +541,7 @@ impl App {
                 None
             }
             Message::New => self.apply(Action::CreateSession),
+            Message::Action(action) => self.apply(*action),
             Message::Open(id) => self.apply(Action::Visit(Route::Session(id))),
             Message::Group(key) => {
                 if !self.sidebar.toggled.remove(&key) {
@@ -522,6 +556,7 @@ impl App {
             Message::App(key) => self.apply(Action::Apps(crate::apps::Message::Open(*key))),
             Message::Apps => self.apply(Action::Apps(crate::apps::Message::Directory)),
             Message::Settings => self.apply(Action::Visit(Route::Settings)),
+            Message::Projects => self.apply(Action::Visit(Route::Projects)),
             Message::Host => self.apply(Action::Host),
         }
     }

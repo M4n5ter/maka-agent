@@ -61,8 +61,9 @@ pub(super) fn connection(
     tui.wait_for(&format!("{label} ▾"));
     tui.click_text("Name (optional)");
     tui.send(b"WorkHub fixture");
-    tui.click_text("Configuration (JSON)");
-    tui.send(format!("\x01\x1b[200~{}\x1b[201~", json!({"baseUrl":url})).as_bytes());
+    tui.wait_for("Base URL");
+    tui.click_text("Base URL");
+    tui.send(format!("\x01\x1b[200~{url}\x1b[201~").as_bytes());
     tui.click_last_text("Verify");
     tui.wait_for("Choose models");
     for model in ["fixture-model", "worker-model"] {

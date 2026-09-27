@@ -22,9 +22,13 @@ import type {
   CredentialStatus,
   CredentialVersionBasis,
   DeleteCredentialInput,
+  RequestHeadersBasis,
   SetCredentialInput,
 } from '../runtime-policy.js';
-import { decodeConnectionCredentialTarget } from './connection-catalog-codec.js';
+import {
+  decodeConnectionCredentialTarget,
+  decodeConnectionVersionBasis,
+} from './connection-catalog-codec.js';
 import {
   parseRequestHeaders,
   RequestCustomizationValidationError,
@@ -75,6 +79,22 @@ export function decodeCredentialVersionBasis(value: unknown): CredentialVersionB
     credentialId: entityIdValue(item.credentialId, 'credential id'),
     revision: positiveRevisionValue(item.revision, 'credential revision'),
   };
+}
+
+export function decodeRequestHeadersBasis(value: unknown): RequestHeadersBasis {
+  const item = exactRecord(value, 'request headers basis', ['connection', 'credential']);
+  const connection = decodeConnectionVersionBasis(item.connection);
+  const credential =
+    item.credential === null ? null : decodeCredentialVersionBasis(item.credential);
+  if (
+    credential &&
+    (credential.locator.scope !== 'connection' ||
+      credential.locator.kind !== 'request_headers' ||
+      credential.locator.connectionId !== connection.connectionId)
+  ) {
+    throw domainError('request headers credential basis does not match connection');
+  }
+  return { connection, credential };
 }
 
 export function decodeCredentialStatus(value: unknown): CredentialStatus {

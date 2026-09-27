@@ -19,6 +19,7 @@
 
 mod directories;
 mod projection;
+pub(super) mod selection;
 mod usage;
 use super::{Host, HostError};
 use crate::session::SessionConfiguration;

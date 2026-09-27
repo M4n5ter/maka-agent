@@ -592,7 +592,7 @@ default-model-unavailable = 此模型已不可用，請關閉後重新選擇。
 default-model-conflict = 模型設定已被其他用戶端修改，請關閉後重新選擇。
 default-model-failed = 未能更新預設模型，請重新整理後重新選擇。
 
-connection-configuration = 編輯供應商設定
+connection-configuration = 進階 JSON
 connection-configuration-edit-note = 以 JSON 物件填寫供應商設定。認證輸入請於登入時填寫，不要放在此處。
 connection-configuration-note = 用方向鍵或滾輪檢查設定，Ctrl+Home/End 跳至首尾。Host 會依供應商的 schema 驗證。
 connection-configuration-confirm = 使用此供應商設定？
@@ -1067,3 +1067,397 @@ extensions-section-retained = 保留的編輯與待核對提交
 extensions-scope-application = 應用
 
 extensions-split-hint = 拖曳調整寬度 · ←/→ 微調
+
+connection-preferences = 提供者設定
+
+connection-preferences-note = 在此編輯常用欄位。連線選單中保留進階 JSON 編輯。
+
+connection-preferences-invalid = 請檢查欄位值後再儲存。
+
+connection-preferences-limit = 此欄位超過大小限制。
+
+connection-preferences-conflict = 設定已變更。請重新載入目前值後再編輯。
+
+connection-preferences-failed = 請求未能完成。請重新載入目前設定後重試。
+
+provider-base-url = 基礎 URL
+
+preferences-secret-action = 已儲存的值
+
+preferences-secret-keep = 保留現有值
+
+preferences-secret-replace = 取代
+
+preferences-secret-delete = 刪除
+
+preferences-working = 正在處理…
+
+preferences-saved = 已儲存。
+
+preferences-reload = 重新載入並放棄編輯
+
+proxy-title = 網路代理
+
+proxy-enabled = 使用代理
+
+proxy-protocol = 協定
+
+proxy-host = 主機
+
+proxy-port = 連接埠
+
+proxy-authentication = 身分驗證
+
+proxy-username = 使用者名稱
+
+proxy-password = 新密碼
+
+proxy-bypass = 略過的網域
+
+proxy-auto-bypass = 本機網域略過
+
+proxy-test-url = 測試 URL
+
+proxy-test = 測試已儲存的設定
+
+proxy-note = 網域以逗號分隔。關閉身分驗證會刪除已儲存的密碼。
+
+proxy-target-changed = 代理帳戶已變更。儲存前請取代或刪除已儲存的密碼。
+
+proxy-save-before-test = 請先儲存修改，再測試。
+
+proxy-test-success = 連線成功 · { $latency } 毫秒 · HTTP { $status }
+
+proxy-test-failed = 連線失敗 · { $latency } 毫秒 · HTTP { $status }。請檢查代理位址、身分驗證和測試 URL。
+
+headers-title = 請求標頭
+
+headers-name = 標頭名稱
+
+headers-value = 新值
+
+headers-add = 新增標頭
+
+headers-note = 現有值不會顯示。可逐項保留、取代或刪除。授權標頭請在連線身分驗證中設定。
+
+headers-value-required = 新增或重新命名的標頭需要填寫取代值。
+
+connection-request-overlay = 進階請求內容
+
+request-overlay-json = JSON 覆寫值
+
+request-overlay-note = 這些欄位會合併到模型請求中。清除覆寫值可恢復提供者的請求內容。
+
+request-overlay-clear = 清除覆寫值
+
+request-overlay-invalid = 請輸入不超過 32 KiB 的 JSON 物件，或清空欄位以刪除覆寫值。
+
+model-profile-adapter = 配接器
+
+model-profile-default-thinking = 預設思考層級
+
+bundle-export = 匯出對話包
+
+bundle-import = 匯入對話包
+
+bundle-resume = 對話傳輸
+
+bundle-preview = 重新整理預覽
+
+bundle-review = 檢查傳輸
+
+bundle-edit = 返回
+
+bundle-confirm = 確認傳輸
+
+bundle-workspace-path = Host 目錄
+
+bundle-workspace-project = 選擇專案
+
+bundle-forget = 清除傳輸記錄
+
+bundle-forget-confirm = 清除記錄
+
+bundle-path-invalid = 請輸入不含控制字元的 Host 絕對路徑。
+
+bundle-save-failed = 復原記錄儲存失敗，傳輸未送出。
+
+bundle-failed = Host 未能確認這次傳輸。
+
+bundle-receipt-invalid = Host 回執與這次傳輸不符，結果未確認。
+
+bundle-count = 共 { $count } 個對話，包含目前對話及全部子任務
+
+bundle-source = Host 上的對話包檔案
+
+bundle-destination = Host 上的新對話包檔案
+
+bundle-digest = 已確認的子樹摘要
+
+bundle-session-id = 對話 ID
+
+bundle-workspace = Host 上的目標工作目錄
+
+bundle-host-path-note = 以下路徑位於所連線的 Host，而非目前終端機。
+
+bundle-working = 正在等待 Host…
+
+bundle-export-note = 匯出此子樹的完整歷史與產物，不覆寫現有檔案。
+
+bundle-import-note = 使用目前 Host 預設設定將歷史與產物匯入此工作區，不匯入來源憑證與權限。
+
+bundle-export-now = 匯出
+
+bundle-import-now = 匯入
+
+bundle-exported = Host 已匯出 { $count } 個對話 · 壓縮後 { $amount } 位元組
+
+bundle-imported = Host 已匯入 { $count } 個對話 · { $amount } 個產物檔案
+
+bundle-unknown = Host 可能已完成傳輸。原始請求已保留，不會重複執行。
+
+bundle-forget-note = 清除此草稿或回執？Host 上的檔案與對話保持原狀。
+
+bundle-forget-unknown-note = 這次傳輸的結果仍未確認。清除記錄無法取消或復原 Host 上的操作。請先核實結果，再開始新的傳輸。
+
+bundle-query = 核實結果
+
+bundle-visit = 開啟對話
+
+bundle-no-receipt = 尚未找到原始回執，結果仍未確認，不能據此重複匯入。
+
+bundle-recovered = 原始回執確認已匯入 { $count } 個對話；回執不含產物數量。
+
+bundle-import-preview = 對話包包含 { $count } 個對話 · { $artifacts } 個產物檔案
+
+bundle-content-digest = 對話包內容摘要
+
+bundle-binding-digest = 目標工作區綁定摘要
+
+bundle-resolved-workspace = Host 已解析的工作目錄
+
+session-actions = 對話操作
+
+connection-actions = 連線操作
+
+project-actions = 專案操作
+
+composer-add = 加入訊息
+
+composer-options = 模型與權限
+
+controls-anchor-unavailable = 此歷史訊息已無法使用。
+
+controls-checkpoint-failed = 復原狀態儲存失敗，請求未送出。
+
+controls-compact = 壓縮上下文
+
+controls-compact-finished = 上下文已壓縮。
+
+controls-compact-unchanged = 上下文未變更。
+
+controls-compact-failed = 上下文壓縮失敗。
+
+controls-compact-note = 為後續訊息摘要目前對話。此操作會使用所選模型，可能產生費用。
+
+controls-compact-started = 壓縮已開始，結果將顯示於對話中。
+
+controls-confirm-forget = 放棄核對記錄
+
+controls-conflict = Host 狀態已變更。請重新整理並核對設定後再儲存。
+
+controls-display-name = 顯示名稱
+
+controls-empty-turn = 對話回合
+
+controls-executor = 對話執行器
+
+controls-executor-model = 執行器模型（選填）
+
+controls-executor-note = 請選擇已註冊的執行器。模型名稱由該執行器定義，留空使用其預設模型。
+
+controls-executor-query = 尋找執行器
+
+controls-field-limit = 此欄位內容超出大小限制。
+
+controls-filter-executors = 還有更多執行器，請使用「下一頁」或縮小搜尋範圍。
+
+controls-flag = 標記此對話
+
+controls-forget = 放棄未決請求記錄…
+
+controls-forget-note = Host 可能已經執行此請求。放棄只會刪除此核對記錄，不會取消或復原 Host 操作。
+
+controls-history = 對話歷史
+
+controls-interrupt = 停止並撤回佇列訊息
+
+controls-interrupt-note = 停止目前這次執行，並以不可分割操作撤回其待處理訊息。已撤回的訊息不會在之後執行。
+
+controls-labels = 標籤
+
+controls-labels-note = 每行一個標籤，Ctrl+J 換行。
+
+controls-labels-truncated = Host 僅回傳部分標籤；標籤將保留，仍可修改標記狀態。
+
+controls-landmarks = 回合節點
+
+controls-mark-read = 標為已讀至此訊息
+
+controls-mark-read-note = 確認已讀至目前選取的可見歷史訊息。其後的訊息仍為未讀。
+
+controls-metadata = 標籤與標記
+
+controls-no-executors = 沒有符合的執行器。
+
+controls-no-turns = 尚無對話回合。
+
+controls-open-turn = 開啟此回合
+
+controls-preferences = 個人偏好
+
+controls-retract-queue = 撤回全部佇列訊息
+
+controls-retract-queue-note = 撤回此對話的全部待處理訊息。目前執行將繼續。
+
+controls-save = 儲存
+
+controls-saved = 已套用。
+
+controls-search-executors = 搜尋
+
+controls-tone = 助手語氣偏好
+
+controls-unknown = 結果未知，不會自動重送請求。重新整理只顯示目前狀態，不代表此請求已提交。
+
+controls-unresolved = 核對未決對話請求
+
+controls-working = 等待 Host…
+
+controls-workspace-instructions = 使用工作區指令
+
+controls-workspace-note = 此開關獨立儲存；個人偏好的修改請使用「儲存」。
+
+branch-side-title = 從此回合建立旁支對話
+
+branch-side-note = 建立包含所選回合及之前歷史的旁支對話。原對話及其草稿會保留。
+
+branch-empty-side-title = 新增空白旁支對話
+
+branch-empty-side-note = 使用相同設定和工作區建立關聯對話，不複製訊息歷史。
+
+controls-executors-stale = 執行器目錄已變更，請重新搜尋並選擇目前註冊項目。
+
+plugins-export = 匯出外掛套件
+
+plugins-export-source = 來源
+
+plugins-export-installed = Host 上已安裝的外掛套件
+
+plugins-export-version = 已安裝內容摘要
+
+plugins-export-target = Host 上的新外掛套件檔案
+
+plugins-export-path-note = 請輸入所連線 Host 上的絕對路徑。匯出內容為已安裝的外掛套件檔案。
+
+plugins-export-impact = 匯出已檢查的安裝版本，不覆寫現有檔案。
+
+plugins-export-path-invalid = 請輸入不含控制字元的 Host 絕對目標路徑。
+
+plugins-exported = 已匯出至 Host：{ $path }
+
+plugins-export-unknown = 這次匯出結果未確認。選擇其他目標前，請核實 Host 上的原目標檔案；不會重複匯出至原目標。
+
+plugins-export-back = 外掛套件詳細資料
+
+attention-dismiss = 移除
+attention-empty = 暫無通知。
+attention-full = 通知記錄已滿，移除舊通知後可繼續接收。
+attention-open = 通知
+attention-read = 標為已讀
+attention-title = 通知
+resources-cancelled = 已停止
+resources-captured = 終端輸入 · Ctrl+] 返回控制項
+resources-check = 檢查原始請求
+resources-cleanup-unknown = 尚未確認終端分離，請重新連線檢查行程。
+resources-command = 執行命令
+resources-command-limit = 命令超過 32 KiB。
+resources-command-line = 命令
+resources-completed = 已完成
+resources-control-unknown = 輸入接收結果未知，重新連線並檢查後再輸入。
+resources-controls = 返回控制項
+resources-copy = 複製輸出
+resources-details = 行程詳情
+resources-empty = 此對話沒有行程。
+resources-ended = 原始行程已結束。
+resources-failed = 失敗
+resources-forget = 忘記復原記錄…
+resources-forget-warning = 這只會移除復原記錄。原始命令可能仍在執行，不會重試或停止。
+resources-found = 已找到原始請求建立的行程。
+resources-input-full = 輸入超過終端限制。單次貼上請少於 32 KiB，或等待待傳輸入。
+resources-more = 更多
+resources-new-terminal = 新增終端
+resources-not-dispatched = 請求未傳送，請檢查已儲存的復原記錄。
+resources-open-source = 開啟所屬對話
+resources-original = 原始對話：{ $session }
+resources-orphaned = 行程狀態無法取得
+resources-reconnect = 重新連線終端
+resources-redacted = Host 已隱藏輸出。
+resources-run = 執行
+resources-running = 執行中
+resources-screen = 終端畫面 · Shift+滾輪查看歷史
+resources-source-owned = 此行程屬於其他對話，在此唯讀。
+resources-starting = 啟動中
+resources-stop = 停止行程
+resources-stop-confirm = 停止此行程？關閉終端只會中斷連線。
+resources-terminal-failed = 無法連線此終端，可能已由其他用戶端控制或已結束。
+resources-terminal-loading = 正在連線終端…
+resources-timed-out = 已逾時
+resources-title = 終端
+resources-type = 在終端中輸入
+resources-unknown = 結果未知。請先檢查原始請求，再啟動其他行程。
+resources-working = 處理中…
+resources-input-rejected = 輸入在傳送前被拒絕，請重新連線後繼續。
+resources-truncated = 較早的輸出已被裁剪。
+
+completion-commands = 命令
+completion-context = 上下文
+completion-workspace = 工作區
+completion-sessions = 工作階段
+completion-plugins = 外掛
+completion-added = 已加入上下文
+completion-select = 選取
+completion-preview = 預覽
+completion-browse = 瀏覽資料夾
+completion-remove = 移除
+completion-reselect = 重新選取
+completion-keep-excerpt = 僅保留摘錄
+completion-loading = 載入中…
+completion-empty = 沒有相符項目
+completion-directory = 資料夾
+completion-file = 檔案
+completion-capture-conversation = 引用此工作階段摘錄
+completion-captured-excerpt = 已載入訊息的快照
+completion-truncated = 摘錄已依大小限制截短
+completion-failed = 無法載入上下文
+completion-query-long = 搜尋文字過長
+completion-stale = 輸入或候選項目已變更，請重新選取。
+completion-reference-unavailable = 有引用已無法使用，請移除或重新選取。
+completion-source-changed = 來源已變更，請移除或重新選取。
+completion-source-unavailable = 新工作階段中無法使用此來源，請移除引用或保留其摘錄。
+completion-input-invalid = 這些引用無法一起提交，請檢查已加入的上下文。
+completion-history-trimmed = 已清除較早的復原記錄以容納上下文，目前草稿維持不變。
+completion-binding-budget = 上下文已滿，請先移除一個引用。
+revision-resource-review = 新工作階段已就緒。執行前請逐項確認引用的新來源。
+revision-resource-confirm = 引用已就緒。請確認在新工作階段中執行修改後的輸入。
+
+completion-controls = 操作
+completion-results = 候選項目
+
+controls-new-executor = 新增執行器對話
+controls-create = 建立
+controls-create-name = 對話名稱（選填）
+controls-create-workspace = 工作區
+controls-create-found = 已找到對話，可以開啟檢視目前狀態。此次建立的結果尚未確認。
+controls-create-missing = 暫時無法找到對話，此次建立的結果仍未確定。
+controls-open-created = 開啟找到的對話

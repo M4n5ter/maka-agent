@@ -971,7 +971,7 @@ struct Preset {
     profile: String,
     connection_slug: String,
     model: String,
-    thinking_level: Option<Value>,
+    thinking_level: Option<maka_runtime::execution::ThinkingLevel>,
     enabled: bool,
 }
 #[derive(Deserialize)]
@@ -1112,10 +1112,7 @@ impl App for Presets {
                         profile: submission.text("profile")?.to_owned(),
                         connection_slug: submission.text("connection")?.trim().to_owned(),
                         model: submission.text("model")?.trim().to_owned(),
-                        thinking_level: original
-                            .as_ref()
-                            .and_then(|id| presets.iter().find(|preset| &preset.id == id))
-                            .and_then(|preset| preset.thinking_level.clone()),
+                        thinking_level: thinking_input(submission.text("thinking")?)?,
                         enabled: submission.toggle("enabled")?,
                     };
                     match presets.iter_mut().find(|item| item.id == preset.id) {
@@ -1146,6 +1143,51 @@ impl App for Presets {
     }
 }
 
+fn thinking_value(level: Option<maka_runtime::execution::ThinkingLevel>) -> String {
+    level.map_or_else(
+        || "default".into(),
+        |level| {
+            serde_json::to_value(level)
+                .expect("thinking level")
+                .as_str()
+                .expect("thinking string")
+                .to_owned()
+        },
+    )
+}
+
+fn thinking_input(value: &str) -> Result<Option<maka_runtime::execution::ThinkingLevel>, Error> {
+    if value == "default" {
+        Ok(None)
+    } else {
+        serde_json::from_value(json!(value))
+            .map(Some)
+            .map_err(invalid)
+    }
+}
+
+fn thinking_options(words: &Words) -> Vec<(String, String)> {
+    std::iter::once((
+        "default".into(),
+        words.t("Model default", "模型默认", "模型預設"),
+    ))
+    .chain(
+        [
+            ("off", "Off", "关闭", "關閉"),
+            ("minimal", "Minimal", "极少", "極少"),
+            ("low", "Low", "低", "低"),
+            ("medium", "Medium", "中", "中"),
+            ("high", "High", "高", "高"),
+            ("xhigh", "Very high", "很高", "很高"),
+            ("max", "Maximum", "最高", "最高"),
+            ("ultra", "Ultra", "超高", "超高"),
+        ]
+        .into_iter()
+        .map(|(id, en, cn, tw)| (id.into(), words.t(en, cn, tw))),
+    )
+    .collect()
+}
+
 fn editor(words: &Words, revision: String, preset: Option<&Preset>) -> View {
     let value =
         |get: fn(&Preset) -> &str| preset.map_or_else(String::new, |preset| get(preset).to_owned());
@@ -1159,6 +1201,11 @@ fn editor(words: &Words, revision: String, preset: Option<&Preset>) -> View {
         ),
         view::build::line("connection", value(|preset| &preset.connection_slug), 128),
         view::build::line("model", value(|preset| &preset.model), 256),
+        choice(
+            "thinking",
+            thinking_value(preset.and_then(|preset| preset.thinking_level)),
+            thinking_options(words),
+        ),
         toggle("enabled", preset.is_none_or(|preset| preset.enabled)),
     ];
     let names = [
@@ -1167,6 +1214,7 @@ fn editor(words: &Words, revision: String, preset: Option<&Preset>) -> View {
         "profile",
         "connection",
         "model",
+        "thinking",
         "enabled",
     ];
     let mut actions = vec![Action {
@@ -1222,6 +1270,11 @@ fn editor(words: &Words, revision: String, preset: Option<&Preset>) -> View {
                             label("Connection", "连接", "連線"),
                         ),
                         input("model", "model", label("Model", "模型", "模型")),
+                        input(
+                            "thinking",
+                            "thinking",
+                            label("Thinking", "思考级别", "思考等級"),
+                        ),
                         input("enabled", "enabled", label("Enabled", "启用", "啟用")),
                     ],
                 ),
@@ -1474,8 +1527,11 @@ mod tests {
         };
         let view = editor(&words, "1".into(), Some(&preset));
         view.validate().unwrap();
-        assert_eq!(view.fields.len(), 6);
+        assert_eq!(view.fields.len(), 7);
         assert!(view.action("delete").unwrap().confirm.is_some());
         editor(&words, "1".into(), None).validate().unwrap();
     }
 }
+
+#[cfg(test)]
+mod workflows;

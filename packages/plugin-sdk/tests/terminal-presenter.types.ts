@@ -56,10 +56,10 @@ cx.backend({ kind: 'submit' });
 // @ts-expect-error Inline page handlers are unsupported.
 host.tui.app('old', { read() {} }, { title: { fallback: 'Old' }, context: 'application' });
 // @ts-expect-error Generic Remote methods cannot publish terminal views.
-host.remote.method('old', () => null, { terminalView: { version: 8 } });
+host.remote.method('old', () => null, { terminalView: { version: 9 } });
 const stream = { next: () => ({ done: true as const, value: undefined }), cancel() {}, close() {} };
 // @ts-expect-error Generic Remote streams cannot publish terminal views.
-host.remote.stream('old', () => stream, { terminalView: { version: 8 } });
+host.remote.stream('old', () => stream, { terminalView: { version: 9 } });
 // @ts-expect-error Every reader open requires a mount UUID.
 const opened: TranscriptOpen = { resource: 'r', route: null, locale: 'en' };
 // @ts-expect-error Every page read requires the original mount UUID.

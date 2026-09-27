@@ -243,6 +243,7 @@ fn pending(
             disposition: MessageDisposition::TurnStarted,
             submitted_intent: mode.map(|mode| SubmittedTurnIntent {
                 input_selections: Default::default(),
+                input_selection_sources: Default::default(),
                 turn_orchestration: Some(TurnOrchestration {
                     mode,
                     source: TurnOrchestrationSource::HostApi,

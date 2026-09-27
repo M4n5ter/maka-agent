@@ -21,11 +21,16 @@ use crate::attachment::AttachmentRef;
 use serde::{Deserialize, Serialize};
 mod references;
 mod selections;
+mod sources;
 pub use references::{
     CaptureTime, DirectoryReference, InlineReference, InlineReferenceKind, QuoteRef,
     SessionQuoteSource,
 };
 pub use selections::{Selections, validate_selections};
+pub use sources::{
+    SelectionSource, SelectionSources, has_unbound_selections, validate_selection_session,
+    validate_selection_sources,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -199,10 +204,6 @@ pub struct InputReceipt {
 }
 
 pub fn validate_receipts(receipts: &[InputReceipt]) -> Result<(), &'static str> {
-    // A root can aggregate 64 source messages, each prepared by up to 32 providers.
-    if receipts.len() > 64 * 32 {
-        return Err("too many input preparation receipts");
-    }
     for receipt in receipts {
         let source = &receipt.source;
         if source.kind != crate::composition::SourceKind::Input
@@ -234,5 +235,41 @@ pub fn validate_receipts(receipts: &[InputReceipt]) -> Result<(), &'static str> 
 impl From<&str> for MessageInput {
     fn from(text: &str) -> Self {
         text.to_owned().into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition::{SourceKind, SourceRevision};
+
+    #[test]
+    fn input_receipts_are_bounded_by_bytes_and_sources_not_provider_inventory() {
+        let mut receipts: Vec<_> = (0..4096)
+            .map(|index| InputReceipt {
+                source: SourceRevision {
+                    kind: SourceKind::Input,
+                    name: format!("provider-{}", index % 64),
+                    package_id: "example".into(),
+                    entry_id: "entry".into(),
+                    activation: "activation".into(),
+                    revision: format!("revision-{index}"),
+                },
+                receipt: serde_json::json!({"message": index / 64}),
+            })
+            .collect();
+        assert!(serde_json::to_vec(&receipts).unwrap().len() < 1024 * 1024);
+        validate_receipts(&receipts).unwrap();
+        receipts[0].source.kind = SourceKind::Tool;
+        assert_eq!(
+            validate_receipts(&receipts),
+            Err("invalid input preparation source")
+        );
+        receipts[0].source.kind = SourceKind::Input;
+        receipts[0].receipt = serde_json::json!("x".repeat(1024 * 1024));
+        assert_eq!(
+            validate_receipts(&receipts),
+            Err("input preparation receipts exceed durable capacity")
+        );
     }
 }

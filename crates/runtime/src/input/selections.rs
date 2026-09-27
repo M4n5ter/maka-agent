@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Explicit input-provider selections, not tool permissions or prepared receipts.
 /// The provider interprets its own selectors; Host only bounds the envelope.
@@ -32,6 +32,10 @@ pub fn validate_selections(selections: &Selections) -> Result<(), &'static str> 
             || values.is_empty()
         {
             return Err("invalid input-provider selection");
+        }
+        let mut seen = HashSet::new();
+        if values.iter().any(|value| !seen.insert(value)) {
+            return Err("duplicate input-provider selector");
         }
         count = count.saturating_add(values.len());
         if count > 50

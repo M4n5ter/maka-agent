@@ -24,7 +24,12 @@ import type {
   ClientContext,
   ClientSlots,
 } from '@maka-agent/plugin-sdk/client';
-import type { Executions, ExecutionTarget, ExecutorChoices } from '@maka-agent/plugin-sdk/host';
+import type {
+  Executions,
+  ExecutionTarget,
+  ExecutorSearch,
+  ExecutorSearchResult,
+} from '@maka-agent/plugin-sdk/host';
 import { ModelSelection } from './model-selection.js';
 
 type Target = AuthorizationRequest['target'];
@@ -59,7 +64,7 @@ export function registerAccess(context: ClientContext): void {
     const [backend, setBackend] = useState<'model' | 'executor'>('model');
     const [busy, setBusy] = useState(false);
     const search = useMemo(
-      () => context.remote.method<{ query: string }, ExecutorChoices>('executors'),
+      () => context.remote.method<ExecutorSearch, ExecutorSearchResult>('executors'),
       [],
     );
     const onSelect = async (model: ExecutionTarget) => {

@@ -545,7 +545,7 @@ mod tests {
         fn search(
             &self,
             _: llm::Search,
-        ) -> BoxFuture<'_, Result<llm::Choices, maka_plugins::Error>> {
+        ) -> BoxFuture<'_, Result<llm::SearchResult, maka_plugins::Error>> {
             Box::pin(async { unreachable!() })
         }
         fn resolve(

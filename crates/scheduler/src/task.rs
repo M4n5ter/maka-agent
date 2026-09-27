@@ -90,6 +90,8 @@ pub struct ExecutionTemplate {
     pub approval_policy: maka_runtime::execution::ApprovalPolicy,
     pub collaboration_mode: CollaborationMode,
     pub orchestration_mode: BehaviorId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_tools: Option<std::collections::BTreeSet<String>>,
 }
 impl Effect {
     pub fn validate(&self) -> Result<(), Error> {
@@ -108,6 +110,16 @@ impl Effect {
                 }
                 if let Some(project) = &execution.project_id {
                     text(project, 256)?;
+                }
+                if let Some(tools) = &execution.bound_tools {
+                    for tool in tools {
+                        if tool.is_empty()
+                            || tool.len() > 256
+                            || tool.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+                        {
+                            return Err(invalid("invalid bound tool name"));
+                        }
+                    }
                 }
                 Ok(())
             }

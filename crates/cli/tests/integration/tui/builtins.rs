@@ -17,6 +17,8 @@
  * under the License.
  */
 
+mod search_paging;
+
 use super::*;
 use maka_protocol::plugin::{RemoteBinding, RemoteRequest, RemoteResult};
 use serde_json::{Value, json};

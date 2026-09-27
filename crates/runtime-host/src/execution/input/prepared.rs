@@ -45,15 +45,22 @@ impl Executions {
         &self,
         session: SessionRecord<SessionConfiguration>,
         content: MessageInput,
+        intent: Option<&maka_runtime::message::SubmittedTurnIntent>,
         connection: Option<uuid::Uuid>,
         active_tools: Option<Arc<HashSet<String>>>,
     ) -> Result<PreparedMessageInput> {
+        let selections = intent
+            .map(|intent| intent.input_selections.clone())
+            .unwrap_or_default();
+        let selection_sources = intent
+            .map(|intent| intent.input_selection_sources.clone())
+            .unwrap_or_default();
         let Some(tools) = active_tools else {
             let digest = session.configuration_digest.clone();
             let (environment, content, selection) = self
                 .prepare_environment_for(session, connection, BindingMode::Strict, None)
                 .await?
-                .expand(content, Default::default())
+                .expand(content, selections, selection_sources)
                 .await?;
             return Ok(PreparedMessageInput {
                 digest,
@@ -86,7 +93,8 @@ impl Executions {
                 cwd: cwd.clone(),
                 content,
                 tools: tools.iter().cloned().collect(),
-                selections: Default::default(),
+                selections,
+                selection_sources,
                 cancellation: self.shutdown.child_token(),
             },
             &workspace,

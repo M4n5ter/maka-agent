@@ -521,10 +521,10 @@ export class DesktopRuntimeHostClient {
   }
 
   replaceConnectionRequestHeaders(
-    connectionId: string,
+    expected: OperationInput<"connection.request-headers.replace">["expected"],
     headers: OperationInput<"connection.request-headers.replace">["headers"],
   ): Promise<OperationOutput<"connection.request-headers.replace">> {
-    return this.request("connection.request-headers.replace", { connectionId, headers });
+    return this.request("connection.request-headers.replace", { expected, headers });
   }
 
   fetchConnectionModels(

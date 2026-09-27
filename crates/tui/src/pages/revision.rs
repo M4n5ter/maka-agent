@@ -18,6 +18,7 @@
  */
 
 mod attachments;
+mod completion;
 mod directories;
 mod draft;
 mod editing;
@@ -134,13 +135,14 @@ impl State {
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         self.saved.clone().map(|mut saved| {
             saved.view = self.capture_view();
+            self.capture_completion(&mut saved);
             saved
         })
     }
     pub fn restore(&mut self, saved: Checkpoint) {
         self.uploading = false;
         self.phase = match saved.stage {
-            Stage::Draft => Phase::Editing,
+            Stage::Draft | Stage::Bindings => Phase::Editing,
             Stage::Attachments => Phase::Ready,
             Stage::Copy | Stage::Abandon => Phase::UnknownCopy,
             Stage::Batch => Phase::UnknownTurn,
@@ -171,7 +173,7 @@ impl State {
         self.show_problem = false;
         self.confirm_discard = false;
         self.phase = match self.saved.as_ref().map(|saved| saved.stage) {
-            Some(Stage::Draft) => Phase::Editing,
+            Some(Stage::Draft | Stage::Bindings) => Phase::Editing,
             Some(Stage::Attachments) => Phase::Ready,
             Some(Stage::Batch) => Phase::UnknownTurn,
             Some(Stage::Copy | Stage::Abandon) => Phase::UnknownCopy,
@@ -212,6 +214,7 @@ impl App {
             Command::Close => state.visible,
             Command::Send => available && same_root && !state.confirm_discard
                 && matches!(state.phase, Phase::Editing | Phase::Ready)
+                && state.saved.as_ref().is_none_or(|saved| saved.stage != Stage::Bindings || saved.inputs.iter().all(|input| !input.needs_resource_review(&saved.copy.target_session_id)))
                 && state.saved.as_ref().is_some_and(|saved| saved.stage != Stage::Draft
                     || matches!(&self.connection, ConnectionState::Connected {epoch,..} if *epoch == saved.origin_epoch)),
             Command::Query => available && same_root && matches!(state.phase, Phase::UnknownCopy | Phase::UnknownTurn),
@@ -342,12 +345,51 @@ impl App {
                     state.phase = Phase::Failed;
                 } else {
                     saved.stage = Stage::Abandon;
+                    saved.copied = None;
                     state.requested = Some(Job::Abandon(saved.copy.target_session_id.clone()));
                 }
                 state.confirm_discard = false;
             }
             Command::Send => {
                 let saved = state.saved.as_mut()?;
+                if saved.inputs.iter().any(|input| input.validate().is_err()) {
+                    state.error = Some("revision-invalid");
+                    return None;
+                }
+                if saved.stage == Stage::Bindings {
+                    if saved
+                        .inputs
+                        .iter()
+                        .any(|input| input.needs_resource_review(&saved.copy.target_session_id))
+                    {
+                        state.error = Some("revision-resource-review");
+                        return None;
+                    }
+                    let output = saved.copied.clone()?;
+                    let batch = match draft::batch(&saved.inputs, &output, &saved.turn_id) {
+                        Ok(batch) => batch,
+                        Err(_) => {
+                            state.error = Some("revision-invalid");
+                            return None;
+                        }
+                    };
+                    saved.copied = None;
+                    let files = saved.inputs.iter().any(|input| !input.files.is_empty());
+                    saved.stage = if files {
+                        Stage::Attachments
+                    } else {
+                        Stage::Batch
+                    };
+                    if files {
+                        saved.mapped = Some(batch);
+                        state.phase = Phase::Ready;
+                        self.resume_revision_uploads();
+                    } else {
+                        saved.batch = Some(batch.clone());
+                        state.requested = Some(Job::Start(batch));
+                    }
+                    return None;
+                }
                 if let Some(batch) = &saved.batch {
                     state.requested = Some(Job::Start(batch.clone()));
                 } else {
@@ -388,7 +430,7 @@ impl App {
                     Stage::Copy => Job::Copy(saved.copy.clone()),
                     Stage::Batch => Job::Start(saved.batch.clone()?),
                     Stage::Abandon => Job::Abandon(saved.copy.target_session_id.clone()),
-                    Stage::Draft | Stage::Attachments => return None,
+                    Stage::Draft | Stage::Bindings | Stage::Attachments => return None,
                 });
                 state.error = None;
             }
@@ -511,6 +553,7 @@ impl App {
                     stage: Stage::Draft,
                     batch: None,
                     mapped: None,
+                    copied: None,
                     view: saved::View::default(),
                 };
                 if saved.validate(&saved.root).is_err() {
@@ -529,6 +572,31 @@ impl App {
                 if saved.stage == Stage::Abandon {
                     state.phase = Phase::UnknownCopy;
                     state.error = Some("revision-unknown");
+                    return;
+                }
+                let copy::Purpose::Revision { turn_id } = &saved.copy.purpose else {
+                    return;
+                };
+                if output.session_id != saved.copy.target_session_id
+                    || output.turn_id != *turn_id
+                    || draft::validate_mapping(&saved.inputs, &output).is_err()
+                {
+                    state.phase = Phase::UnknownCopy;
+                    state.error = Some("revision-changed");
+                    return;
+                }
+                if saved.stage == Stage::Bindings
+                    || saved
+                        .inputs
+                        .iter()
+                        .any(|input| input.needs_resource_review(&saved.copy.target_session_id))
+                {
+                    saved.stage = Stage::Bindings;
+                    saved.copied = Some(output);
+                    saved.batch = None;
+                    saved.mapped = None;
+                    state.phase = Phase::Editing;
+                    state.error = Some("revision-resource-review");
                     return;
                 }
                 match draft::batch(&saved.inputs, &output, &saved.turn_id) {

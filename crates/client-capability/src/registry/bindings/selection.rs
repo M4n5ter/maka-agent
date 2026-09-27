@@ -258,15 +258,27 @@ impl Registry {
         let first_associated =
             first_associated.map(|r| self.providers[&r.provider_id].current.as_ref().unwrap_or(r));
         let selected = direct.or(first_associated);
-        let selector = selected.map(|r| ProviderRef::of(r)).or_else(|| {
-            initiating
-                .filter(|p| p.identity.principal_kind == PrincipalKind::RemoteOwner)
-                .map(|p| ProviderRef {
-                    id: p.identity.provider_id(),
-                    identity: p.identity.clone(),
-                    session_id: None,
-                })
-        });
+        let eligible = self.eligible(session_id);
+        // A local service recipient does not select a tool provider. Include
+        // scoped tool publications from the same provider when one is present.
+        let selector = selected
+            .filter(|r| {
+                r.identity().principal_kind != PrincipalKind::LocalOwner
+                    || eligible
+                        .values()
+                        .flatten()
+                        .any(|candidate| candidate.provider_id() == r.provider_id())
+            })
+            .map(|r| ProviderRef::of(r))
+            .or_else(|| {
+                initiating
+                    .filter(|p| p.identity.principal_kind == PrincipalKind::RemoteOwner)
+                    .map(|p| ProviderRef {
+                        id: p.identity.provider_id(),
+                        identity: p.identity.clone(),
+                        session_id: None,
+                    })
+            });
         let mut next = SessionBindings {
             initiating: selector,
             service: previous.and_then(|s| s.service.clone()).or_else(|| {
@@ -281,7 +293,6 @@ impl Registry {
             }),
             ..SessionBindings::default()
         };
-        let eligible = self.eligible(session_id);
         let contracts: BTreeSet<_> = previous
             .into_iter()
             .flat_map(|s| s.session.keys())

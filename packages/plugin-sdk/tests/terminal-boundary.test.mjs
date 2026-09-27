@@ -67,7 +67,7 @@ test('ordinary JS app emits the same Boundary input and bottom action View as Ru
     },
   );
   const descriptor = f.registrations.find((entry) => entry.name === 'review').terminalView;
-  assert.equal(descriptor.version, 8);
+  assert.equal(descriptor.version, 9);
   const read = await p.invoke({ kind: 'read', route: null, locale: 'en' });
   assert.deepEqual(JSON.parse(JSON.stringify(read)), { kind: 'view', view: expected });
   const fields = { note: 'Updated\n中文' };
@@ -97,6 +97,13 @@ test('ordinary JS app emits the same Boundary input and bottom action View as Ru
     padding: { horizontal: 0, vertical: 0 },
     emphasis: 'normal',
     activity: 'idle',
+  });
+  const anchor = { session: 'conversation', turn: 'turn', message: 'message', sequence: 17 };
+  assert.deepEqual(JSON.parse(JSON.stringify(f.tui.openMessage('hit', 'Exact result', anchor))), {
+    kind: 'item',
+    key: 'hit',
+    title: 'Exact result',
+    target: { kind: 'session_message', ...anchor },
   });
   await f.runtime.dispose();
 });

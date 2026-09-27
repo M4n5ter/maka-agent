@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::{Placement, ensure, epoch, identities};
+use super::{Placement, encoded, ensure, epoch, identities};
 use crate::{
     Operation, ProtocolError, Result,
     turn::{self, MessageContent, TurnOrchestration},
@@ -49,6 +49,8 @@ pub struct SubmitInput {
     pub placement: Placement,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub input_selections: maka_runtime::input::Selections,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: maka_runtime::input::SelectionSources,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_orchestration: Option<TurnOrchestration>,
 }
@@ -58,15 +60,27 @@ impl SubmitInput {
         epoch(&self.origin_host_epoch)?;
         turn::entity(&self.session_id)?;
         turn::entity(&self.message_id)?;
-        maka_runtime::input::validate_selections(&self.input_selections)
-            .map_err(ProtocolError::invalid)?;
+        maka_runtime::input::validate_selection_sources(
+            &self.input_selections,
+            &self.input_selection_sources,
+        )
+        .map_err(ProtocolError::invalid)?;
+        maka_runtime::input::validate_selection_session(
+            &self.input_selection_sources,
+            &self.session_id,
+        )
+        .map_err(ProtocolError::invalid)?;
         self.content
             .validate_admission(!self.input_selections.is_empty())?;
         ensure(
-            (self.input_selections.is_empty() && self.turn_orchestration.is_none())
+            (!maka_runtime::input::has_unbound_selections(
+                &self.input_selections,
+                &self.input_selection_sources,
+            ) && self.turn_orchestration.is_none())
                 || self.placement == Placement::CurrentTurn,
             "Exact-Turn intent requires current_turn placement",
         )?;
+        encoded(self, 128 * 1024)?;
         Ok(())
     }
 }

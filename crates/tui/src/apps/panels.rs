@@ -78,6 +78,16 @@ impl App {
     pub(crate) fn inspector_shown(&self) -> bool {
         self.inspector_wanted() && self.apps.inspector_visible
     }
+    /// A narrow open inspector occupies the conversation's reading region.
+    pub(crate) fn inspector_replaces_chat(&self) -> bool {
+        self.inspector_shown() && self.chat.area.is_none()
+    }
+    pub(crate) fn reveal_chat(&mut self) {
+        if self.inspector_replaces_chat() {
+            self.navigate(crate::navigation::Intent::Inspector(false));
+        }
+        self.chrome.details = false;
+    }
     /// Whether a page this wide holds the conversation and the inspector.
     pub(crate) fn inspector_fits(width: u16) -> bool {
         width >= INSPECTOR + CONVERSATION
@@ -389,6 +399,9 @@ impl App {
             if self.navigation.current() != Route::Session(session.into()) {
                 self.apply(Action::Visit(Route::Session(session.into())));
             }
+            self.chrome.details = false;
+            self.chat
+                .search_command(crate::ui::transcript::search::Command::Close);
             self.navigate(crate::navigation::Intent::Inspector(true));
             if self.navigation.current() != Route::Session(session.into())
                 || !self.navigation.location().inspector

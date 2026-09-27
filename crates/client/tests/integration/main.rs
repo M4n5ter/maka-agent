@@ -26,6 +26,7 @@ mod message;
 mod model_provider;
 mod oauth;
 mod plugin;
+mod preferences197;
 mod presentation;
 mod project;
 mod session;

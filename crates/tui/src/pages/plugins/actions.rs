@@ -20,13 +20,37 @@
 use super::*;
 use io::Mutation;
 use maka_plugins::composition::{Entry, EntryPatch, Operation};
-use maka_protocol::plugin::{Apply, PackageInstall, PackagePrecondition, PackageTarget};
+use maka_protocol::plugin::{
+    Apply, PackageExport, PackageInstall, PackagePrecondition, PackageTarget,
+};
 
 impl State {
     fn proposal(&self, change: Change) -> Result<Request, String> {
         let binding = self.binding.clone().ok_or("plugins-unavailable")?;
         let snapshot = self.snapshot.as_ref().ok_or("plugins-unavailable")?;
         let (mutation, place, base) = match (&self.place, change) {
+            (Place::Export(id), Change::Export) => {
+                let package = snapshot.package(id).ok_or("plugins-missing")?;
+                let path = self.draft().ok_or("plugins-draft-limit")?.fields[0].text();
+                if !export::valid_path(path) {
+                    return Err("plugins-export-path-invalid".into());
+                }
+                if self.export_uncertain(id, path) {
+                    return Err("plugins-export-unknown".into());
+                }
+                (
+                    Mutation::Export(PackageExport {
+                        extension_id: id.clone(),
+                        target_path: path.to_owned(),
+                        expected: PackagePrecondition {
+                            base_generation: package.base_generation,
+                            content_digest: Some(package.content_digest.clone()),
+                        },
+                    }),
+                    self.place.clone(),
+                    package.base_generation,
+                )
+            }
             (Place::Install, Change::Install) => {
                 let preview = self
                     .preview
@@ -198,6 +222,7 @@ impl App {
                     self.plugins.queued = Some(request);
                     self.plugins.confirmation_shown = false;
                     self.plugins.receipt = None;
+                    self.plugins.exported = None;
                     self.plugins.error = None;
                 }
             }

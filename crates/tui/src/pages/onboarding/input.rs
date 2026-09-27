@@ -19,7 +19,7 @@
 
 use super::{
     Action, App, Command,
-    view::{row, row_path},
+    configuration::{self, Field},
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -33,11 +33,12 @@ impl App {
         if !self.onboarding_enabled(&Command::Field(0)) {
             return None;
         }
-        let focused = self.layer.focused_path().and_then(row);
+        let focused = self.layer.focused_path().and_then(configuration::focused);
         let f = self.onboarding.dialog.as_mut()?;
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 let index = focused?;
+                f.editor(index)?;
                 if matches!(
                     key.code,
                     KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down
@@ -47,8 +48,10 @@ impl App {
                     return None;
                 }
                 if key.code == KeyCode::Enter {
-                    if index + 1 < f.fields.len() {
-                        self.layer.focus_path(&row_path(index + 1));
+                    let fields = f.fields_in_order();
+                    let at = fields.iter().position(|field| *field == index)?;
+                    if let Some(next) = fields.get(at + 1) {
+                        self.layer.focus_path(&configuration::path(*next));
                     } else if self.onboarding_enabled(&Command::Verify) {
                         self.layer.focus_path("footer/verify");
                     }
@@ -57,7 +60,7 @@ impl App {
                 if matches!(key.code, KeyCode::Char(c) if c.is_control()) {
                     return Some((false, None));
                 }
-                let changed = f.fields[index].key(*key);
+                let changed = f.editor_mut(index)?.key(*key);
                 if changed {
                     f.error = None;
                 }
@@ -65,20 +68,24 @@ impl App {
             }
             Event::Paste(text) => {
                 let index = focused?;
+                f.editor(index)?;
                 // Only the configuration is JSON; the rest are one line.
-                if index != 1 && text.chars().any(char::is_control) {
+                if index != Field::Base(1) && text.chars().any(char::is_control) {
                     f.error = Some("onboard-field-invalid");
                     return Some((true, None));
                 }
-                let changed = f.fields[index].insert(text);
+                let changed = f.editor_mut(index)?.insert(text);
                 f.error = None;
                 Some((changed, None))
             }
             Event::Mouse(mouse) => {
-                let index = f.fields.iter().position(|editor| editor.takes(mouse))?;
-                let changed = f.fields[index].mouse(*mouse);
+                let index = f
+                    .fields_in_order()
+                    .into_iter()
+                    .find(|field| f.editor(*field).is_some_and(|editor| editor.takes(mouse)))?;
+                let changed = f.editor_mut(index)?.mouse(*mouse);
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                    self.layer.focus_path(&row_path(index));
+                    self.layer.focus_path(&configuration::path(index));
                     return Some((true, None));
                 }
                 Some((changed, None))

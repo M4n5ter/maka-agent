@@ -65,6 +65,8 @@ pub struct TurnStartInput {
     pub content: MessageContent,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub input_selections: maka_runtime::input::Selections,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: maka_runtime::input::SelectionSources,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_orchestration: Option<TurnOrchestration>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,11 +107,20 @@ pub fn decode_turn_start_input(value: &Value) -> Result<TurnStartInput> {
     let mut input: TurnStartInput = decode(value)?;
     entity(&input.session_id)?;
     entity(&input.turn_id)?;
-    maka_runtime::input::validate_selections(&input.input_selections)
-        .map_err(ProtocolError::invalid)?;
+    maka_runtime::input::validate_selection_sources(
+        &input.input_selections,
+        &input.input_selection_sources,
+    )
+    .map_err(ProtocolError::invalid)?;
+    maka_runtime::input::validate_selection_session(
+        &input.input_selection_sources,
+        &input.session_id,
+    )
+    .map_err(ProtocolError::invalid)?;
     input
         .content
         .validate_admission(!input.input_selections.is_empty())?;
+    encoded(&input, 128 * 1024)?;
     if let Some(max) = input.max_steps {
         ensure(max > 0, "Invalid maxSteps")?;
     }

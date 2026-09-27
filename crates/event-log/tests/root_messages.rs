@@ -93,6 +93,7 @@ async fn root_sources_are_atomic_exclusive_delivery_proofs_and_rebuild_exact_vis
     first.disposition = MessageDisposition::TurnStarted;
     first.submitted_intent = Some(SubmittedTurnIntent {
         input_selections: [("reviewer".into(), vec!["project:review".into()])].into(),
+        input_selection_sources: Default::default(),
         turn_orchestration: Some(TurnOrchestration {
             mode: BehaviorId::try_from("graph".to_owned()).unwrap(),
             source: TurnOrchestrationSource::SlashCommand,
@@ -190,6 +191,7 @@ async fn root_sources_are_atomic_exclusive_delivery_proofs_and_rebuild_exact_vis
     let colliding = RuntimeEvent::new(
         event.invocation.clone(),
         Fact::MessageSteered {
+            source: None,
             message: Box::new(first.message.clone()),
         },
     );
@@ -203,6 +205,7 @@ async fn root_sources_are_atomic_exclusive_delivery_proofs_and_rebuild_exact_vis
         &EventWrite::plain(RuntimeEvent::new(
             event.invocation.clone(),
             Fact::MessageSteered {
+                source: None,
                 message: Box::new(delivered),
             },
         ))

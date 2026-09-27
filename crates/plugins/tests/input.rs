@@ -63,7 +63,7 @@ async fn admission_orders_domain_invalidation_and_retirement_without_executing_c
     staged
         .insert(
             "example.prepare",
-            InputPreparation(Arc::new(Example(revision.clone()))),
+            InputPreparation::new(Arc::new(Example(revision.clone()))),
         )
         .unwrap();
     catalog.publish(&owner, staged).unwrap();
@@ -72,6 +72,7 @@ async fn admission_orders_domain_invalidation_and_retirement_without_executing_c
         cwd: ".".into(),
         content: "original".into(),
         selections: Default::default(),
+        selection_sources: Default::default(),
         tools: Default::default(),
         cancellation: Default::default(),
     };
@@ -138,4 +139,71 @@ async fn admission_orders_domain_invalidation_and_retirement_without_executing_c
     );
     drop(admitted);
     stopping.await.unwrap();
+}
+
+#[tokio::test]
+async fn many_input_providers_preserve_preparation_receipts_and_real_resource_bounds() {
+    let catalog = Catalog::default();
+    let owner = Fiber::new("example", "example", Scope::Profile).unwrap();
+    owner.begin_loading().unwrap();
+    owner.ready().unwrap();
+    let mut staged = Staged::default();
+    for index in 0..96 {
+        staged
+            .insert(
+                format!("example.prepare-{index:03}"),
+                InputPreparation::new(Arc::new(Example(Revision::default()))),
+            )
+            .unwrap();
+    }
+    catalog.publish(&owner, staged).unwrap();
+    let request = Request {
+        session_id: "session".into(),
+        cwd: ".".into(),
+        content: "original".into(),
+        selections: Default::default(),
+        selection_sources: Default::default(),
+        tools: Default::default(),
+        cancellation: Default::default(),
+    };
+    let workspace = maka_plugins::filesystem::ReadRoot::capture(".").unwrap();
+    let scope = Scope::Session("session".into());
+    let prepared = prepare(&catalog, &scope, request.clone(), &workspace)
+        .await
+        .unwrap();
+    assert_eq!(prepared.content.preparation.len(), 96);
+    assert_eq!(
+        prepared.content.text,
+        format!("original{}", "\nprepared business input".repeat(96))
+    );
+    for (index, receipt) in prepared.content.preparation.iter().enumerate() {
+        assert_eq!(receipt.source.name, format!("example.prepare-{index:03}"));
+        assert_eq!(receipt.source.package_id, "example");
+        assert_eq!(receipt.receipt, json!({"ticket":42}));
+    }
+    maka_runtime::input::validate_receipts(&prepared.content.preparation).unwrap();
+    drop(prepared.admit().unwrap().unwrap());
+    let oversized = prepare(
+        &catalog,
+        &scope,
+        Request {
+            content: "x".repeat(64 * 1024).into(),
+            ..request.clone()
+        },
+        &workspace,
+    )
+    .await;
+    assert!(
+        matches!(oversized, Err(maka_plugins::Error::Invalid(message)) if message == "prepared input exceeds 64 KiB")
+    );
+    request.cancellation.cancel();
+    let cancelled = prepare(&catalog, &scope, request, &workspace).await;
+    assert!(
+        matches!(cancelled, Err(maka_plugins::Error::Invalid(message)) if message == "input preparation cancelled")
+    );
+    owner
+        .shutdown(tokio::time::Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(prepared.admit().is_err(), "all captured sources retire");
 }

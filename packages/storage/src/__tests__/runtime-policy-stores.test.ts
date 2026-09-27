@@ -135,22 +135,31 @@ describe('runtime policy stores', () => {
         expected: null,
         secret: 'provider-secret',
       });
-      assert.deepEqual(
-        await stores.operations.replaceConnectionRequestHeaders(connection.connectionId, [
-          { name: 'X-Tenant', value: 'tenant-a' },
-        ]),
-        { kind: 'committed', names: ['X-Tenant'] },
+      const initialHeaders = await stores.operations.getConnectionRequestHeaders(
+        connection.connectionId,
       );
-      assert.deepEqual(
-        await stores.operations.replaceConnectionRequestHeaders(connection.connectionId, [
-          { name: 'x-tenant' },
-          { name: 'X-Title', value: 'Maka' },
-        ]),
-        { kind: 'committed', names: ['x-tenant', 'X-Title'] },
+      assert.ok(initialHeaders);
+      const firstHeaders = await stores.operations.replaceConnectionRequestHeaders(
+        initialHeaders.basis,
+        [{ name: 'X-Tenant', value: 'tenant-a' }],
+      );
+      assert.equal(firstHeaders.kind, 'committed');
+      if (firstHeaders.kind !== 'committed') return;
+      assert.deepEqual(firstHeaders.names, ['X-Tenant']);
+      const secondHeaders = await stores.operations.replaceConnectionRequestHeaders(
+        firstHeaders.basis,
+        [{ name: 'x-tenant' }, { name: 'X-Title', value: 'Maka' }],
+      );
+      assert.equal(secondHeaders.kind, 'committed');
+      if (secondHeaders.kind !== 'committed') return;
+      assert.deepEqual(secondHeaders.names, ['x-tenant', 'X-Title']);
+      assert.equal(
+        (await stores.operations.replaceConnectionRequestHeaders(firstHeaders.basis, [])).kind,
+        'credential_stale',
       );
       assert.deepEqual(
         await stores.operations.getConnectionRequestHeaders(connection.connectionId),
-        { names: ['x-tenant', 'X-Title'] },
+        { names: ['x-tenant', 'X-Title'], basis: secondHeaders.basis },
       );
 
       const resolved = await stores.operations.resolveExecutionConnection(
@@ -1110,9 +1119,10 @@ describe('runtime policy stores', () => {
 
       await assert.rejects(
         () =>
-          stores.operations.replaceConnectionRequestHeaders(kept.connectionId, [
-            { name: 'X-Tenant', value: 'tenant-a' },
-          ]),
+          stores.operations.replaceConnectionRequestHeaders(
+            { connection: connectionBasis(kept), credential: null },
+            [{ name: 'X-Tenant', value: 'tenant-a' }],
+          ),
         isStoreError('invalid_connection_input'),
       );
 

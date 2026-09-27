@@ -38,7 +38,7 @@ export const block = (message, text = message, revision = '1') => ({
   kind: 'assistant',
   content: { text },
 });
-export async function fixture(initial = {}, activate, Decoder = TextDecoder) {
+export async function fixture(initial = {}, activate, Decoder = TextDecoder, hostCall) {
   let store;
   let tui;
   const operations = [];
@@ -50,7 +50,7 @@ export async function fixture(initial = {}, activate, Decoder = TextDecoder) {
         ops: {
           op_maka_plugin: async (_key, method, input) => {
             operations.push({ method, input });
-            return { ok: true, value: null };
+            return hostCall ? await hostCall(method, input) : { ok: true, value: null };
           },
         },
       },

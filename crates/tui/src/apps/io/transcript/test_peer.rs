@@ -22,7 +22,7 @@ use maka_protocol::plugin::{RemoteKind, RemoteResult};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
-pub(in crate::apps::io) struct Peer {
+pub(crate) struct Peer {
     reader: BufReader<ReadHalf<DuplexStream>>,
     writer: WriteHalf<DuplexStream>,
     // Client disconnects when its notification consumer disappears.
@@ -97,6 +97,10 @@ impl Peer {
     }
 
     pub async fn reply(&mut self, frame: &Value, result: RemoteResult) {
+        self.write(json!({"requestId":frame["requestId"],"operation":frame["operation"],"ok":true,"result":result})).await;
+    }
+
+    pub async fn reply_value(&mut self, frame: &Value, result: Value) {
         self.write(json!({"requestId":frame["requestId"],"operation":frame["operation"],"ok":true,"result":result})).await;
     }
 

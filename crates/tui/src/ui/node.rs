@@ -73,6 +73,16 @@ pub struct Choice<M> {
     pub action: M,
 }
 
+/// An object-scoped action. Keys identify operations, never list positions.
+#[derive(Clone)]
+pub struct MenuItem<M> {
+    pub key: String,
+    pub label: String,
+    pub action: M,
+    pub enabled: bool,
+    pub role: Role,
+}
+
 #[derive(Clone)]
 pub enum On<M> {
     /// Local collection controls share one state with their presenter.
@@ -84,6 +94,12 @@ pub enum On<M> {
     Choose {
         choices: Vec<Choice<M>>,
         current: Option<usize>,
+    },
+    /// Captures these actions when opened. A changed identity closes the menu;
+    /// later frames can retire or disable rows, but cannot replace their action.
+    Menu {
+        identity: String,
+        items: Vec<MenuItem<M>>,
     },
     /// Set on a Scroll node: a read-only viewport that takes keyboard focus
     /// and scrolls with the arrows, Home and End.
@@ -400,6 +416,19 @@ impl<M> Node<M> {
                     })
                     .collect(),
                 current,
+            },
+            On::Menu { identity, items } => On::Menu {
+                identity,
+                items: items
+                    .into_iter()
+                    .map(|item| MenuItem {
+                        key: item.key,
+                        label: item.label,
+                        action: f(item.action),
+                        enabled: item.enabled,
+                        role: item.role,
+                    })
+                    .collect(),
             },
             On::Scroll => On::Scroll,
             On::Transcript => On::Transcript,

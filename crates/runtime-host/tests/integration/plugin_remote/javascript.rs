@@ -66,7 +66,7 @@ async fn scenario(vm: &str) {
         path.join("maka.extension.json"),
         serde_json::to_vec(&json!({
             "schemaVersion":1,"id":"example.remote",
-            "runtime":{"entry":"host.mjs","sdkVersion":2,"vm":vm},
+            "runtime":{"entry":"host.mjs","sdkVersion":3,"vm":vm},
             "client":{"entry":"client.js","sdkVersion":1},
         }))
         .unwrap(),
@@ -114,6 +114,33 @@ async fn scenario(vm: &str) {
     let client = json!({"entryId":entry["entryId"],"extensionId":entry["extensionId"],"activation":entry["activation"],
         "contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]});
     let document = rpc(&mut peer, json!({"kind":"open_document"})).await["document"].clone();
+    let project = success(
+        peer.rpc(
+            "project.catalog.mutate",
+            json!({"kind":"register","path":fixture.workspace}),
+        )
+        .await,
+    );
+    let (projects, project_target) = bind(&mut peer, &client, "projects").await;
+    let catalog = rpc(
+        &mut peer,
+        json!({"kind":"call","binding":projects,"target":project_target,
+        "document":document,"input":{"kind":"start"}}),
+    )
+    .await;
+    assert_eq!(catalog["value"]["kind"], "page");
+    assert_eq!(
+        catalog["value"]["projects"][0]["id"],
+        project["project"]["id"]
+    );
+    assert_eq!(catalog["value"]["projects"][0]["available"], true);
+    assert!(
+        catalog["value"]["projects"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| matches!(key.as_str(), "id" | "name" | "available"))
+    );
     let (storage, storage_target) = bind(&mut peer, &client, "storage-budget").await;
     let budget = rpc(
         &mut peer,
@@ -311,7 +338,7 @@ async fn scenario(vm: &str) {
     )
     .await;
     assert_eq!(view["value"]["kind"], "view");
-    assert_eq!(view["value"]["view"]["version"], 8);
+    assert_eq!(view["value"]["view"]["version"], 9);
     assert_eq!(
         view["value"]["view"]["root"]["spans"][0]["text"],
         "from view"

@@ -82,6 +82,10 @@ impl Terminal {
         }
     }
 
+    pub fn bracketed_paste(&self) -> bool {
+        self.screen.as_ref().is_some_and(Screen::bracketed_paste)
+    }
+
     pub fn resize(&mut self, size: TerminalSize) -> Result<()> {
         let screen = self
             .screen

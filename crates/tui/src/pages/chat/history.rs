@@ -17,6 +17,8 @@
  * under the License.
  */
 
+pub mod anchor;
+
 use super::{render::Transcript, *};
 use std::{
     collections::VecDeque,

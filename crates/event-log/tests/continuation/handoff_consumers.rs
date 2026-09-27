@@ -146,6 +146,7 @@ async fn handoff_output_keeps_one_public_identity_and_all_physical_evidence_afte
                 &RuntimeEvent::new(
                     current.invocation.clone(),
                     Fact::MessageSteered {
+                        source: None,
                         message: Box::new(DeliveredMessage {
                             message_id: "steered-message".into(),
                             submitted_content_digest: content.content_digest().unwrap(),

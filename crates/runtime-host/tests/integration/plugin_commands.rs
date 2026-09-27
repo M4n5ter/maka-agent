@@ -618,7 +618,7 @@ impl maka_plugins::kernel::Plugin for Finish {
             staged
                 .insert(
                     "prepare-public-input",
-                    maka_plugins::input::InputPreparation(std::sync::Arc::new(Finish)),
+                    maka_plugins::input::InputPreparation::new(std::sync::Arc::new(Finish)),
                 )
                 .map_err(|error| error.to_string())?;
             Ok(staged)

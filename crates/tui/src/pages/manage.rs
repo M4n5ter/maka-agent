@@ -28,6 +28,7 @@ mod model_fetch;
 mod model_inventory;
 pub mod models;
 pub mod oauth;
+pub mod preferences;
 mod project;
 mod references;
 pub mod removal;
@@ -49,18 +50,22 @@ pub struct Target {
     root: String,
     epoch: String,
     name: String,
-    entity: Entity,
+    pub(super) entity: Entity,
 }
 impl Target {
     pub(crate) fn is_default_model(&self) -> bool {
         matches!(self.entity, Entity::Defaults)
     }
+    pub(crate) fn is_enrollment(&self) -> bool {
+        matches!(self.entity, Entity::Oauth)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Entity {
+pub(super) enum Entity {
     Oauth,
     Defaults,
     SandboxDefaults,
+    NetworkProxy,
     Session {
         id: String,
         revision: u64,
@@ -87,6 +92,7 @@ pub enum Kind {
     Locations,
     Model,
     Sandbox,
+    NetworkProxy,
     Archive,
     Restore,
     Remove,
@@ -98,6 +104,7 @@ impl Kind {
         match (self, &target.entity) {
             (Self::Reference, _) => "references-title",
             (Self::Oauth, _) => "oauth-title",
+            (Self::NetworkProxy, _) => "proxy-title",
             (Self::Credential(change), _) => change.label(),
             (Self::Connection(change), _) => change.label(),
             (Self::Rename, Entity::Connection(_)) => "connection-rename",
@@ -114,6 +121,7 @@ impl Kind {
             _ => match self {
                 Self::Reference
                 | Self::Oauth
+                | Self::NetworkProxy
                 | Self::Register
                 | Self::Relink
                 | Self::Locations
@@ -157,6 +165,7 @@ impl Kind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Oauth(oauth::Command),
+    Preferences(preferences::Command),
     CredentialRetry,
     RemovalQuery,
     Open(Target, Kind),
@@ -175,6 +184,7 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Oauth(command) => command.label(),
+            Self::Preferences(command) => command.label(),
             Self::Open(target, kind) => kind.label(target),
             Self::Browse => "directory-browse",
             Self::CredentialRetry => "credential-retry",
@@ -223,6 +233,8 @@ pub enum Updated {
 
 #[derive(Default)]
 pub struct Management {
+    preferences_sequence: u64,
+    preferences_pending: Option<preferences::Ticket>,
     sandbox_sequence: u64,
     pub oauth: oauth::State,
     pub dialog: Option<Dialog>,
@@ -243,9 +255,10 @@ pub struct Management {
     removal_pending: Option<removal::Request>,
 }
 pub struct Dialog {
+    preferences: Option<preferences::State>,
     connection_test: Option<maka_protocol::connection_effects::ConnectionTestProjection>,
-    target: Target,
-    kind: Kind,
+    pub(super) target: Target,
+    pub(super) kind: Kind,
     editor: Editor,
     visible: bool,
     blocked: bool,
@@ -407,6 +420,7 @@ pub async fn execute(client: &Client, ticket: &Ticket) -> Result<Updated, Reques
                 session: Box::new(session),
             }),
         Kind::Reference
+        | Kind::NetworkProxy
         | Kind::Oauth
         | Kind::Register
         | Kind::Relink
@@ -441,6 +455,10 @@ impl App {
                 .sandbox_defaults_action()
                 .into_iter()
                 .map(|action| (action, "sandbox-default-title"))
+                .chain(
+                    self.network_proxy_action()
+                        .map(|action| (action, "proxy-title")),
+                )
                 .collect();
         }
         let item = match self.navigation.current() {
@@ -517,6 +535,7 @@ impl App {
     pub fn management_enabled(&self, command: &Command) -> bool {
         match command {
             Command::Oauth(command) => self.oauth_enabled(*command),
+            Command::Preferences(command) => self.preferences_enabled(command),
             Command::CredentialRetry => self.credential_retry_enabled(),
             Command::RemovalQuery => self.removal_query_enabled(),
             Command::Models(command) => self.models_enabled(command),
@@ -549,6 +568,7 @@ impl App {
                             | (Entity::Input(_), Kind::Reference)
                             | (Entity::Defaults, Kind::Model)
                             | (Entity::SandboxDefaults, Kind::Sandbox)
+                            | (Entity::NetworkProxy, Kind::NetworkProxy)
                             | (
                                 Entity::Connection(_),
                                 Kind::Oauth
@@ -578,6 +598,7 @@ impl App {
                     )
                     && self.management.dialog.is_none()
                     && self.management.pending.is_none()
+                    && self.management.preferences_pending.is_none()
             }
             Command::Close => self.management.dialog.is_some(),
             Command::Edit => self.management.dialog.as_ref().is_some_and(|dialog| {
@@ -589,6 +610,7 @@ impl App {
             Command::Save if self.directory_reference_active() => self.reference_can_select(),
             Command::Save => self.management.dialog.as_ref().is_some_and(|dialog| {
                 dialog.kind != Kind::Oauth
+                    && dialog.preferences.is_none()
                     && dialog.sandbox.as_ref().is_none_or(sandbox::State::changed)
                     && dialog.visible
                     && self.credential_can_save()
@@ -624,6 +646,7 @@ impl App {
     pub fn management_action(&mut self, command: Command) -> Option<Action> {
         match command {
             Command::Oauth(command) => return self.oauth_action(command),
+            Command::Preferences(command) => return self.preferences_action(command),
             Command::CredentialRetry => {
                 self.credential_retry();
                 return None;
@@ -816,7 +839,16 @@ impl App {
                 if kind == Kind::Reference {
                     self.management.directory_sequence += 1;
                 }
+                self.management.preferences_sequence =
+                    self.management.preferences_sequence.wrapping_add(1);
+                let preferences = preferences::State::new(
+                    self,
+                    &target,
+                    kind,
+                    self.management.preferences_sequence,
+                );
                 self.management.dialog = Some(Dialog {
+                    preferences,
                     removal: if kind == Kind::Remove {
                         self.management.removal_sequence += 1;
                         Some(removal::State::new(self.management.removal_sequence))
@@ -1220,13 +1252,14 @@ impl App {
     }
     pub fn abandon_management(&mut self) {
         self.abandon_removal();
+        let preferences_unknown = self.abandon_preferences();
         self.management.directory_pending = None;
         self.management.chooser_pending = None;
         self.management.locations_pending = None;
         self.management.models_pending = None;
         self.management.enabled_models_pending = None;
         self.management.credential_pending = None;
-        let unknown = self.management.pending.take().is_some();
+        let unknown = self.management.pending.take().is_some() || preferences_unknown;
         if let Some(dialog) = &mut self.management.dialog {
             dialog.blocked = true;
             dialog.error = Some(if unknown || dialog.error == Some("session-edit-unknown") {
@@ -1246,6 +1279,14 @@ impl App {
         &mut self,
         event: &Event,
     ) -> Option<(bool, Option<Action>)> {
+        if self
+            .management
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.preferences.is_some())
+        {
+            return preferences::input(self, event);
+        }
         if self
             .management
             .dialog
@@ -1417,6 +1458,9 @@ impl Management {
         if let Some(dialog) = &mut self.dialog {
             dialog.visible = false;
             dialog.editor.invalidate_geometry();
+            if let Some(preferences) = &mut dialog.preferences {
+                preferences.invalidate_geometry();
+            }
             if let Some(models) = &mut dialog.enabled_models {
                 models.invalidate_geometry();
             }

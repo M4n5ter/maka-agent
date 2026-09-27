@@ -103,6 +103,12 @@ impl SessionViews {
         ))
     }
     async fn host(&self) -> Result<Arc<Host>, Error> {
+        self.host_for(maka_protocol::Operation::PluginRemote).await
+    }
+    async fn host_for(&self, operation: maka_protocol::Operation) -> Result<Arc<Host>, Error> {
+        if !self.authority.has_grant(operation) {
+            return Err(Error::Retired);
+        }
         let host = self.host.upgrade().ok_or(Error::Retired)?;
         if let Some(captured) = self.authority.credential() {
             let current = host
@@ -119,6 +125,7 @@ impl SessionViews {
                 .await
                 .map_err(|_| Error::Retired)?;
             if !current.has_grant(maka_protocol::Operation::PluginRemote)
+                || !current.has_grant(operation)
                 || (self.access == Access::HostPaths && !current.can_use_host_paths())
             {
                 return Err(Error::Retired);
@@ -128,6 +135,36 @@ impl SessionViews {
     }
 }
 impl Views for SessionViews {
+    fn projects(
+        &self,
+        query: maka_plugins::remote::projects::Query,
+    ) -> BoxFuture<'_, Result<maka_plugins::remote::projects::Output, Error>> {
+        Box::pin(async move {
+            query.validate()?;
+            let lease = self.owner.resource_call().map_err(|_| Error::Retired)?;
+            let stopping = self.owner.stopping().map_err(|_| Error::Retired)?;
+            let cancellation = self.cancellation.child_token();
+            let _cancel = cancellation.clone().drop_guard();
+            let read = async {
+                let host = self
+                    .host_for(maka_protocol::Operation::ProjectCatalogQuery)
+                    .await?;
+                let result =
+                    super::super::projects::selection::query(&host, query, cancellation, lease)
+                        .await?;
+                self.host_for(maka_protocol::Operation::ProjectCatalogQuery)
+                    .await?;
+                self.owner.identity().map_err(|_| Error::Retired)?;
+                Ok(result)
+            };
+            tokio::select! {
+                biased;
+                _ = stopping.cancelled() => Err(Error::Retired),
+                _ = self.cancellation.cancelled() => Err(Error::Cancelled),
+                result = read => result,
+            }
+        })
+    }
     fn query_database(
         &self,
         input: maka_plugins::filesystem::database::Read,

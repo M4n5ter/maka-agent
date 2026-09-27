@@ -22,6 +22,8 @@
 //! navigation; the view itself arrives as a component tree ([`view`]).
 
 pub mod app;
+mod command;
+pub use command::Command;
 pub mod page;
 pub mod presenter;
 pub mod transcript;
@@ -31,7 +33,7 @@ use crate::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// Presentation text is distinct from the stable identity used for navigation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +69,7 @@ impl Text {
             })
             .map_or(&self.fallback, String::as_str)
     }
-    fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         let valid_text = |text: &str| {
             !text.trim().is_empty()
                 && text.len() <= 256
@@ -141,6 +143,9 @@ pub struct Descriptor {
     /// Lower first among views of the same placement.
     #[serde(default)]
     pub order: u16,
+    /// Inert slash metadata; only Page placements can be opened independently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<Command>,
 }
 impl Descriptor {
     pub fn new(title: Text, context: Context) -> Self {
@@ -152,6 +157,7 @@ impl Descriptor {
             icon: None,
             changes: None,
             order: 0,
+            commands: Vec::new(),
         }
     }
     pub fn placement(mut self, placement: Placement) -> Self {
@@ -173,12 +179,35 @@ impl Descriptor {
         self.order = order;
         self
     }
+    pub fn command(mut self, command: Command) -> Self {
+        self.commands.push(command);
+        self
+    }
     pub fn validate(&self) -> Result<(), Error> {
         let invalid = || Error::Invalid("Invalid terminal view descriptor".into());
         if self.version != VERSION {
             return Err(Error::Invalid("Unsupported terminal view version".into()));
         }
         self.title.validate()?;
+        if !self.commands.is_empty() && self.placement != Placement::Page {
+            return Err(invalid());
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for command in &self.commands {
+            command.validate()?;
+            for name in std::iter::once(&command.name).chain(&command.aliases) {
+                if !names.insert(name) {
+                    return Err(Error::Invalid("Duplicate terminal command alias".into()));
+                }
+            }
+        }
+        if serde_json::to_vec(self)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+            .len()
+            > 64 * 1024
+        {
+            return Err(Error::Invalid("Terminal descriptor exceeds 64 KiB".into()));
+        }
         match (&self.placement, self.context) {
             // A panel and a status belong to the session they sit in; a
             // settings category to the application.

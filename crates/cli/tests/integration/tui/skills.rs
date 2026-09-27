@@ -77,7 +77,8 @@ fn skills_candidates_page_without_execution_and_restore_exact_selection_before_s
     tui.wait_for("Candidate session");
     tui.click_text("Candidate session");
     tui.wait_for("No messages yet.");
-    tui.filter_command("Skills");
+    tui.click_last_text("+");
+    tui.wait_for("Skills");
     tui.click_text("Skills");
     tui.wait_for("Candidate 000");
     assert!(
@@ -105,7 +106,7 @@ fn skills_candidates_page_without_execution_and_restore_exact_selection_before_s
         .join(&client.identity.root_id)
         .join("default/state.json");
     let saved: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
-    assert_eq!(saved["version"], 23);
+    assert_eq!(saved["version"], 24);
     let picked = saved["skills"]["skills"].as_array().unwrap();
     assert_eq!(picked.len(), 1);
     assert_eq!(picked[0]["name"], "Candidate 128");

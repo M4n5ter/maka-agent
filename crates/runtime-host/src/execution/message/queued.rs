@@ -42,7 +42,11 @@ impl Executions {
             &maka_config::plugin_authorization::Principal,
         ),
     ) -> Result<SubmitResult> {
-        if source.submitted_intent.is_some() {
+        if source
+            .submitted_intent
+            .as_ref()
+            .is_some_and(maka_runtime::message::SubmittedTurnIntent::is_exact_turn)
+        {
             return Err(failure(
                 Code::SessionBusy,
                 "Exact Turn intent requires an idle Session",

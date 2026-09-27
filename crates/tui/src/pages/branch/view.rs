@@ -47,7 +47,15 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         Phase::Ready => "ready",
         Phase::Failed => "failed",
     };
-    let mut sheet = Sheet::new(format!("branch:{step}"), app.i18n.text("branch-title"));
+    let mut sheet = Sheet::new(
+        format!("branch:{step}"),
+        app.i18n.text(
+            state
+                .basis
+                .as_ref()
+                .map_or("branch-title", |basis| basis.mode.title()),
+        ),
+    );
     if let Some(basis) = &state.basis {
         sheet = sheet.text("name", &safe(&basis.name), Tone::Normal).text(
             "excerpt",
@@ -56,7 +64,10 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         );
     }
     let note = state.error.unwrap_or(match state.phase {
-        Phase::Confirm => "branch-note",
+        Phase::Confirm => state
+            .basis
+            .as_ref()
+            .map_or("branch-note", |basis| basis.mode.note()),
         Phase::Saving | Phase::Pending => "branch-wait",
         Phase::Unknown => "branch-unknown",
         Phase::Ready => "branch-ready",

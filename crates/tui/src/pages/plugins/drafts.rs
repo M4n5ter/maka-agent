@@ -25,7 +25,8 @@ use std::collections::BTreeMap;
 pub(super) struct Draft {
     pub base: u64,
     pub original: Option<EntryProjection>,
-    // Identifier, opaque configuration, and routing. Never serialized.
+    // Identifier or export path, opaque configuration, and routing. Only an
+    // export path is checkpointed; configuration and routing stay in memory.
     pub fields: [Editor; 3],
     pub scope: Scope,
     pub dirty: [bool; 3],
@@ -83,6 +84,15 @@ impl Draft {
                 editor("null", EDITOR_BYTES),
                 editor(r#"{"inject":[],"isolate":{},"intercept":{}}"#, EDITOR_BYTES),
             ],
+            dirty: [false; 3],
+        }
+    }
+    pub(super) fn exporting(base: u64) -> Self {
+        Self {
+            base,
+            original: None,
+            scope: Scope::Profile,
+            fields: [editor("", 4096), editor("", 1), editor("", 1)],
             dirty: [false; 3],
         }
     }
@@ -165,6 +175,7 @@ impl State {
                     draft.base = snapshot.status.authority_epoch;
                     true
                 }
+                Place::Export(_) => true,
                 _ => true,
             }
         });
@@ -200,6 +211,9 @@ impl State {
             Place::Entry(key) => snapshot.entry(key).map(Draft::existing),
             Place::New(id) if snapshot.package(id).is_some() => {
                 Some(Draft::new(snapshot.status.authority_epoch))
+            }
+            Place::Export(id) if snapshot.package(id).is_some() => {
+                Some(Draft::exporting(snapshot.status.authority_epoch))
             }
             _ => None,
         };
@@ -277,7 +291,7 @@ impl App {
             }
             Event::Mouse(mouse) => {
                 let indices: &[usize] = match self.plugins.place {
-                    Place::Install => &[0],
+                    Place::Install | Place::Export(_) => &[0],
                     Place::Configure(_) => &[1],
                     Place::Services(_) => &[2],
                     Place::New(_) => &[0, 1],

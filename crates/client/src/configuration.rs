@@ -17,6 +17,8 @@
  * under the License.
  */
 
+mod preferences;
+
 use crate::{Client, ClientError, RequestFailure};
 use maka_protocol::configuration::onboarding::{
     OnboardingInput, OnboardingSaveResult, OnboardingVerifyResult,

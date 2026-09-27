@@ -35,6 +35,7 @@ import type {
   UpdateNetworkProxyInput,
   UpdateNetworkProxyResult,
   RequestHeaderUpdate,
+  RequestHeadersBasis,
   SavedRequestHeaders,
 } from '@maka/core/runtime-policy';
 import type { ProviderDefaults } from '@maka/core/llm-connections';
@@ -359,7 +360,17 @@ export type ExecutionConnectionRef =
 
 export type ReplaceConnectionRequestHeadersResult =
   | ({ readonly kind: 'committed' | 'unchanged' } & SavedRequestHeaders)
-  | { readonly kind: 'connection_not_found' };
+  | { readonly kind: 'connection_not_found' }
+  | {
+      readonly kind: 'connection_stale';
+      readonly expected: ConnectionVersionBasis;
+      readonly actual: ConnectionVersionBasis;
+    }
+  | {
+      readonly kind: 'credential_stale';
+      readonly expected: CredentialVersionBasis | null;
+      readonly actual: CredentialVersionBasis | null;
+    };
 
 export interface RuntimePolicyOperationCoordinator {
   updateNetworkProxy(input: UpdateNetworkProxyInput): Promise<UpdateNetworkProxyResult>;
@@ -372,7 +383,7 @@ export interface RuntimePolicyOperationCoordinator {
   ): Promise<BoundCredentialMaterialExportResult>;
   getConnectionRequestHeaders(connectionId: string): Promise<SavedRequestHeaders | null>;
   replaceConnectionRequestHeaders(
-    connectionId: string,
+    expected: RequestHeadersBasis,
     updates: readonly RequestHeaderUpdate[],
   ): Promise<ReplaceConnectionRequestHeadersResult>;
   resolveExecutionConnection(

@@ -64,8 +64,7 @@ fn goal_panel_arms_after_consent_and_shows_its_status_above_the_composer() {
     tui.wait_for("Goal source");
     tui.click_text("Goal source");
     // Panels stay put away until asked for.
-    tui.wait_for("◨");
-    tui.click_text("◨");
+    tui.session_view_action("Show panels");
     tui.wait_for("Give this session an objective");
     tui.click_page_text("Objective");
     tui.send(b"\x1b[200~Ship the inspector\x1b[201~");

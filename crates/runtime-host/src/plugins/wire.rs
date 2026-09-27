@@ -60,21 +60,45 @@ impl Platform {
                 }
                 Ok(preview)
             }
-            Input::Export {
+            Input::Export(PackageExport {
                 extension_id,
                 target_path,
-            } => {
-                let package = self
-                    .snapshot()
+                expected,
+            }) => {
+                let snapshot = self.snapshot();
+                let package = snapshot
                     .packages
                     .get(&extension_id)
                     .cloned()
                     .ok_or_else(|| failure(Code::NotFound, "Package is not installed"))?;
+                if expected.base_generation != snapshot.ledger.generation
+                    || expected.content_digest.as_deref() != Some(package.digest())
+                {
+                    return Err(failure(
+                        Code::OperationConflict,
+                        "Installed package changed since review",
+                    ));
+                }
+                // The captured package owns immutable bytes. Later installation
+                // changes cannot substitute a different source during export.
                 let path = target_path.clone();
                 tokio::task::spawn_blocking(move || package.export_to(std::path::Path::new(&path)))
                     .await
-                    .map_err(internal)?
-                    .map_err(|e| failure(Code::PersistenceFailed, e.to_string()))?;
+                    .map_err(|error| failure(Code::CommitOutcomeUnknown, error.to_string()))?
+                    .map_err(|error| {
+                        use maka_plugins::package::PackageIoError;
+                        let code = match &error {
+                            PackageIoError::CommitUnknown(_) => Code::CommitOutcomeUnknown,
+                            PackageIoError::Invalid(_) => Code::InvalidRequest,
+                            PackageIoError::Io(error)
+                                if error.kind() == std::io::ErrorKind::AlreadyExists =>
+                            {
+                                Code::OperationConflict
+                            }
+                            PackageIoError::Io(_) => Code::PersistenceFailed,
+                        };
+                        failure(code, error.to_string())
+                    })?;
                 encode(Exported { target_path })
             }
             input => {
@@ -125,7 +149,7 @@ impl Platform {
                     | Input::Client(_)
                     | Input::Query(_)
                     | Input::Preview { .. }
-                    | Input::Export { .. } => unreachable!(),
+                    | Input::Export(_) => unreachable!(),
                 };
                 let snapshot = self.mutate(mutation).await.map_err(mutation_error)?;
                 let receipt = receipt(&snapshot);
@@ -265,8 +289,47 @@ impl Platform {
                 }
                 items
             }
-            View::Commands => Vec::new(),
-            View::TerminalViews => {
+            View::InputResources => {
+                let scopes = query
+                    .root_id
+                    .clone()
+                    .map(|scope| vec![scope])
+                    .unwrap_or_else(|| snapshot.desired.roots.keys().cloned().collect());
+                let mut items = Vec::new();
+                for scope in scopes {
+                    let captured = self.catalog.capture(&scope);
+                    let endpoints = captured.typed::<maka_plugins::remote::Endpoint>();
+                    for (provider, source) in captured
+                        .typed::<maka_plugins::input::InputPreparation>()
+                        .entries
+                    {
+                        let Ok(identity) = source.owner.identity() else {
+                            continue;
+                        };
+                        if query.root_id.is_none() && identity.scope != scope {
+                            continue;
+                        }
+                        let Some(resources) = source.value.resources() else {
+                            continue;
+                        };
+                        let Ok(endpoint) =
+                            maka_plugins::input::resources::endpoint(&source, &endpoints)
+                        else {
+                            continue;
+                        };
+                        items.push(encode(InputResourceProjection {
+                            provider,
+                            package_id: identity.package_id.clone(),
+                            scope_id: identity.scope.clone(),
+                            method: resources.method.clone(),
+                            target: endpoint.value.target(&identity),
+                            descriptor: resources.descriptor.clone(),
+                        })?);
+                    }
+                }
+                items
+            }
+            View::Commands | View::TerminalViews => {
                 let scopes = query
                     .root_id
                     .clone()
@@ -292,13 +355,25 @@ impl Platform {
                         else {
                             continue;
                         };
-                        items.push(encode(TerminalViewProjection {
-                            package_id: identity.package_id.clone(),
-                            scope_id: scope.clone(),
-                            method: method.into(),
-                            target: endpoint.value.target(&identity),
-                            descriptor: descriptor.clone(),
-                        })?);
+                        if query.view == View::Commands {
+                            for command in &descriptor.commands {
+                                items.push(encode(CommandProjection {
+                                    package_id: identity.package_id.clone(),
+                                    scope_id: scope.clone(),
+                                    method: method.into(),
+                                    target: endpoint.value.target(&identity),
+                                    command: command.clone(),
+                                })?);
+                            }
+                        } else {
+                            items.push(encode(TerminalViewProjection {
+                                package_id: identity.package_id.clone(),
+                                scope_id: scope.clone(),
+                                method: method.into(),
+                                target: endpoint.value.target(&identity),
+                                descriptor: descriptor.clone(),
+                            })?);
+                        }
                     }
                 }
                 items

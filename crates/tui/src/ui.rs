@@ -32,7 +32,7 @@ pub use boundary::{Activity, Emphasis};
 pub use collection::Collections;
 /// A node's width at its natural size, before any sharing.
 pub(crate) use layout::width as natural_width;
-pub use node::{Align, Choice, Node, On, Role, Size, Tone};
+pub use node::{Align, Choice, MenuItem, Node, On, Role, Size, Tone};
 pub use sheet::{Layer, Sheet, content_width};
 pub use surface::reader::ReaderEffect;
 pub use surface::{Context, Hover, Outcome, Splits, Surface};

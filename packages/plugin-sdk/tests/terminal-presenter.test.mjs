@@ -33,7 +33,7 @@ test('private backend registration rejects inline handlers and captures exact me
     for (const kind of ['method', 'stream']) {
       await assert.rejects(
         remote[kind](`legacy-${kind}`, () => null, {
-          terminalView: { ...descriptor, version: 8 },
+          terminalView: { ...descriptor, version: 9 },
         }),
         /terminalView; use tui\.app/,
       );
@@ -57,7 +57,7 @@ test('private backend registration rejects inline handlers and captures exact me
   const definition = f.registrations.find(({ name }) => name === 'app');
   assert.equal(definition.kind, 'terminal_app');
   assert.equal(definition.entry, 'app-ui.mjs');
-  assert.equal(definition.terminalView.version, 8);
+  assert.equal(definition.terminalView.version, 9);
   assert.equal(definition.access, 'host_paths');
   assert.deepEqual(plain(definition.resources), [plain(f.store.resource)]);
   assert.equal(f.registrations.filter(({ name }) => name === 'app').length, 1);
@@ -107,7 +107,7 @@ test('one factory supplies only shared pure builders and invocation-scoped backe
   );
   assert.equal(factories, 0);
   const caller = { document: 'original' };
-  assert.equal((await p.invoke(read, caller)).view.version, 8);
+  assert.equal((await p.invoke(read, caller)).view.version, 9);
   assert.deepEqual(received[0], { input: read, caller });
   assert.throws(() => retained.backend(), /retired/);
   assert.equal(retained.signal.aborted, true);

@@ -46,7 +46,7 @@ impl Scene {
             include_str!("../../../../fixtures/presenter-ui.mjs"),
         )
         .unwrap();
-        std::fs::write(package.join("maka.extension.json"), json!({"schemaVersion":1,"id":PACKAGE,"runtime":{"entry":"host.mjs","sdkVersion":2,"vm":"dedicated"}}).to_string()).unwrap();
+        std::fs::write(package.join("maka.extension.json"), json!({"schemaVersion":1,"id":PACKAGE,"runtime":{"entry":"host.mjs","sdkVersion":3,"vm":"dedicated"}}).to_string()).unwrap();
         let host = Host::open(fixture.owner()).await.unwrap();
         #[cfg(unix)]
         let endpoint = fixture.workspace.parent().unwrap().join("presenter.sock");

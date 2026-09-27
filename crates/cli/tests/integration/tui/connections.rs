@@ -166,6 +166,7 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
     reopened.click_text("Managed connection");
     reopened.send(b"\r");
     reopened.wait_for("Rename connection");
+    reopened.click_text("Rename connection");
     reopened.wait_for("Save");
     reopened.send(b"stale name");
     runtime.block_on(async {
@@ -185,6 +186,8 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
     reopened.wait_until(|s| !s.contains("Cancel") && s.contains("Changed elsewhere"));
     reopened.click_text("Changed elsewhere");
     reopened.send(b"\r");
+    reopened.wait_for("Rename connection");
+    reopened.click_text("Rename connection");
     reopened.wait_for("Save");
     reopened.send("连接已改名\r".as_bytes());
     reopened.wait_until(|s| !s.contains("Cancel") && s.contains("连接已改名"));
@@ -229,8 +232,9 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
         .block_on(client.connection_catalog(Query::Start))
         .unwrap()["revision"]
         .clone();
-    reopened.filter_command("Edit provider configuration");
-    reopened.click_text("Edit provider configuration");
+    reopened.open_header_actions();
+    reopened.wait_for("Advanced JSON");
+    reopened.click_text("Advanced JSON");
     reopened.wait_for("Review");
     reopened.send(b"not a URL\r");
     reopened.wait_for("Enter a valid provider configuration");
@@ -245,8 +249,9 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
             .unwrap()["revision"],
         before_endpoint
     );
-    reopened.filter_command("Edit provider configuration");
-    reopened.click_text("Edit provider configuration");
+    reopened.open_header_actions();
+    reopened.wait_for("Advanced JSON");
+    reopened.click_text("Advanced JSON");
     reopened.wait_for("Review");
     reopened.send(b"{\"baseUrl\":\"http://127.0.0.1:9/v2\"}\r");
     reopened.wait_for("Use this provider configuration?");
@@ -301,7 +306,8 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
         );
     });
     for (command, enabled) in [("Disable connection", false), ("Enable connection", true)] {
-        reopened.filter_command(command);
+        reopened.open_header_actions();
+        reopened.wait_for(command);
         reopened.click_text(command);
         reopened.wait_for("Cancel");
         reopened.send(b"\t\r");
@@ -336,7 +342,8 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
             .unwrap();
     });
     reopened.wait_for("Default: model-0");
-    reopened.filter_command("Remove connection");
+    reopened.open_header_actions();
+    reopened.wait_for("Remove connection");
     reopened.click_text("Remove connection");
     reopened.wait_for("Permanently removes");
     reopened.wait_for("Cancel");
@@ -348,7 +355,8 @@ fn connections_directory_pages_reopens_and_manages_fixed_targets_with_cas() {
             .unwrap()["connectionCount"],
         18
     );
-    reopened.filter_command("Remove connection");
+    reopened.open_header_actions();
+    reopened.wait_for("Remove connection");
     reopened.click_text("Remove connection");
     reopened.wait_for("Cancel");
     reopened.send(b"\t\r");

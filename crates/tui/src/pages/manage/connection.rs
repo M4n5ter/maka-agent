@@ -32,6 +32,9 @@ pub enum Change {
     FetchModels,
     Test,
     Configuration,
+    Preferences,
+    RequestHeaders,
+    RequestBodyOverlay,
     Enable,
     Disable,
     Remove,
@@ -44,6 +47,9 @@ impl Change {
             Self::FetchModels => "connection-models-fetch",
             Self::Test => "connection-test",
             Self::Configuration => "connection-configuration",
+            Self::Preferences => "connection-preferences",
+            Self::RequestHeaders => "headers-title",
+            Self::RequestBodyOverlay => "connection-request-overlay",
             Self::Enable => "connection-enable",
             Self::Disable => "connection-disable",
             Self::Remove => "connection-remove",
@@ -56,6 +62,9 @@ impl Change {
             Self::FetchModels => "connection-models-fetch-note",
             Self::Test => "connection-test-note",
             Self::Configuration => "connection-configuration-note",
+            Self::Preferences => "connection-preferences-note",
+            Self::RequestHeaders => "headers-note",
+            Self::RequestBodyOverlay => "request-overlay-note",
             Self::Enable => "connection-enable-note",
             Self::Disable => "connection-disable-note",
             Self::Remove => "connection-remove-note",
@@ -171,8 +180,8 @@ impl App {
 
     pub(super) fn connection_management_commands(
         &self,
-        root: &str,
-        epoch: &str,
+        _root: &str,
+        _epoch: &str,
     ) -> Vec<(Action, &'static str)> {
         let Some(row) = self
             .connections
@@ -182,9 +191,18 @@ impl App {
         else {
             return vec![];
         };
+        self.connection_management_commands_for(row)
+    }
+    pub(crate) fn connection_management_commands_for(
+        &self,
+        row: &std::sync::Arc<Row>,
+    ) -> Vec<(Action, &'static str)> {
+        let crate::app::ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return vec![];
+        };
         let target = Target {
-            root: root.into(),
-            epoch: epoch.into(),
+            root: root_id.clone(),
+            epoch: epoch.clone(),
             name: row.name.clone(),
             entity: Entity::Connection(row.clone()),
         };
@@ -198,7 +216,10 @@ impl App {
                 .map(Kind::Connection),
         );
         kinds.push(Kind::Credential(super::credentials::Change::Clear));
+        kinds.push(Kind::Connection(Change::Preferences));
+        kinds.push(Kind::Connection(Change::RequestHeaders));
         kinds.push(Kind::Connection(Change::Configuration));
+        kinds.push(Kind::Connection(Change::RequestBodyOverlay));
         kinds.push(Kind::Connection(if row.enabled {
             Change::Disable
         } else {

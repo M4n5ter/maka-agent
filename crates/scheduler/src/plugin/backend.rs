@@ -100,6 +100,11 @@ impl Backend {
             .await
             .map_err(Error::from)?;
         let view = commands.session(id).await.map_err(Error::from)?;
+        if view.tool_profile.is_some() {
+            return Err(invalid(
+                "scheduled templates cannot use an unavailable native tool profile",
+            ));
+        }
         let maka_plugins::execution::Target::Model {
             model,
             thinking_level,
@@ -125,6 +130,7 @@ impl Backend {
             approval_policy: view.approval_policy,
             collaboration_mode: view.collaboration_mode,
             orchestration_mode: view.behavior,
+            bound_tools: view.bound_tools,
         })
     }
     pub async fn remember_grant(&self, id: Id) -> Result<Grant, Error> {
@@ -253,7 +259,13 @@ impl Backend {
                     Effect::AgentRun { execution }
                         if execution.cwd != source.workspace.host_cwd
                             || execution.sandbox_mode != source.sandbox_mode
-                            || execution.approval_policy != source.approval_policy =>
+                            || execution.approval_policy != source.approval_policy
+                            || source.bound_tools.as_ref().is_some_and(|tools| {
+                                execution
+                                    .bound_tools
+                                    .as_ref()
+                                    .is_none_or(|bound| !bound.is_subset(tools))
+                            }) =>
                     {
                         return Err(invalid(
                             "scheduled target differs from the Agent's authorized workspace",
@@ -321,7 +333,7 @@ impl Backend {
                             approval_policy: execution.approval_policy,
                             collaboration_mode: execution.collaboration_mode,
                             behavior: execution.orchestration_mode.clone(),
-                            bound_tools: None,
+                            bound_tools: execution.bound_tools.clone(),
                             instructions: None,
                         },
                     })

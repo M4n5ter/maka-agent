@@ -39,11 +39,12 @@ export type * from './clients.js';
 export type * from './history.js';
 export type * from './session-import.js';
 export type * from './terminal-view.js';
+export type * from './input-resources.js';
 export type * from './usage.js';
 export type * from './pricing.js';
 
 /** Independent API version, used by runtime.sdkVersion in maka.extension.json. */
-export const HOST_SDK_VERSION = 2;
+export const HOST_SDK_VERSION = 3;
 export type Json =
   | null
   | boolean
@@ -82,12 +83,24 @@ export interface RemoteCaller {
       use: (call: ResourceContext) => Awaitable<T>,
     ): Promise<T>;
     session(): Promise<SessionView>;
+    projects(input: ProjectSelectionQuery): Promise<ProjectSelectionResult>;
     workspace(input: WorkspaceViewInput): Promise<SessionView>;
     queryDatabase(
       input: import('./database.js').DatabaseRead,
     ): Promise<readonly import('./database.js').DatabaseTable[]>;
   };
 }
+export type ProjectSelectionQuery =
+  | { kind: 'start' }
+  | { kind: 'continue'; revision: string; cursor: string };
+export type ProjectSelectionResult =
+  | {
+      kind: 'page';
+      revision: string;
+      projects: readonly { id: string; name: string; available: boolean }[];
+      nextCursor: string | null;
+    }
+  | { kind: 'changed'; revision: string };
 export interface WorkspaceViewInput {
   workspace: { kind: 'project'; projectId: string } | { kind: 'host_path'; path: string };
   sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -215,7 +228,17 @@ export type ExecutorChoices = {
   revision: number;
   executors: readonly ExecutorChoice[];
   complete: boolean;
+  nextCursor: ExecutorCursor | null;
 };
+export type ExecutorCursor = {
+  query: string;
+  generation: string;
+  revision: number;
+  scope: 'profile' | 'desktop-ui' | `session:${string}`;
+  offset: number;
+};
+export type ExecutorSearch = { query?: string; cursor?: ExecutorCursor | null };
+export type ExecutorSearchResult = { kind: 'page'; page: ExecutorChoices } | { kind: 'stale' };
 export interface ExecutorRequest {
   settings: ExecutorSettings;
   invocation: Invocation;
@@ -332,6 +355,7 @@ export interface HostContext {
     prepare(
       name: string,
       prepare: (request: InputPreparationRequest) => Awaitable<InputPreparationOutcome>,
+      options?: { readonly resources: import('./input-resources.js').InputResources },
     ): Promise<Registration>;
   };
   readonly remote: {
@@ -386,7 +410,7 @@ export interface HostContext {
   readonly modelProviders: import('./providers.js').ModelProviders;
   readonly executors: {
     /** Scope-visible choices, not execution permission. Refine the query when incomplete. */
-    search(query?: { query?: string }): Promise<ExecutorChoices>;
+    search(query?: ExecutorSearch): Promise<ExecutorSearchResult>;
     register(
       definition: ExecutorDefinition,
       execute: (request: ExecutorRequest, call: ExecutorContext) => Awaitable<ExecutorOutcome>,
@@ -418,7 +442,7 @@ export interface HostContext {
     /** Enabled chat choices, not a grant or a promise of provider readiness.
      * At most 50 entries / 48 KiB; refine the query when incomplete.
      */
-    search(query?: { query?: string }): Promise<import('./llm.js').ModelChoices>;
+    search(query?: import('./llm.js').ModelSearch): Promise<import('./llm.js').ModelSearchResult>;
     resolve(
       selection: { kind: 'default' } | { kind: 'named'; connectionSlug: string; model: string },
     ): Promise<import('./llm.js').ModelChoice | null>;
@@ -471,6 +495,7 @@ export interface InputPreparationRequest {
   /** Evidence from preceding providers; a provider cannot replace it. */
   readonly preparation: readonly InputReceipt[];
   readonly selections: Readonly<Record<string, readonly string[]>>;
+  readonly selectionSources: readonly import('./input-resources.js').InputSelectionSource[];
   readonly tools: readonly string[];
   readonly signal: Cancellation;
 }

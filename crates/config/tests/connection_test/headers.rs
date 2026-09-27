@@ -21,14 +21,41 @@ use super::*;
 use maka_runtime::configuration::headers::*;
 use sqlx::Connection;
 
+async fn header_basis(fixture: &Fixture) -> RequestHeadersBasis {
+    let RequestHeadersQueryResult::Found { basis, .. } = fixture
+        .store
+        .request_headers(fixture.id.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("expected request headers snapshot")
+    };
+    basis
+}
+
+async fn replace_headers(
+    fixture: &Fixture,
+    expected: RequestHeadersBasis,
+    headers: Value,
+) -> maka_config::Result<RequestHeadersReplaceResult> {
+    fixture
+        .store
+        .replace_request_headers(
+            RequestHeadersReplace {
+                expected,
+                headers: serde_json::from_value(headers).unwrap(),
+            },
+            123,
+        )
+        .await
+}
+
 #[tokio::test]
 async fn header_replacement_rolls_back_secret_test_and_revisions_and_preserves_aba() {
     let fixture = Fixture::new().await;
     fixture.key().await;
-    let input = |headers| {
-        serde_json::from_value(json!({"connectionId":fixture.id,"headers":headers})).unwrap()
-    };
-    let replace = |headers| fixture.store.replace_request_headers(input(headers), 123);
+    let replace =
+        async |headers| replace_headers(&fixture, header_basis(&fixture).await, headers).await;
     let locator = CredentialLocator::Connection {
         connection_id: fixture.id.clone(),
         kind: ConnectionCredentialKind::RequestHeaders,
@@ -121,10 +148,12 @@ async fn header_replacement_rolls_back_secret_test_and_revisions_and_preserves_a
             .unwrap(),
         before_status
     );
-    assert!(matches!(
-        replace(json!([{"name":"x-keep"}])).await.unwrap(),
-        RequestHeadersReplaceResult::Committed { .. }
-    ));
+    let RequestHeadersReplaceResult::Committed { basis, .. } =
+        replace(json!([{"name":"x-keep"}])).await.unwrap()
+    else {
+        panic!("expected retained header commit")
+    };
+    assert_eq!(basis, header_basis(&fixture).await);
     assert_eq!(
         fixture
             .store
@@ -208,6 +237,7 @@ async fn header_replacement_rolls_back_secret_test_and_revisions_and_preserves_a
         .unwrap()
         .unwrap();
     let locator_json = serde_json::to_string(&locator).unwrap();
+    let expected = header_basis(&fixture).await;
     // Corrupt saved data cannot become an empty map or be overwritten by replacement.
     for invalid in [
         r#"[]"#,
@@ -228,7 +258,11 @@ async fn header_replacement_rolls_back_secret_test_and_revisions_and_preserves_a
                 .await
                 .is_err()
         );
-        assert!(replace(json!([])).await.is_err());
+        assert!(
+            replace_headers(&fixture, expected.clone(), json!([]))
+                .await
+                .is_err()
+        );
         assert_eq!(
             fixture
                 .store
@@ -253,4 +287,165 @@ async fn header_replacement_rolls_back_secret_test_and_revisions_and_preserves_a
         .await
         .unwrap();
     sql.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn header_snapshots_reject_unseen_additions_secret_updates_and_connection_changes() {
+    let fixture = Fixture::new().await;
+    let empty = header_basis(&fixture).await;
+    assert!(empty.credential.is_none());
+    let created = replace_headers(
+        &fixture,
+        empty.clone(),
+        json!([{"name":"X-Keep","value":"first-private-value"}]),
+    )
+    .await
+    .unwrap();
+    let RequestHeadersReplaceResult::Committed { basis: first, .. } = created else {
+        panic!("expected header commit")
+    };
+    assert_eq!(first, header_basis(&fixture).await);
+    assert!(matches!(
+        replace_headers(&fixture, empty, json!([])).await.unwrap(),
+        RequestHeadersReplaceResult::CredentialStale { expected: None, .. }
+    ));
+
+    let second = replace_headers(
+        &fixture,
+        first.clone(),
+        json!([
+            {"name":"X-Keep","value":"second-private-value"},
+            {"name":"X-New","value":"new-private-value"}
+        ]),
+    )
+    .await
+    .unwrap();
+    let RequestHeadersReplaceResult::Committed { basis: second, .. } = second else {
+        panic!("expected second header commit")
+    };
+    let before = fixture.store.catalog().await.unwrap();
+    for headers in [
+        json!([{"name":"X-Keep"}]),
+        json!([{"name":"X-Keep","value":"unseen-overwrite"}]),
+    ] {
+        assert_eq!(
+            replace_headers(&fixture, first.clone(), headers)
+                .await
+                .unwrap(),
+            RequestHeadersReplaceResult::CredentialStale {
+                expected: first.credential.clone(),
+                actual: second.credential.clone(),
+            }
+        );
+    }
+    assert_eq!(fixture.store.catalog().await.unwrap(), before);
+    let locator = second.credential.as_ref().unwrap().locator.clone();
+    assert_eq!(
+        fixture
+            .store
+            .credential_secret(&locator, None)
+            .await
+            .unwrap()
+            .unwrap(),
+        r#"{"X-Keep":"second-private-value","X-New":"new-private-value"}"#
+    );
+    let query = fixture
+        .store
+        .request_headers(fixture.id.clone())
+        .await
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&query)
+            .unwrap()
+            .contains("private-value")
+    );
+
+    fixture.edit(None).await;
+    let latest = header_basis(&fixture).await;
+    assert_eq!(
+        replace_headers(&fixture, second.clone(), json!([]))
+            .await
+            .unwrap(),
+        RequestHeadersReplaceResult::ConnectionStale {
+            expected: second.connection,
+            actual: latest.connection,
+        }
+    );
+}
+
+#[tokio::test]
+async fn header_snapshot_allows_only_one_writer_and_rejects_recreated_credential() {
+    let fixture = Fixture::new().await;
+    let initial = header_basis(&fixture).await;
+    let (left, right) = tokio::join!(
+        replace_headers(
+            &fixture,
+            initial.clone(),
+            json!([{"name":"X-Left","value":"left"}])
+        ),
+        replace_headers(
+            &fixture,
+            initial,
+            json!([{"name":"X-Right","value":"right"}])
+        )
+    );
+    let results = [left.unwrap(), right.unwrap()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, RequestHeadersReplaceResult::Committed { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, RequestHeadersReplaceResult::CredentialStale { .. }))
+            .count(),
+        1
+    );
+
+    let original = header_basis(&fixture).await;
+    let original_locator = &original.credential.as_ref().unwrap().locator;
+    let secret = fixture
+        .store
+        .credential_secret(original_locator, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let RequestHeadersReplaceResult::Committed { basis: empty, .. } =
+        replace_headers(&fixture, original.clone(), json!([]))
+            .await
+            .unwrap()
+    else {
+        panic!("expected header deletion")
+    };
+    assert!(empty.credential.is_none());
+    let recreated: Vec<_> =
+        serde_json::from_str::<std::collections::BTreeMap<String, String>>(&secret)
+            .unwrap()
+            .into_iter()
+            .map(|(name, value)| json!({"name":name,"value":value}))
+            .collect();
+    assert!(matches!(
+        replace_headers(&fixture, empty, json!(recreated))
+            .await
+            .unwrap(),
+        RequestHeadersReplaceResult::Committed { .. }
+    ));
+    let current = header_basis(&fixture).await;
+    assert_eq!(
+        original.credential.as_ref().unwrap().revision,
+        current.credential.as_ref().unwrap().revision
+    );
+    assert_ne!(
+        original.credential.as_ref().unwrap().credential_id,
+        current.credential.as_ref().unwrap().credential_id
+    );
+    assert!(matches!(
+        replace_headers(&fixture, original, json!([]))
+            .await
+            .unwrap(),
+        RequestHeadersReplaceResult::CredentialStale { .. }
+    ));
 }

@@ -20,7 +20,9 @@
 use crate::{Client, ClientError, RequestFailure};
 use maka_protocol::{Operation, ProtocolError, session::*};
 
+mod bundle;
 mod copy;
+mod workspace_context;
 
 impl Client {
     pub async fn session_catalog(

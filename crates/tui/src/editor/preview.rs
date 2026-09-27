@@ -28,6 +28,8 @@ impl Editor {
             limit_error: self.limit_error,
             text: self.text.clone(),
             selection: self.selection,
+            marks: self.marks.clone(),
+            revision: self.revision,
             layout: Layout::new(&self.text, self.layout.width),
             ..Self::default()
         };
@@ -43,6 +45,8 @@ impl Editor {
                 inserted: record.inserted.clone(),
                 before: record.before,
                 after: record.after,
+                before_marks: record.before_marks.clone(),
+                after_marks: record.after_marks.clone(),
             };
             preview.history_bytes = edit.bytes();
             if undo == Some(true) {

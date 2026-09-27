@@ -93,6 +93,7 @@ export interface History {
       readonly content: import('./execution.js').MessageContent;
       readonly intent: {
         readonly input_selections: Readonly<Record<string, readonly string[]>>;
+        readonly input_selection_sources?: readonly import('./input-resources.js').InputSelectionSource[];
         readonly turn_orchestration: {
           readonly mode: string;
           readonly source: 'slash_command' | 'host_api';

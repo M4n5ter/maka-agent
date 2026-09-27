@@ -81,7 +81,11 @@ impl BoundCommands {
                             request.orchestration_mode.clone(),
                         )
                         .await?
-                        .expand(request.content.clone(), Default::default())
+                        .expand(
+                            request.content.clone(),
+                            Default::default(),
+                            Default::default(),
+                        )
                         .await
                     }
                     .await,
@@ -129,6 +133,7 @@ impl BoundCommands {
                     submitted_intent: request.orchestration_mode.clone().map(|mode| {
                         SubmittedTurnIntent {
                             input_selections: Default::default(),
+                            input_selection_sources: Default::default(),
                             turn_orchestration: Some(TurnOrchestration {
                                 mode,
                                 source: TurnOrchestrationSource::HostApi,

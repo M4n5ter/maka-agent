@@ -95,32 +95,115 @@ pub(super) async fn import(host: &Host, input: api::Import) -> Result<api::Impor
             "Two Session transfers are already active",
         )
     })?;
-    let file = file::input(host, &input.source).await?;
-    let mut reader = GzipDecoder::new(BufReader::new(file));
-    // The bundle reader checks decoded EOF; concatenated members cannot hide
-    // trailing content behind an otherwise valid first gzip stream.
-    reader.multiple_members(true);
-    let mut staged = tokio::time::timeout(READ_TIMEOUT, StagedBundle::read(reader))
-        .await
-        .map_err(|_| failure(Code::SourceUnreadable, "Bundle read deadline exceeded"))?
-        .map_err(source_error)?;
-    let artifact_files = staged.artifact_count().await.map_err(error)?;
-    let binding = maka_runtime::artifact::content_digest(
-        &serde_json::to_vec(&("session-bundle.import.v1", &input.workspace))
-            .map_err(|e| failure(Code::InvalidRequest, &e.to_string()))?,
-    );
+    let mut staged = stage(host, &input.source).await?;
+    validate(&mut staged).await?;
+    let _admission = host.executions.lock_admission().await;
+    if host.draining.is_cancelled() {
+        return Err(failure(Code::HostDraining, "Host is draining"));
+    }
+    let destination = super::workspace::resolve(host, &input.workspace).await?;
+    let actual = import_identity(&mut staged, &input.workspace, destination).await?;
+    if actual != input.expected {
+        staged.close().await.map_err(error)?;
+        return Err(failure(
+            Code::CandidateSetStale,
+            "Bundle content or destination binding differs from its preview",
+        ));
+    }
+    let binding = &actual.binding_digest;
+    // Another transfer may have committed while we validated or waited for
+    // admission. Its accepted binding wins over defaults that changed since.
     if let Some(receipt) = host
         .log
-        .bundle_import_receipt(&staged.summary().digest, &binding)
+        .bundle_import_receipt(&actual.bundle_digest, binding)
         .await
         .map_err(stored)?
     {
         staged.close().await.map_err(error)?;
-        return Ok(api::Imported {
-            session_count: receipt.session_ids.len() as u64,
-            artifact_files,
-        });
+        return Ok(imported(receipt, actual.artifact_files));
     }
+    // Project mutations share admission. Reuse this exact resolved projection
+    // through publication instead of resolving the user's locator a second time.
+    let configurations = binding::resolve(host, &mut staged, actual.resolved_workspace).await?;
+    let result = host
+        .log
+        .import_bundle(staged, binding, configurations)
+        .await;
+    let receipt = match result {
+        Ok(receipt) => receipt,
+        // The importer can commit before staging cleanup fails. Settle that
+        // boundary from its atomic receipt instead of reporting a rejected write.
+        Err(error) => match host
+            .log
+            .bundle_import_receipt(&actual.bundle_digest, binding)
+            .await
+        {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return Err(source_error(error)),
+            Err(readback) => {
+                return Err(failure(Code::CommitOutcomeUnknown, &readback.to_string()));
+            }
+        },
+    };
+    // One unscoped notice invalidates the catalog, including Sessions without events.
+    host.session_catalog
+        .publish_all()
+        .await
+        .map_err(|e| failure(Code::CommitOutcomeUnknown, &e.to_string()))?;
+    Ok(imported(receipt, actual.artifact_files))
+}
+
+pub(super) async fn import_preview(
+    host: &Host,
+    input: api::ImportPreview,
+) -> Result<api::ImportPreviewed> {
+    let _permit = TRANSFERS.try_acquire().map_err(|_| {
+        failure(
+            Code::OperationConflict,
+            "Two Session transfers are already active",
+        )
+    })?;
+    let mut staged = stage(host, &input.source).await?;
+    validate(&mut staged).await?;
+    let _admission = host.executions.lock_admission().await;
+    let destination = super::workspace::resolve(host, &input.workspace).await?;
+    let preview = import_identity(&mut staged, &input.workspace, destination).await?;
+    staged.close().await.map_err(error)?;
+    Ok(preview)
+}
+
+/// Recovery reads the original atomic receipt, even if the source path, current
+/// defaults, or imported Sessions have since changed. It never starts an import.
+pub(super) async fn import_query(
+    host: &Host,
+    input: api::ImportQuery,
+) -> Result<api::ImportQueried> {
+    let receipt = host
+        .log
+        .bundle_import_receipt(&input.bundle_digest, &input.binding_digest)
+        .await
+        .map_err(stored)?;
+    Ok(api::ImportQueried {
+        receipt: receipt.map(|receipt| api::ImportReceipt {
+            root_session_id: receipt.root_session_id,
+            session_ids: receipt.session_ids,
+        }),
+    })
+}
+
+async fn stage(host: &Host, source: &str) -> Result<StagedBundle> {
+    let file = file::input(host, source).await?;
+    let mut reader = GzipDecoder::new(BufReader::new(file));
+    // The bundle reader checks decoded EOF; concatenated members cannot hide
+    // trailing content behind an otherwise valid first gzip stream.
+    reader.multiple_members(true);
+    tokio::time::timeout(READ_TIMEOUT, StagedBundle::read(reader))
+        .await
+        .map_err(|_| failure(Code::SourceUnreadable, "Bundle read deadline exceeded"))?
+        .map_err(source_error)
+}
+
+async fn validate(staged: &mut StagedBundle) -> Result<()> {
     tokio::time::timeout(READ_TIMEOUT, staged.validate_history())
         .await
         .map_err(|_| {
@@ -129,40 +212,33 @@ pub(super) async fn import(host: &Host, input: api::Import) -> Result<api::Impor
                 "Bundle validation deadline exceeded",
             )
         })?
-        .map_err(source_error)?;
-    let _admission = host.executions.lock_admission().await;
-    if host.draining.is_cancelled() {
-        return Err(failure(Code::HostDraining, "Host is draining"));
-    }
-    // Another transfer may have committed while we validated or waited for
-    // admission. Its accepted binding wins over defaults that changed since.
-    if let Some(receipt) = host
-        .log
-        .bundle_import_receipt(&staged.summary().digest, &binding)
-        .await
-        .map_err(stored)?
-    {
-        staged.close().await.map_err(error)?;
-        return Ok(api::Imported {
-            session_count: receipt.session_ids.len() as u64,
-            artifact_files,
-        });
-    }
-    let configurations = binding::resolve(host, &mut staged, input.workspace).await?;
-    let receipt = host
-        .log
-        .import_bundle(staged, &binding, configurations)
-        .await
-        .map_err(source_error)?;
-    // One unscoped notice invalidates the catalog, including Sessions without events.
-    host.session_catalog
-        .publish_all()
-        .await
-        .map_err(|e| failure(Code::InternalFailure, &e.to_string()))?;
-    Ok(api::Imported {
+        .map_err(source_error)
+}
+
+async fn import_identity(
+    staged: &mut StagedBundle,
+    workspace: &maka_protocol::session::WorkspaceTarget,
+    resolved_workspace: maka_protocol::session::WorkspaceProjection,
+) -> Result<api::ImportPreviewed> {
+    Ok(api::ImportPreviewed {
+        artifact_files: staged.artifact_count().await.map_err(error)?,
+        session_count: staged.summary().inventory.sessions.len() as u64,
+        bundle_digest: staged.summary().digest.clone(),
+        resolved_workspace,
+        binding_digest: maka_runtime::artifact::content_digest(
+            &serde_json::to_vec(&("session-bundle.import.v1", workspace))
+                .map_err(|e| failure(Code::InvalidRequest, &e.to_string()))?,
+        ),
+    })
+}
+
+fn imported(receipt: maka_event_log::bundle::ImportReceipt, artifact_files: u64) -> api::Imported {
+    api::Imported {
         session_count: receipt.session_ids.len() as u64,
         artifact_files,
-    })
+        root_session_id: receipt.root_session_id,
+        session_ids: receipt.session_ids,
+    }
 }
 
 fn source_error(error: BundleError) -> maka_protocol::OperationError {

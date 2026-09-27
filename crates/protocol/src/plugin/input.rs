@@ -30,6 +30,7 @@ pub enum View {
     Entries,
     Tools,
     Commands,
+    InputResources,
     Executors,
     TerminalViews,
     Failures,
@@ -82,22 +83,26 @@ pub struct PackageTarget {
     pub expected: Option<PackagePrecondition>,
 }
 
+/// Export the exact installed bytes reviewed by the caller.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageExport {
+    pub extension_id: String,
+    pub target_path: String,
+    pub expected: PackagePrecondition,
+}
+
 pub enum Input {
     Authorization(Box<super::AuthorizationInput>),
     Remote(Box<super::RemoteRequest>),
     Client(super::ClientQuery),
     Query(Query),
     Apply(Apply),
-    Preview {
-        source_path: String,
-    },
+    Preview { source_path: String },
     Install(PackageInstall),
     Uninstall(PackageTarget),
     Reload(PackageTarget),
-    Export {
-        extension_id: String,
-        target_path: String,
-    },
+    Export(PackageExport),
     Reconcile,
 }
 
@@ -147,6 +152,7 @@ pub fn decode_input(operation: Operation, value: &Value) -> Result<Input> {
                     View::Entries
                         | View::Tools
                         | View::Commands
+                        | View::InputResources
                         | View::Executors
                         | View::TerminalViews
                 )
@@ -208,13 +214,21 @@ pub fn decode_input(operation: Operation, value: &Value) -> Result<Input> {
             }
         }
         Operation::PluginPackageExport => {
-            codec::exact(row, &["extensionId", "targetPath"])?;
+            codec::exact(row, &["extensionId", "targetPath", "expected"])?;
             let extension_id = codec::string(&value["extensionId"], "package identity", 128)?;
             maka_plugins::identifier(&extension_id).map_err(|error| invalid(error.to_string()))?;
-            Input::Export {
-                extension_id,
-                target_path: codec::string(&value["targetPath"], "bundle destination", 4096)?,
+            let path = codec::string(&value["targetPath"], "bundle destination", 4096)?;
+            if !codec::absolute_host_path(&path) || path.chars().any(char::is_control) {
+                return Err(invalid("Package export requires an absolute Host path"));
             }
+            validate_expected(row.get("expected"))?;
+            let input: PackageExport = decode(value.clone())?;
+            if input.expected.content_digest.is_none() {
+                return Err(invalid(
+                    "Package export requires an installed content digest",
+                ));
+            }
+            Input::Export(input)
         }
         Operation::PluginPlatformReconcile => {
             codec::exact(row, &[])?;

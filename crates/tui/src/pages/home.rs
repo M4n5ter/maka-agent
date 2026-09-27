@@ -33,6 +33,7 @@ pub enum Message {
     Open(String),
     Connect,
     Host,
+    Action(Box<Action>),
 }
 
 #[derive(Default)]
@@ -83,6 +84,34 @@ fn tree(app: &App, width: u16, directory: bool) -> Node<Message> {
                 "Ctrl+N",
                 Message::New,
             ));
+            if let Some(action) = app.new_executor_session_action() {
+                content.push(
+                    button(
+                        "new-executor",
+                        crate::view::action_label(app, &action),
+                        "",
+                        Message::Action(Box::new(action.clone())),
+                    )
+                    .enabled(app.enabled(&action)),
+                );
+            }
+            content.push(button(
+                "projects",
+                i18n.text("route-projects"),
+                "",
+                Message::Action(Box::new(Action::Visit(Route::Projects))),
+            ));
+            if let Some(action) = app.bundle_import_action() {
+                content.push(
+                    button(
+                        "import",
+                        crate::view::action_label(app, &action),
+                        "",
+                        Message::Action(Box::new(action.clone())),
+                    )
+                    .enabled(app.enabled(&action)),
+                );
+            }
             let recent: Vec<_> = crate::pages::sidebar::groups(app)
                 .into_iter()
                 .flat_map(|group| {
@@ -208,6 +237,7 @@ impl App {
             Message::Open(id) => self.apply(Action::Visit(Route::Session(id))),
             Message::Connect => self.apply(Action::Connect),
             Message::Host => self.apply(Action::Host),
+            Message::Action(action) => self.apply(*action),
         }
     }
 }

@@ -17,7 +17,10 @@
  * under the License.
  */
 
-use super::validation::{ValidationResult, entity_id};
+use super::{
+    ConnectionCredentialKind, ConnectionVersionBasis, CredentialLocator, CredentialVersionBasis,
+    validation::{self, ValidationResult},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -42,30 +45,76 @@ pub struct RequestHeadersQuery {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestHeadersReplace {
-    pub connection_id: String,
+    pub expected: RequestHeadersBasis,
     pub headers: Vec<RequestHeaderUpdate>,
 }
 
 impl RequestHeadersReplace {
     pub fn normalize(&mut self) -> ValidationResult {
-        entity_id(&self.connection_id)?;
+        self.expected.validate()?;
         normalize_updates(&mut self.headers)
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Public, secret-free basis captured together with the visible header names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequestHeadersBasis {
+    pub connection: ConnectionVersionBasis,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub credential: Option<CredentialVersionBasis>,
+}
+
+impl RequestHeadersBasis {
+    pub fn validate(&self) -> ValidationResult {
+        validation::basis(&self.connection)?;
+        if let Some(credential) = &self.credential {
+            validation::credential_basis(credential)?;
+            if credential.locator
+                != (CredentialLocator::Connection {
+                    connection_id: self.connection.connection_id.clone(),
+                    kind: ConnectionCredentialKind::RequestHeaders,
+                })
+            {
+                return Err("request headers credential basis does not match connection".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestHeadersQueryResult {
-    Found { names: Vec<String> },
+    Found {
+        names: Vec<String>,
+        basis: RequestHeadersBasis,
+    },
     ConnectionNotFound,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestHeadersReplaceResult {
-    Committed { names: Vec<String> },
-    Unchanged { names: Vec<String> },
+    Committed {
+        names: Vec<String>,
+        basis: RequestHeadersBasis,
+    },
+    Unchanged {
+        names: Vec<String>,
+        basis: RequestHeadersBasis,
+    },
     ConnectionNotFound,
+    ConnectionStale {
+        expected: ConnectionVersionBasis,
+        actual: ConnectionVersionBasis,
+    },
+    CredentialStale {
+        #[serde(deserialize_with = "Option::deserialize")]
+        expected: Option<CredentialVersionBasis>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        actual: Option<CredentialVersionBasis>,
+    },
 }
 
 pub fn normalize_updates(updates: &mut [RequestHeaderUpdate]) -> ValidationResult {

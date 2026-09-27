@@ -64,7 +64,7 @@ pub(crate) fn from_event(event: &RuntimeEvent) -> Vec<(&StorageRef, Option<&Atta
                 );
             }
         }
-        Fact::MessageSteered { message } => {
+        Fact::MessageSteered { message, source } => {
             references.extend(
                 message
                     .content
@@ -73,6 +73,16 @@ pub(crate) fn from_event(event: &RuntimeEvent) -> Vec<(&StorageRef, Option<&Atta
                     .flatten()
                     .map(|a| (&a.storage_ref, Some(a))),
             );
+            if let Some(source) = source {
+                references.extend(
+                    source
+                        .unprepared_content
+                        .attachments
+                        .iter()
+                        .flatten()
+                        .map(|a| (&a.storage_ref, Some(a))),
+                );
+            }
         }
         Fact::ToolSettled {
             outcome:
@@ -96,18 +106,21 @@ pub(crate) fn from_event(event: &RuntimeEvent) -> Vec<(&StorageRef, Option<&Atta
 
 /// Only original editable inputs belong to Revision evidence.
 pub(crate) fn revision(event: &RuntimeEvent) -> Result<Vec<&AttachmentRef>, StoreError> {
-    let Fact::InvocationOpened {
-        input: InvocationInput::Message {
-            source_messages, ..
-        },
-        ..
-    } = &event.fact
-    else {
+    if !matches!(
+        &event.fact,
+        Fact::InvocationOpened {
+            input: InvocationInput::Message { .. },
+            ..
+        } | Fact::MessageSteered {
+            source: Some(_),
+            ..
+        }
+    ) {
         return Err(StoreError::InvalidTransition(
-            "revision source is not a message opening".into(),
+            "revision source has no canonical input".into(),
         ));
-    };
-    Ok(source_messages
+    }
+    Ok(crate::message_sources::roots(event)
         .iter()
         .flat_map(|message| message.unprepared_content.attachments.iter().flatten())
         .collect())

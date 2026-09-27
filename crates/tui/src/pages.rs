@@ -17,10 +17,14 @@
  * under the License.
  */
 
+pub mod actions;
 pub mod attachments;
+pub mod attention;
 pub mod branch;
+pub mod bundle;
 pub mod chat;
 pub mod commands;
+pub mod completion;
 pub mod connections;
 pub mod help;
 pub mod home;
@@ -32,9 +36,11 @@ pub mod projects;
 pub mod queue;
 pub mod recap;
 pub mod references;
+pub mod resources;
 pub mod resume;
 pub mod revision;
 pub mod sending;
+pub mod session_controls;
 pub mod sessions;
 pub mod settings;
 pub mod sidebar;

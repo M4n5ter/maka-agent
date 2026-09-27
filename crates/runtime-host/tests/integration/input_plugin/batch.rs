@@ -44,7 +44,7 @@ impl Plugin for Preparation {
             staged
                 .insert(
                     "example.prepare",
-                    input::InputPreparation(Arc::new(provider)),
+                    input::InputPreparation::new(Arc::new(provider)),
                 )
                 .unwrap();
             Ok(staged)
@@ -277,6 +277,7 @@ async fn scenario() {
                     .map(|source| TurnStartMessage {
                         content: source.content,
                         input_selections: source.input_selections,
+                        input_selection_sources: source.input_selection_sources,
                     })
                     .collect(),
                 turn_orchestration: None,

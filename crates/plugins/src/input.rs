@@ -18,6 +18,7 @@
  */
 
 //! Pure input preparation; final authority and durable receipts stay with Host.
+pub mod resources;
 use crate::{
     Error,
     composition::Scope,
@@ -41,6 +42,7 @@ pub struct Request {
     pub cwd: String,
     pub content: MessageInput,
     pub selections: maka_runtime::input::Selections,
+    pub selection_sources: maka_runtime::input::SelectionSources,
     pub tools: BTreeSet<String>,
     pub cancellation: CancellationToken,
 }
@@ -52,7 +54,21 @@ pub trait Provider: Send + Sync {
         workspace: crate::filesystem::ReadDirectory,
     ) -> BoxFuture<'static, Result<Outcome, Error>>;
 }
-pub struct InputPreparation(pub Arc<dyn Provider>);
+pub struct InputPreparation {
+    provider: Arc<dyn Provider>,
+    resources: Option<resources::Binding>,
+}
+impl InputPreparation {
+    pub fn new(provider: Arc<dyn Provider>) -> Self {
+        Self {
+            provider,
+            resources: None,
+        }
+    }
+    pub fn resources(&self) -> Option<&resources::Binding> {
+        self.resources.as_ref()
+    }
+}
 
 pub enum Outcome {
     Unchanged,
@@ -74,6 +90,7 @@ pub struct Prepared {
     pub required_tools: BTreeSet<String>,
     pub blocked: Option<String>,
     validity: Vec<(Contribution<InputPreparation>, Option<Basis>)>,
+    resources: Vec<Contribution<crate::remote::Endpoint>>,
 }
 pub struct Admission {
     _owners: Vec<CallGuard>,
@@ -87,11 +104,15 @@ impl Prepared {
             required_tools: BTreeSet::new(),
             blocked: None,
             validity: Vec::new(),
+            resources: Vec::new(),
         }
     }
     pub fn admit(&self) -> Result<Option<Admission>, Error> {
         let mut owners = Vec::new();
         let mut revisions = Vec::new();
+        for source in &self.resources {
+            owners.push(source.admit()?);
+        }
         for (source, basis) in &self.validity {
             if let Some(basis) = basis {
                 let Some(guard) = basis.admit() else {
@@ -114,19 +135,49 @@ pub async fn prepare(
     mut request: Request,
     workspace: &crate::filesystem::ReadRoot,
 ) -> Result<Prepared, Error> {
-    maka_runtime::input::validate_selections(&request.selections)
-        .map_err(|error| Error::Invalid(error.into()))?;
-    let providers = catalog.snapshot::<InputPreparation>(scope).entries;
-    if providers.len() > 32 {
-        return Err(Error::Invalid(
-            "input preparation provider limit exceeded".into(),
-        ));
-    }
+    maka_runtime::input::validate_selection_sources(
+        &request.selections,
+        &request.selection_sources,
+    )
+    .map_err(|error| Error::Invalid(error.into()))?;
+    maka_runtime::input::validate_selection_session(
+        &request.selection_sources,
+        &request.session_id,
+    )
+    .map_err(|error| Error::Invalid(error.into()))?;
+    let captured = catalog.capture(scope);
+    let providers = captured.typed::<InputPreparation>().entries;
+    let endpoints = captured.typed::<crate::remote::Endpoint>();
+    let mut resource_pairs = Vec::new();
     for name in request.selections.keys() {
-        if !providers.contains_key(name) {
-            return Err(Error::Invalid(format!(
-                "input preparation {name} is unavailable"
-            )));
+        let source = providers
+            .get(name)
+            .ok_or_else(|| Error::Invalid(format!("input preparation {name} is unavailable")))?;
+        let supplied = request
+            .selection_sources
+            .iter()
+            .find(|value| &value.provider == name);
+        match (source.value.resources(), supplied) {
+            (None, None) => {}
+            (Some(binding), Some(expected)) => {
+                let identity = source.owner.identity()?;
+                if expected.package_id != identity.package_id
+                    || expected.entry_id != identity.entry_id
+                    || expected.activation != identity.activation
+                    || expected.registration != binding.registration
+                {
+                    return Err(Error::Retired);
+                }
+                let endpoint = resources::endpoint(source, &endpoints)?;
+                drop(source.admit()?);
+                drop(endpoint.admit()?);
+                resource_pairs.push(endpoint);
+            }
+            _ => {
+                return Err(Error::Invalid(
+                    "Input resource source does not match its provider".into(),
+                ));
+            }
         }
     }
     let mut result = Prepared {
@@ -134,10 +185,17 @@ pub async fn prepare(
         required_tools: BTreeSet::new(),
         blocked: None,
         validity: Vec::new(),
+        resources: resource_pairs,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     for (name, source) in providers {
         let _call = source.admit()?;
+        let _resource =
+            if source.value.resources().is_some() && request.selections.contains_key(&name) {
+                Some(resources::endpoint(&source, &endpoints)?.admit()?)
+            } else {
+                None
+            };
         let stopping = source.owner.stopping()?;
         request.content = result.content.clone();
         let cancellation = request.cancellation.child_token();
@@ -147,11 +205,18 @@ pub async fn prepare(
             biased;
             _ = request.cancellation.cancelled() => return Err(Error::Invalid("input preparation cancelled".into())),
             _ = stopping.cancelled() => return Err(Error::Retired),
-            outcome = tokio::time::timeout_at(deadline, source.value.0.prepare(request.clone(), files)) =>
+            outcome = tokio::time::timeout_at(deadline, source.value.provider.prepare(request.clone(), files)) =>
                 outcome.map_err(|_| Error::Invalid("input preparation timed out".into()))??,
         };
         let (receipt, basis) = match outcome {
-            Outcome::Unchanged => continue,
+            Outcome::Unchanged => {
+                if source.value.resources().is_some() && request.selections.contains_key(&name) {
+                    return Err(Error::Invalid(
+                        "Selected input resources were not prepared".into(),
+                    ));
+                }
+                continue;
+            }
             Outcome::Ready {
                 mut content,
                 receipt,

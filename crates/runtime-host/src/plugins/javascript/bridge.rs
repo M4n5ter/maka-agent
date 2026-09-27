@@ -32,7 +32,14 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use wire::{Error, Request};
+
+const REGISTRATION_BYTES: usize = 32 * 1024 * 1024;
+struct RetainedRegistration {
+    _registration: maka_plugins::contributions::Registration,
+    _bytes: OwnedSemaphorePermit,
+}
 
 struct State {
     inputs: maka_plugins::filesystem::ReadInputs,
@@ -51,7 +58,9 @@ struct State {
     calls: Arc<super::invocation::Calls>,
     outputs: Arc<super::executor::Outputs>,
     model_calls: Arc<super::model::Calls>,
-    registrations: Mutex<BTreeMap<String, maka_plugins::contributions::Registration>>,
+    registrations: Mutex<BTreeMap<String, RetainedRegistration>>,
+    registration_bytes: Arc<Semaphore>,
+    initial_registration_bytes: OnceLock<OwnedSemaphorePermit>,
     context: PluginContext,
     storage: Arc<dyn Store>,
     credentials: Arc<dyn maka_plugins::credentials::Credentials>,
@@ -97,6 +106,8 @@ impl HostBridge {
             outputs: Arc::default(),
             model_calls: Arc::default(),
             registrations: Mutex::default(),
+            registration_bytes: Arc::new(Semaphore::new(REGISTRATION_BYTES)),
+            initial_registration_bytes: OnceLock::new(),
             context,
             storage: host.storage,
             credentials: host.credentials,
@@ -111,6 +122,14 @@ impl HostBridge {
             module: OnceLock::new(),
             handles: Mutex::default(),
         }))
+    }
+    pub fn retain_initial_metadata(&self, value: &Value) -> Result<(), String> {
+        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?.len();
+        let permit = self.0.registration_permit(bytes).map_err(|e| e.message)?;
+        self.0
+            .initial_registration_bytes
+            .set(permit)
+            .map_err(|_| "initial metadata already captured".to_owned())
     }
     pub fn bind(&self, module: &Module) {
         self.0
@@ -161,10 +180,23 @@ impl Bridge for HostBridge {
     fn call(&self, method: String, input: Value) -> BoxFuture<'static, Result<Value, VmError>> {
         let state = self.0.clone();
         Box::pin(async move {
-            let request = serde_json::from_value(json!({ "method": method, "input": input }))
-                .map_err(Error::invalid);
-            let result = match request {
-                Ok(request) => state.call(request).await,
+            let permit = if matches!(method.as_str(), "contribution.publish" | "service.provide") {
+                serde_json::to_vec(&input)
+                    .map_err(Error::invalid)
+                    .and_then(|bytes| state.registration_permit(bytes.len()))
+                    .map(Some)
+            } else {
+                Ok(None)
+            };
+            let result = match permit {
+                Ok(permit) => {
+                    match serde_json::from_value(json!({ "method": method, "input": input }))
+                        .map_err(Error::invalid)
+                    {
+                        Ok(request) => state.call(request, permit).await,
+                        Err(error) => Err(error),
+                    }
+                }
                 Err(error) => Err(error),
             };
             Ok(match result {
@@ -254,7 +286,18 @@ impl State {
         files.insert(id, file);
         Ok(value)
     }
-    async fn call(&self, request: Request) -> Result<Value, Error> {
+    fn registration_permit(&self, bytes: usize) -> Result<OwnedSemaphorePermit, Error> {
+        let bytes = u32::try_from(bytes.max(1)).map_err(Error::invalid)?;
+        self.registration_bytes
+            .clone()
+            .try_acquire_many_owned(bytes)
+            .map_err(|_| Error::invalid("retained registration metadata exceeds 32 MiB"))
+    }
+    async fn call(
+        &self,
+        request: Request,
+        metadata: Option<OwnedSemaphorePermit>,
+    ) -> Result<Value, Error> {
         // Initialization may access declared Services and data, not submit work.
         // Execution commands independently require effective business admission.
         let _lease = self.context.lifecycle.resource_call()?;
@@ -428,6 +471,10 @@ impl State {
                 let caller = self.calls.remote(&input.authority)?;
                 self.session_view(&input.authority, caller.views.session().await?)
             }
+            Request::ProjectsView(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.views.projects(input.input).await?)
+            }
             Request::WorkspaceView(input) => {
                 let caller = self.calls.remote(&input.authority)?;
                 self.session_view(&input.authority, caller.views.workspace(input.input).await?)
@@ -595,16 +642,22 @@ impl State {
                 )
                 .map_err(Error::invalid)?;
                 let mut registrations = self.registrations.lock().unwrap();
-                if registrations.len() >= 128 {
-                    return Err(Error::invalid("dynamic registration capacity exceeded"));
-                }
                 let registration = self.context.contributions.publish(staged)?;
                 let id = uuid::Uuid::new_v4().to_string();
-                registrations.insert(id.clone(), registration);
+                registrations.insert(
+                    id.clone(),
+                    RetainedRegistration {
+                        _registration: registration,
+                        _bytes: metadata.ok_or_else(|| {
+                            Error::invalid("registration metadata budget missing")
+                        })?,
+                    },
+                );
                 Ok(json!(id))
             }
             Request::Unpublish(input) => {
-                self.registrations.lock().unwrap().remove(&input.handle);
+                let removed = self.registrations.lock().unwrap().remove(&input.handle);
+                drop(removed);
                 Ok(Value::Null)
             }
             Request::Withdraw(input) => {
@@ -813,15 +866,20 @@ impl State {
                     calls: self.calls.clone(),
                 });
                 let mut registrations = self.registrations.lock().unwrap();
-                if registrations.len() >= 128 {
-                    return Err(Error::invalid("dynamic registration capacity exceeded"));
-                }
                 let registration = self
                     .context
                     .services
                     .register_method(&input.name, Arc::new(service::JavaScript { callback }))?;
                 let id = uuid::Uuid::new_v4().to_string();
-                registrations.insert(id.clone(), registration);
+                registrations.insert(
+                    id.clone(),
+                    RetainedRegistration {
+                        _registration: registration,
+                        _bytes: metadata.ok_or_else(|| {
+                            Error::invalid("registration metadata budget missing")
+                        })?,
+                    },
+                );
                 Ok(json!(id))
             }
             Request::Get(input) => {

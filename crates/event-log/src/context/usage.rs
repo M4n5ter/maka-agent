@@ -189,9 +189,9 @@ fn increment(fact: &Fact, basis: &AcceptedMainContext) -> Option<u64> {
                 InvocationInput::Code { .. } => return None,
             }
         }
-        Fact::MessageSteered { message: delivered } => {
-            message(&delivered.content)?.saturating_add(88)
-        }
+        Fact::MessageSteered {
+            message: delivered, ..
+        } => message(&delivered.content)?.saturating_add(88),
         Fact::ModelRequested {
             purpose: ModelPurpose::Main,
             model_id,

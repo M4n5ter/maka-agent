@@ -196,6 +196,9 @@ fn path_free(request: &Request) -> bool {
         // checks those against the current transport authority before binding
         // or calling. Ordinary UI reads do not imply filesystem privileges.
         Operation::PluginClientQuery | Operation::PluginRemote => true,
+        // Both handlers derive the workspace from the admitted Session. Paths
+        // carried in the captured basis are compared, never opened as authority.
+        Operation::SessionWorkspaceQuery | Operation::SessionWorkspaceCapture => true,
         Operation::PluginAuthorization => serde_json::from_value::<
             maka_protocol::plugin::AuthorizationInput,
         >(request.input.clone())

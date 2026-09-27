@@ -575,6 +575,11 @@ fn stat(root: &Dir, name: String) -> Result<Metadata, Error> {
     })
 }
 
+/// The same portable relative names accepted by the scoped file operations.
+pub fn validate_path(value: &str) -> Result<(), Error> {
+    path(value)
+}
+
 fn path(value: &str) -> Result<(), Error> {
     if value.is_empty()
         || value.len() > 4096

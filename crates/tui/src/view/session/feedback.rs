@@ -146,7 +146,45 @@ fn items(app: &App) -> Vec<Feedback> {
             warning: true,
         });
     }
+    items.extend(compaction(app, &id));
     items
+}
+
+fn compaction(app: &App, session: &str) -> Option<Feedback> {
+    use maka_protocol::turn::ContextCompactionOutcome;
+    let ConnectionState::Connected { epoch, .. } = &app.connection else {
+        return None;
+    };
+    let snapshot = app.chat.snapshot.as_ref()?;
+    if app.chat.error.is_some()
+        || app.chat.session.as_deref() != Some(session)
+        || snapshot.session.session_id != session
+        || snapshot.queue.host_epoch != *epoch
+    {
+        return None;
+    }
+    let turn = snapshot.root_turn.as_ref()?;
+    let TurnState::Completed {
+        context_compaction_outcome: Some(outcome),
+        ..
+    } = &turn.state
+    else {
+        return None;
+    };
+    let (key, detail, warning) = match outcome {
+        ContextCompactionOutcome::Compacted { .. } => ("controls-compact-finished", None, false),
+        ContextCompactionOutcome::Unchanged { reason } => {
+            ("controls-compact-unchanged", Some(safe(reason)), false)
+        }
+        ContextCompactionOutcome::Failed { reason } => {
+            ("controls-compact-failed", Some(safe(reason)), true)
+        }
+    };
+    Some(Feedback {
+        key,
+        detail,
+        warning,
+    })
 }
 
 pub(super) fn current(app: &App) -> Option<Feedback> {
@@ -260,6 +298,81 @@ mod tests {
                 "storage failure must not repeat in the footer and composer: {locale:?} {screen}"
             );
             assert!(!screen.contains("storage-only-marker"));
+
+            app.state_error = None;
+            app.sending.clear();
+            app.apply(Action::Visit(Route::Session("chat".into())));
+            app.chat.select(&Route::Session("chat".into()));
+            for (outcome, label, warning) in [
+                (
+                    serde_json::json!({"kind":"compacted","checkpointId":"checkpoint"}),
+                    "controls-compact-finished",
+                    false,
+                ),
+                (
+                    serde_json::json!({"kind":"unchanged","reason":"compaction-detail"}),
+                    "controls-compact-unchanged",
+                    false,
+                ),
+                (
+                    serde_json::json!({"kind":"failed","reason":"compaction-detail\u{1b}[31m"}),
+                    "controls-compact-failed",
+                    true,
+                ),
+            ] {
+                app.chat.snapshot = Some(maka_protocol::subscription::decode_session_observation_snapshot(&serde_json::json!({
+                    "schemaVersion":5,"session":{"sessionId":"chat","metadataRevision":1,"status":"active","createdAt":0,"isArchived":false},
+                    "projectionRevision":1,"rootTurn":{"sessionId":"chat","turnId":"compact","runId":"run","status":"completed","terminalEventId":"done","contextCompactionOutcome":outcome},
+                    "goal":null,"queue":{"hostEpoch":"epoch","queueRevision":0,"steering":[],"followup":[]},"interactions":{"pending":[]}
+                })).unwrap());
+                app.chrome.details = false;
+                terminal
+                    .draw(|frame| crate::view::draw(frame, &mut app))
+                    .unwrap();
+                assert!(text(&terminal).contains(&app.i18n.text(label)));
+                assert_eq!(current(&app).unwrap().warning, warning);
+                assert!(!text(&terminal).contains("compaction-detail"));
+                if current(&app).unwrap().detail.is_some() {
+                    let point = app.chrome.feedback.rect("feedback/notice").unwrap();
+                    app.input(Event::Mouse(MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: point.x + point.width / 2,
+                        row: point.y,
+                        modifiers: KeyModifiers::NONE,
+                    }));
+                    assert!(app.chrome.details);
+                    terminal
+                        .draw(|frame| crate::view::draw(frame, &mut app))
+                        .unwrap();
+                    assert!(text(&terminal).contains("compaction-detail"));
+                    assert!(details(&app).iter().all(|line| !line.contains('\u{1b}')));
+                }
+            }
+            app.state_error = Some("storage failure".into());
+            assert_eq!(current(&app).unwrap().key, "state-save-failed");
+            app.state_error = None;
+            app.connection = ConnectionState::Connected {
+                root_id: "root".into(),
+                epoch: "replacement".into(),
+            };
+            assert!(current(&app).is_none(), "old Host outcomes stay retired");
+            app.connection = ConnectionState::Disconnected;
+            assert!(current(&app).is_none());
+            app.connection = ConnectionState::Connected {
+                root_id: "root".into(),
+                epoch: "epoch".into(),
+            };
+            let snapshot = app.chat.snapshot.as_mut().unwrap();
+            snapshot.session.session_id = "other".into();
+            assert!(current(&app).is_none(), "outcomes stay with their session");
+            let snapshot = app.chat.snapshot.as_mut().unwrap();
+            snapshot.session.session_id = "chat".into();
+            snapshot.root_turn.as_mut().unwrap().state = TurnState::Running(Default::default());
+            assert!(
+                current(&app).is_none(),
+                "a new turn replaces the old outcome"
+            );
+            assert_eq!(app.drafts["chat"].text(), "keep my draft 中文");
         }
     }
 }

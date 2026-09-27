@@ -21,6 +21,8 @@ mod authorization;
 mod client;
 pub use authorization::*;
 mod input;
+mod input_resources;
+pub use input_resources::*;
 mod output;
 mod projection;
 mod remote;

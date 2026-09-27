@@ -101,11 +101,13 @@ impl Plan {
         {
             return Err(invalid("invalid persisted task state"));
         }
+        // Wall time can move backward after creation; the frozen trigger keeps
+        // its actual scheduled time, independent of monotonic task metadata.
         if let Some(fire) = &self.pending {
             crate::task::text(&fire.id, 256)?;
             fire.effect.validate()?;
             if fire.task_id != self.task.id
-                || fire.scheduled_at < self.task.created_at
+                || fire.scheduled_at < 0
                 || fire.intent.body().chars().count() > 8000
             {
                 return Err(invalid("invalid persisted trigger"));
@@ -177,7 +179,7 @@ impl Plan {
             self.advance(now)?;
         }
         if before != (self.task.status, self.task.next_fire_at) {
-            self.task.updated_at = now;
+            self.task.updated_at = self.task.updated_at.max(now);
         }
         Ok(())
     }
@@ -193,7 +195,7 @@ impl Plan {
         if self.task.expires_at.is_some_and(|expires| now >= expires) {
             self.task.status = Status::Expired;
             self.task.next_fire_at = None;
-            self.task.updated_at = now;
+            self.task.updated_at = self.task.updated_at.max(now);
             return Ok(None);
         }
         let Some(at) = self.task.next_fire_at.filter(|at| *at <= now) else {
@@ -209,7 +211,7 @@ impl Plan {
             delivery_started: false,
             authorization: self.authorization,
         });
-        self.task.updated_at = now;
+        self.task.updated_at = self.task.updated_at.max(now);
         Ok(self.pending.as_ref())
     }
     pub fn settle(&mut self, run: Run) -> Result<(), Error> {

@@ -18,15 +18,16 @@
  */
 
 use super::{
-    Action, Error, Reply, Row, Service, Text, Value, empty, error, field, invalid, timing,
+    Action, Error, Reply, Row, Service, Text, Value, empty, error, field, invalid, settings,
+    target, timing,
 };
 use crate::{
     authorization::Origin,
     command::{Mutation, MutationResult},
     schedule::{Recurrence, Schedule},
-    task::{Create, Effect, Notification},
+    task::Create,
 };
-use maka_plugins::authorization::{Capability, Id, Request, Target};
+use maka_plugins::authorization::Id;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -34,7 +35,11 @@ use std::collections::BTreeMap;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Route {
     Pick,
-    Form { schedule: Kind },
+    Form {
+        schedule: Kind,
+        #[serde(default)]
+        target: target::Selector,
+    },
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,7 +52,7 @@ pub(super) enum Kind {
     Cron,
 }
 impl Kind {
-    fn schedule(self, at: i64) -> Schedule {
+    pub(super) fn schedule(self, at: i64) -> Schedule {
         match self {
             Self::Once => Schedule::Once { run_at: at },
             Self::Interval => Schedule::Interval {
@@ -70,9 +75,9 @@ impl Kind {
     }
 }
 fn title() -> Text {
-    Text::localized("New reminder", "新建提醒", "新增提醒")
+    Text::localized("New task", "新建任务", "新增任務")
 }
-fn route(creation: Route) -> Value {
+pub(super) fn route(creation: Route) -> Value {
     serde_json::to_value(super::Route {
         creation: Some(creation),
         ..super::Route::default()
@@ -84,13 +89,27 @@ pub(super) fn entry() -> Row {
         id: "create".into(),
         title: title(),
         description: String::new(),
-        route: route(Route::Pick),
+        route: serde_json::to_value(super::Route {
+            target: Some(target::Route::Pick),
+            ..Default::default()
+        })
+        .expect("task type route"),
     }
 }
-pub(super) fn read(service: &Service, creation: Route) -> Result<Reply, Error> {
+pub(super) async fn read(
+    service: &Service,
+    caller: &super::Caller,
+    creation: Route,
+    locale: &str,
+) -> Result<Reply, Error> {
     let mut page = empty(title(), 0);
     match creation {
         Route::Pick => {
+            let selector = target::Selector::Local;
+            page.body = target::summary(
+                &crate::task::Effect::Notify(crate::task::Notification::Local),
+                locale,
+            );
             for (i, kind) in [
                 Kind::Once,
                 Kind::Interval,
@@ -106,44 +125,66 @@ pub(super) fn read(service: &Service, creation: Route) -> Result<Reply, Error> {
                     id: format!("schedule-{i}"),
                     title: timing::title(&kind.schedule(0)),
                     description: String::new(),
-                    route: route(Route::Form { schedule: kind }),
+                    route: route(Route::Form {
+                        schedule: kind,
+                        target: selector.clone(),
+                    }),
                 });
             }
         }
-        Route::Form { schedule } => {
-            page.revision = uuid::Uuid::new_v4().to_string();
-            page.body = service.timezone.clone();
-            page.fields = vec![
-                field(
-                    "title",
-                    Text::localized("Title", "标题", "標題"),
-                    String::new(),
-                    512,
-                    false,
-                ),
-                field(
-                    "intent",
-                    Text::localized("Content", "内容", "內容"),
-                    String::new(),
-                    super::INTENT_BYTES,
-                    true,
-                ),
-            ];
-            page.fields.extend(timing::fields(
-                &schedule.schedule(jiff::Timestamp::now().as_millisecond() + 3_600_000),
-                &service.timezone,
-            )?);
-            page.actions.push(Action {
-                id: "create".into(),
-                label: Text::localized("Create reminder", "创建提醒", "建立提醒"),
-                enabled: true,
-                fields: page.fields.iter().map(|field| field.id.clone()).collect(),
-                recovery: Some(serde_json::json!({"operation":page.revision})),
-                confirm: None,
-            });
+        Route::Form { schedule, target } => {
+            let Some(effect) = target
+                .resolve(service.backend.host.sessions.as_ref(), caller, locale)
+                .await?
+            else {
+                return Ok(Reply::Conflict);
+            };
+            page = form(&service.timezone, schedule, &effect, locale)?;
         }
     }
     Ok(Reply::Page { page })
+}
+pub(super) fn form(
+    timezone: &str,
+    schedule: Kind,
+    effect: &crate::task::Effect,
+    locale: &str,
+) -> Result<super::Page, Error> {
+    let mut page = empty(title(), 0);
+    page.revision = uuid::Uuid::new_v4().to_string();
+    page.body = format!("{}\n{}", target::summary(effect, locale), timezone);
+    page.fields = vec![
+        field(
+            "title",
+            Text::localized("Title", "标题", "標題"),
+            String::new(),
+            512,
+            false,
+        ),
+        field(
+            "intent",
+            Text::localized("Content", "内容", "內容"),
+            String::new(),
+            super::INTENT_BYTES,
+            true,
+        ),
+    ];
+    page.fields.extend(timing::fields(
+        &schedule.schedule(jiff::Timestamp::now().as_millisecond() + 3_600_000),
+        timezone,
+        locale,
+    )?);
+    page.fields
+        .extend(settings::limit_fields(None, None, timezone)?);
+    page.actions.push(Action {
+        id: "create".into(),
+        label: Text::localized("Create task", "创建任务", "建立任務"),
+        enabled: true,
+        fields: page.fields.iter().map(|field| field.id.clone()).collect(),
+        recovery: Some(serde_json::json!({"operation":page.revision})),
+        confirm: None,
+    });
+    Ok(page)
 }
 pub(super) async fn submit(
     service: &Service,
@@ -152,8 +193,10 @@ pub(super) async fn submit(
     action: String,
     mut fields: BTreeMap<String, Value>,
     grant: Option<Id>,
+    cx: (&super::Caller, &str),
 ) -> Result<Reply, Error> {
-    let Route::Form { schedule } = route else {
+    let (caller, locale) = cx;
+    let Route::Form { schedule, target } = route else {
         return Err(invalid("Select a reminder schedule"));
     };
     if action != "create" {
@@ -165,17 +208,31 @@ pub(super) async fn submit(
         .await
         .map_err(error)?
         .is_some();
+    let Some(effect) = target
+        .resolve(service.backend.host.sessions.as_ref(), caller, locale)
+        .await?
+    else {
+        return Ok(Reply::Conflict);
+    };
     let input = (|| {
         let title = take(&mut fields, "title")?;
         let intent_body = take(&mut fields, "intent")?;
+        // Optional constraints were absent from earlier creation forms. Their
+        // original None values must survive exact creation-receipt replay.
+        for key in ["max_fires", "expires"] {
+            fields
+                .entry(key.into())
+                .or_insert(Value::String(String::new()));
+        }
+        let (max_fires, expires_at) = settings::limits(&mut fields, None, &service.timezone)?;
         let schedule = timing::update(&schedule.schedule(0), &service.timezone, fields)?;
         let input = Create {
             title,
             intent_body,
             schedule,
-            effect: Effect::Notify(Notification::Local),
-            max_fires: None,
-            expires_at: None,
+            effect,
+            max_fires,
+            expires_at,
         };
         if !recorded {
             input
@@ -189,9 +246,9 @@ pub(super) async fn submit(
         Err(_) => {
             return Ok(Reply::Rejected {
                 message: Text::localized(
-                    "Check the title, content, date and recurrence",
-                    "请检查标题、内容、日期和重复规则",
-                    "請檢查標題、內容、日期和重複規則",
+                    "Check the title, content, schedule and limits",
+                    "请检查标题、内容、计划和限制",
+                    "請檢查標題、內容、排程和限制",
                 ),
             });
         }
@@ -201,27 +258,14 @@ pub(super) async fn submit(
         // The owner still checks the complete immutable input fingerprint.
         None
     } else {
-        Some(match grant {
-            Some(id) => id,
-            None => match service
-                .backend
-                .authorization(Origin::User { grant: None }, input.effect.clone())
-                .await
-            {
-                Ok(authorization) => authorization.grant,
-                Err(crate::Error::AuthorizationRequired) => {
-                    return Ok(Reply::Consent {
-                        request: Request {
-                            operation_id,
-                            title: "Scheduled reminders".into(),
-                            target: Target::Profile,
-                            capabilities: [Capability::Notifications].into(),
-                        },
-                    });
-                }
-                Err(failure) => return Err(error(failure)),
-            },
-        })
+        match target::grant(service, &input.effect, grant).await? {
+            Some(id) => Some(id),
+            None => {
+                return Ok(Reply::Consent {
+                    request: target::consent(&input.effect, operation_id, locale),
+                });
+            }
+        }
     };
     let MutationResult::Created { task_id, .. } = service
         .mutate(
@@ -262,7 +306,7 @@ pub(super) async fn recover(service: &Service, value: Value) -> Result<Reply, Er
         None => Ok(Reply::Unrecorded),
     }
 }
-fn take(fields: &mut BTreeMap<String, Value>, key: &str) -> Result<String, Error> {
+pub(super) fn take(fields: &mut BTreeMap<String, Value>, key: &str) -> Result<String, Error> {
     fields
         .remove(key)
         .and_then(|value| value.as_str().map(str::to_owned))

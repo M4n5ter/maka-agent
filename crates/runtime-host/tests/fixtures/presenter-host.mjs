@@ -92,7 +92,7 @@ export default async function activate(ctx) {
   await ctx.remote.method('register-inline', async () => {
     try {
       await ctx.remote.method('inline', () => null, {
-        terminalView: { version: 8, title: { fallback: 'Inline' }, context: 'application' },
+        terminalView: { version: 9, title: { fallback: 'Inline' }, context: 'application' },
       });
       return false;
     } catch {

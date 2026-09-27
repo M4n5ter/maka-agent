@@ -22,6 +22,7 @@ import type { Json } from './host.js';
 import type { ThinkingLevel } from './providers.js';
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type ToolProfile = 'headless-coding-v1';
 
 export type ApprovalPolicy =
   | { readonly kind: 'on-request' | 'never' }
@@ -167,6 +168,8 @@ export interface SessionConfiguration {
   collaborationMode: 'agent' | 'plan';
   behavior: string;
   boundTools: readonly string[] | null;
+  /** Native tool surface, independent of the named plugin tool ceiling. */
+  toolProfile?: ToolProfile | null;
 }
 export interface CreateChild {
   operationId: string;

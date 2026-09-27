@@ -27,6 +27,8 @@ pub struct TurnStartMessage {
     pub content: MessageContent,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub input_selections: maka_runtime::input::Selections,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: maka_runtime::input::SelectionSources,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,8 +81,16 @@ fn validate_batch(
         let count = pending.get(index).copied().unwrap_or(0);
         ensure(count <= 8, "Too many pending attachments")?;
         attachments += count + message.content.attachments.iter().flatten().count();
-        maka_runtime::input::validate_selections(&message.input_selections)
-            .map_err(ProtocolError::invalid)?;
+        maka_runtime::input::validate_selection_sources(
+            &message.input_selections,
+            &message.input_selection_sources,
+        )
+        .map_err(ProtocolError::invalid)?;
+        maka_runtime::input::validate_selection_session(
+            &message.input_selection_sources,
+            &input.session_id,
+        )
+        .map_err(ProtocolError::invalid)?;
         let selected = !message.input_selections.is_empty() || count > 0;
         message.content.validate_admission(selected)?;
         allow_empty |= selected;

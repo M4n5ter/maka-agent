@@ -28,6 +28,7 @@ mod operations;
 pub mod sources;
 mod types;
 mod validation;
+pub mod workspace_context;
 use crate::{ProtocolError, Result};
 pub use configuration::*;
 pub use mutation::*;

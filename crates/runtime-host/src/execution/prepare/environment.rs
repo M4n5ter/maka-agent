@@ -356,6 +356,7 @@ impl Environment {
         mut self,
         content: maka_runtime::input::MessageInput,
         selections: maka_runtime::input::Selections,
+        selection_sources: maka_runtime::input::SelectionSources,
     ) -> Result<(
         Self,
         maka_runtime::input::MessageInput,
@@ -378,6 +379,7 @@ impl Environment {
                 cwd: self.session.workspace.host_cwd.clone(),
                 content,
                 selections,
+                selection_sources,
                 tools,
                 cancellation: self.cancellation.clone(),
             },

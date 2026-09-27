@@ -36,6 +36,11 @@ pub struct Submission {
     pub content: MessageContent,
     pub placement: Placement,
     pub input_selections: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: maka_runtime::input::SelectionSources,
+    /// Local draft identity only; never submitted as Host authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completion_marks: Vec<String>,
     pub turn_orchestration: Option<TurnOrchestration>,
 }
 pub enum Delivery {
@@ -69,6 +74,7 @@ impl Submission {
             content: self.content.clone(),
             placement: self.placement,
             input_selections: self.input_selections.clone(),
+            input_selection_sources: self.input_selection_sources.clone(),
             turn_orchestration: self.turn_orchestration.clone(),
         }
     }
@@ -166,40 +172,64 @@ impl App {
         {
             return None;
         }
-        let input_selections = crate::pages::skills::selections(
+        let mut input_selections = crate::pages::skills::selections(
             self.skills
                 .saved
                 .get(&session)
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
         );
-        if !input_selections.is_empty() && self.stop_target().is_some() {
+        let mut content = MessageContent {
+            text,
+            display_text: None,
+            attachments: self.attachments.references(&session),
+            directory_references: self
+                .directories
+                .get(&session)
+                .filter(|v| !v.is_empty())
+                .cloned(),
+            quotes: None,
+            inline_references: None,
+        };
+        let editor = self.drafts.get(&session)?;
+        let completion_marks = editor.marks().iter().map(|mark| mark.id.clone()).collect();
+        let mut input_selection_sources = vec![];
+        if let Err(key) = self.completion_content(
+            &crate::pages::completion::DraftKey {
+                session: session.clone(),
+                input: None,
+                display: false,
+            },
+            editor,
+            &mut content,
+            &mut input_selections,
+            &mut input_selection_sources,
+        ) {
+            self.notice = Some(crate::app::Notice::Local(key));
             return None;
         }
-        let placement = if input_selections.is_empty() {
-            placement
-        } else {
+        let exact_turn = maka_runtime::input::has_unbound_selections(
+            &input_selections,
+            &input_selection_sources,
+        );
+        if exact_turn && self.stop_target().is_some() {
+            return None;
+        }
+        let placement = if exact_turn {
             Placement::CurrentTurn
+        } else {
+            placement
         };
         let request = Submission {
             root_id: root_id.clone(),
             origin_epoch: epoch.clone(),
             session: session.clone(),
             id: uuid::Uuid::new_v4().to_string(),
-            content: MessageContent {
-                text,
-                display_text: None,
-                attachments: self.attachments.references(&session),
-                directory_references: self
-                    .directories
-                    .get(&session)
-                    .filter(|v| !v.is_empty())
-                    .cloned(),
-                quotes: None,
-                inline_references: None,
-            },
+            content,
             placement,
             input_selections,
+            input_selection_sources,
+            completion_marks,
             turn_orchestration: None,
         };
         self.sending.insert(
@@ -236,14 +266,24 @@ impl App {
             Err(error) if retrying => Delivery::Unknown(Some(error.to_string())),
             Ok(SubmitResult::Blocked { message, .. }) => Delivery::Failed(message),
             Ok(_) => {
-                if let Some(editor) = self.drafts.get_mut(&request.session) {
+                if let Some(editor) = self.drafts.get_mut(&request.session)
+                    && editor
+                        .marks()
+                        .iter()
+                        .map(|mark| &mark.id)
+                        .eq(request.completion_marks.iter())
+                {
                     editor.clear_if_unchanged(&request.content.text);
                 }
                 self.attachments
                     .clear_sent(&request.session, &request.content.attachments);
-                if self.directories.get(&request.session)
-                    == request.content.directory_references.as_ref()
-                {
+                if self.directories.get(&request.session).is_some_and(|items| {
+                    request
+                        .content
+                        .directory_references
+                        .as_ref()
+                        .is_some_and(|sent| items.iter().all(|item| sent.contains(item)))
+                }) {
                     self.directories.remove(&request.session);
                 }
                 if self
@@ -251,7 +291,10 @@ impl App {
                     .saved
                     .get(&request.session)
                     .is_some_and(|items| {
-                        crate::pages::skills::selections(items) == request.input_selections
+                        request
+                            .input_selections
+                            .get(crate::pages::skills::PROVIDER)
+                            .is_some_and(|sent| items.iter().all(|item| sent.contains(&item.id)))
                     })
                 {
                     self.skills.saved.remove(&request.session);
@@ -305,14 +348,24 @@ impl App {
         }
         sent.delivery = match result {
             Ok(Some(ExecutionResolution::Pending { .. } | ExecutionResolution::Owned { .. })) => {
-                if let Some(editor) = self.drafts.get_mut(&request.session) {
+                if let Some(editor) = self.drafts.get_mut(&request.session)
+                    && editor
+                        .marks()
+                        .iter()
+                        .map(|mark| &mark.id)
+                        .eq(request.completion_marks.iter())
+                {
                     editor.clear_if_unchanged(&request.content.text);
                 }
                 self.attachments
                     .clear_sent(&request.session, &request.content.attachments);
-                if self.directories.get(&request.session)
-                    == request.content.directory_references.as_ref()
-                {
+                if self.directories.get(&request.session).is_some_and(|items| {
+                    request
+                        .content
+                        .directory_references
+                        .as_ref()
+                        .is_some_and(|sent| items.iter().all(|item| sent.contains(item)))
+                }) {
                     self.directories.remove(&request.session);
                 }
                 if self
@@ -320,7 +373,10 @@ impl App {
                     .saved
                     .get(&request.session)
                     .is_some_and(|items| {
-                        crate::pages::skills::selections(items) == request.input_selections
+                        request
+                            .input_selections
+                            .get(crate::pages::skills::PROVIDER)
+                            .is_some_and(|sent| items.iter().all(|item| sent.contains(&item.id)))
                     })
                 {
                     self.skills.saved.remove(&request.session);

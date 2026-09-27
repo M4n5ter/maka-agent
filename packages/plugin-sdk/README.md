@@ -46,7 +46,7 @@ export default activate;
 
 `ctx.behaviors.register(name, prepare, { nativeInput: 'native_user_messages' })` explicitly allows canonical user messages in model Sessions managed by that same package and scope. The default is `denied`. The Host checks the live behavior registration and current caller authority before admission; retirement or replacement invalidates an in-flight preparation. This policy preserves native message IDs, attachments, selections, queue placement and receipts, and does not enable manager-only configuration, revision or resume operations. Managed native messages cannot override orchestration mode.
 
-Bundle one ESM entrypoint without imports or top-level await. Set `runtime: { entry: "index.mjs", sdkVersion: 2, vm: "shared" }` in `maka.extension.json`; `dedicated` requests a separate VM for that package generation.
+Bundle one ESM entrypoint without imports or top-level await. Set `runtime: { entry: "index.mjs", sdkVersion: 3, vm: "shared" }` in `maka.extension.json`; `dedicated` requests a separate VM for that package generation.
 
 Prompt providers receive a tagged Session or model-step context, never fabricated tool authority. Sections and dynamic context default to templates; use `format: 'plain'` for resolved or user-authored text. A `complete` section replaces other prompt Contributions, not explicit Session/child instructions. Physical retries reuse the same frozen composition.
 
@@ -152,11 +152,36 @@ Native endpoints accepting caller-supplied Host paths declare `Endpoint::requiri
 
 `restoreRoot(operationId)` recovers a root created by this package/scope under current workspace and source ceilings, independently of its original model. Creation provenance does not make an ordinary root exclusively managed. `restoreChild` requires the original child creation request. Neither creates anything; absence does not exclude a concurrent creation. `configure` advances the Session revision on every committed choice, including identical values, fencing older configuration CASes without changing event history.
 
+## Composer discovery
+
+A Page terminal descriptor may declare `commands: [{ name, aliases?, title, description, route }]`.
+These are inert routes into the same app. The shell retains the original Target until the user selects a command; forms, confirmation and submission use the ordinary app path. Other placements cannot declare commands.
+
+An input provider may opt its context selectors into resource discovery:
+
+```ts
+await ctx.input.prepare('example.notes', prepareNotes, {
+  resources: {
+    title: { fallback: 'Notes' },
+    query: async ({ query, cursor, limit }, cx) => listNotes(query, cursor, limit, cx.signal),
+    resolve: async ({ id }, cx) => ({
+      selector: id, label: 'Note', quote: { text: await readNote(id, cx.workspace) },
+    }),
+  },
+});
+```
+
+Query and resolve receive only the current Session's readonly workspace and cancellation signal. They must not run an action or prepare a message. Discovery publishes a paired Remote endpoint; consumers use its projected method and exact Target, one cancellable document per lookup. Resolve stamps the original provider/registration/Session. Save its selector in `inputSelections` and its source in `inputSelectionSources` with the captured content. A retired or foreign source requires explicit reselection; names never silently bind to replacement code.
+
+Catalog `item.id`, resolve `id` and returned `selector` are the same identity; use versioned IDs when needed. A revision into a new Session keeps the old source visible until the user explicitly resolves that same identity in the new scope and confirms its new Host-stamped source. Never rewrite `sessionId` locally.
+
+Resource registration is a domain opt-in to queueable context. Preparation must validate every selected selector and return `ready` or `blocked`; `unchanged` cannot consume explicit resources. Other selectors and orchestration keep exact-Turn semantics. Already accepted queue content and receipts survive retirement without re-resolution or repeated preparation. Initial and per-call declaration JSON stay within 1 MiB; retained registration metadata has a lifecycle-owned 32 MiB encoded-byte budget, released with registration retirement. VM heap/CPU and caller permissions still apply.
+
 ## Terminal apps
 
 Host plugins use `ctx.tui.app(name, { entry, backend, resources? }, descriptor, options?)` to register a TUI application. `entry` names an immutable, prebuilt ESM file in the same package, without imports or top-level await; inline UI handlers are unsupported. Generic Remote methods and streams cannot declare `terminalView`. The descriptor selects `page`, `panel`, `status`, `settings`, or a named `slot`; its `context` is `application` or `session`. A view can embed `tui.slot(...)` to compose contributions from other plugins.
 
-The UI entry exports a default factory `({ tui }) => ({ read, submit, recover? })`, initialized once per stable document in its own VM. It receives only pure node and field builders; source creation, storage, services and jobs stay in the original business activation. `read(route, cx)` returns a View v8 body built with `tui` (columns, rows, splits, tabs, text, Markdown, controls and fields). The SDK adds the version. Stable sibling keys preserve focus and editing state; `cx.t(en, zhCN, zhTW)` selects the reader's language. The shell owns layout, local typing, scrolling, confirmation and draft recovery. Plugins use semantic tones and never emit terminal escapes.
+The UI entry exports a default factory `({ tui }) => ({ read, submit, recover? })`, initialized once per stable document in its own VM. It receives only pure node and field builders; source creation, storage, services and jobs stay in the original business activation. `read(route, cx)` returns a View v9 body built with `tui` (columns, rows, splits, tabs, text, Markdown, controls and fields). The SDK adds the version. Stable sibling keys preserve focus and editing state; `cx.t(en, zhCN, zhTW)` selects the reader's language. The shell owns layout, local typing, scrolling, confirmation and draft recovery. Plugins use semantic tones and never emit terminal escapes.
 
 The Host creates page VMs on demand, without a page-count quota. Each has a 128 MiB JavaScript heap limit and a 200 ms synchronous execution slice. These are execution budgets, not total process memory limits or a hostile-code sandbox. Hidden drafts do not reserve VMs; accepted writes retain their owner until settlement. A failed page stops observation and preserves its last valid view and loaded transcript for local reading. Rebinding is explicit and never replays an uncertain write. Page failure does not restart the package's business activation or sibling page VMs.
 
@@ -239,4 +264,4 @@ fields (`item_field`, `group_field`, `before_field`, each allowing 128 bytes).
 The action submits those keys with the existing revision/receipt contract; an empty
 before value appends. Typing, highlighting and drag previews make no backend call.
 Keep independent editable details in separate slot contributions so their drafts
-and unknown writes retain their own ownership. Collection requires View version 8.
+and unknown writes retain their own ownership. Collection requires View version 9.

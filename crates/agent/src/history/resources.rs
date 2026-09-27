@@ -58,7 +58,7 @@ impl<'a> Resources<'a> {
                 } => {
                     references.extend(content.attachments.iter().flatten().map(|a| &a.storage_ref));
                 }
-                Fact::MessageSteered { message } => {
+                Fact::MessageSteered { message, .. } => {
                     references.extend(
                         message
                             .content

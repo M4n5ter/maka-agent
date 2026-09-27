@@ -21,7 +21,7 @@ use super::*;
 use crate::decision::Creation;
 use crate::plugin::remote::failure;
 use maka_plugins::{authorization::Id, execution::Target, executor, llm};
-use maka_runtime::execution::{CollaborationMode, SandboxMode, WorkspaceTarget};
+use maka_runtime::execution::{CollaborationMode, SandboxMode, ThinkingLevel, WorkspaceTarget};
 use serde::Serialize;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -38,6 +38,12 @@ pub(super) struct Route {
     purpose: Purpose,
     #[serde(default)]
     query: String,
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    models_cursor: Option<llm::Cursor>,
+    #[serde(default)]
+    executors_cursor: Option<executor::Cursor>,
     #[serde(default)]
     target: Option<Target>,
 }
@@ -152,17 +158,29 @@ pub(super) async fn read(hub: &Hub, route: Route, cx: &Cx) -> Result<View, Error
         return Ok(session_handoff(&cx.words, session_id));
     }
     let Some(target) = route.target.as_ref() else {
-        let models: llm::Choices = hub
-            .call(Call::Models, json!({"query":route.query}), &cx.caller)
+        let models: llm::SearchResult = hub
+            .call(
+                Call::Models,
+                json!({"query":route.query,"cursor":route.models_cursor}),
+                &cx.caller,
+            )
             .await?;
+        let llm::SearchResult::Page { page: models } = models else {
+            return Ok(changed(&cx.words, &route));
+        };
         let executors = if matches!(route.purpose, Purpose::Creation) {
             Some(
-                hub.call::<executor::Choices>(
-                    Call::Executors,
-                    json!({"query":route.query}),
-                    &cx.caller,
-                )
-                .await?,
+                match hub
+                    .call::<executor::SearchResult>(
+                        Call::Executors,
+                        json!({"query":route.query,"cursor":route.executors_cursor}),
+                        &cx.caller,
+                    )
+                    .await?
+                {
+                    executor::SearchResult::Page { page } => page,
+                    executor::SearchResult::Stale => return Ok(changed(&cx.words, &route)),
+                },
             )
         } else {
             None
@@ -180,7 +198,35 @@ pub(super) async fn read(hub: &Hub, route: Route, cx: &Cx) -> Result<View, Error
         .read::<Creation>("creation")
         .await
         .map_err(failure)?;
-    form(&cx.words, &route, creation, delegation.as_ref())
+    let thinking = model_choice(hub, target).await?;
+    form(
+        &cx.words,
+        &route,
+        creation,
+        delegation.as_ref(),
+        thinking.as_ref(),
+    )
+}
+
+async fn model_choice(hub: &Hub, target: &Target) -> Result<Option<llm::Choice>, Error> {
+    let Target::Model { model, .. } = target else {
+        return Ok(None);
+    };
+    let choice = hub
+        .0
+        .coordinator
+        .models
+        .resolve(llm::Selection::Named {
+            connection_slug: model.connection_slug.clone(),
+            model: model.model.clone(),
+        })
+        .await
+        .map_err(failed)?
+        .filter(|choice| choice.model == *model)
+        .ok_or_else(|| {
+            Error::Invalid("The selected model is no longer available; choose it again".into())
+        })?;
+    Ok(Some(choice))
 }
 
 fn session_handoff(words: &Words, session: &str) -> View {
@@ -191,6 +237,15 @@ fn session_handoff(words: &Words, session: &str) -> View {
             "開啟此工作階段，再從工作階段面板選擇 WorkHub 任務模型以更換模型。"), Tone::Muted),
         Node::Item { key: "session".into(), title: words.t("Open task session", "打开任务会话", "開啟任務工作階段"), detail: String::new(), meta: String::new(), tone: Tone::Accent, current: false, target: view::Target::Session { session: session.into() } },
     ]))
+}
+
+fn changed(words: &Words, current: &Route) -> View {
+    View { fields: vec![line("query", &current.query, 512)], ..view_of(&title(words, &current.purpose), "stale", vec![Action {
+        fields: vec!["query".into()], ..action("search", words.t("Load current choices", "加载当前选项", "載入目前選項"))
+    }], column("root", vec![
+        text("stale", words.t("The available models or executors changed. Search again before choosing.", "可用模型或执行器已变化，请重新搜索后选择。", "可用模型或執行器已變更，請重新搜尋後選擇。"), Tone::Warning),
+        input("query", "query", words.t("Find", "查找", "尋找")), button("search", "search", Role::Primary),
+    ])) }
 }
 
 pub(super) struct SessionModels(pub(super) Hub);
@@ -311,12 +366,11 @@ fn picker(
     executors: Option<executor::Choices>,
 ) -> View {
     let mut items = Vec::new();
-    let incomplete = !models.complete
-        || models.models.len() > 20
-        || executors
-            .as_ref()
-            .is_some_and(|page| !page.complete || page.executors.len() > 12);
-    for (index, model) in models.models.into_iter().take(20).enumerate() {
+    let more_models = models.next_cursor.is_some();
+    let more_executors = executors
+        .as_ref()
+        .is_some_and(|page| page.next_cursor.is_some());
+    for (index, model) in models.models.into_iter().enumerate() {
         let target = Target::Model {
             model: model.model,
             thinking_level: model.default_thinking_level,
@@ -335,7 +389,7 @@ fn picker(
         );
     }
     if let Some(executors) = executors {
-        for (index, executor) in executors.executors.into_iter().take(12).enumerate() {
+        for (index, executor) in executors.executors.into_iter().enumerate() {
             items.push(
                 link(
                     format!("executor-{index}"),
@@ -353,6 +407,35 @@ fn picker(
             );
         }
     }
+    const WINDOW: usize = 20;
+    let mut windows = vec![];
+    let mut start = 0;
+    while start < items.len() {
+        let mut end = start;
+        let mut bytes = 0;
+        while end < items.len() && end - start < WINDOW {
+            let size = serde_json::to_vec(&items[end]).map_or(usize::MAX, |bytes| bytes.len());
+            if end > start && bytes + size > 24 * 1024 {
+                break;
+            }
+            bytes += size;
+            end += 1;
+        }
+        windows.push(start..end);
+        start = end;
+    }
+    let page = current.page.min(windows.len().saturating_sub(1));
+    let range = windows.get(page).cloned().unwrap_or(0..0);
+    let total = windows.len();
+    let items: Vec<_> = items
+        .into_iter()
+        .skip(range.start)
+        .take(range.len())
+        .collect();
+    let mut actions = vec![Action {
+        fields: vec!["query".into()],
+        ..action("search", words.t("Search", "搜索", "搜尋"))
+    }];
     let mut children = vec![
         input(
             "query",
@@ -378,29 +461,98 @@ fn picker(
     } else {
         children.push(scroll("choices", 20, stack("items", items)));
     }
-    if incomplete {
-        children.push(text(
-            "more",
-            words.t(
-                "Refine the search to see more choices.",
-                "缩小搜索范围以查看更多选项。",
-                "縮小搜尋範圍以查看更多選項。",
+    let mut navigation = vec![];
+    for (id, label, enabled) in [
+        (
+            "choices-previous",
+            words.t("Previous", "上一页", "上一頁"),
+            page > 0,
+        ),
+        (
+            "choices-next",
+            words.t("More choices", "更多选项", "更多選項"),
+            page + 1 < total,
+        ),
+    ] {
+        if enabled {
+            actions.push(Action {
+                fields: vec!["query".into()],
+                ..action(id, label)
+            });
+            navigation.push(button(id, id, Role::Normal));
+        }
+    }
+    if !navigation.is_empty() {
+        children.push(row("pages", navigation));
+    }
+    if page + 1 >= total {
+        for (id, label, offered) in [
+            (
+                "choices-more-models",
+                words.t("More models", "更多模型", "更多模型"),
+                more_models,
             ),
-            Tone::Subtle,
-        ));
+            (
+                "choices-more-executors",
+                words.t("More executors", "更多执行器", "更多執行器"),
+                more_executors,
+            ),
+        ] {
+            if offered {
+                actions.push(Action {
+                    fields: vec!["query".into()],
+                    ..action(id, label)
+                });
+                children.push(button(id, id, Role::Normal));
+            }
+        }
     }
     View {
         fields: vec![line("query", &current.query, 512)],
         ..view_of(
             &title(words, &current.purpose),
             "choices",
-            vec![Action {
-                fields: vec!["query".into()],
-                ..action("search", words.t("Search", "搜索", "搜尋"))
-            }],
+            actions,
             column("root", children),
         )
     }
+}
+
+fn thinking_value(level: Option<ThinkingLevel>) -> String {
+    level.map_or_else(
+        || "default".into(),
+        |level| {
+            serde_json::to_value(level)
+                .expect("thinking level")
+                .as_str()
+                .expect("thinking string")
+                .to_owned()
+        },
+    )
+}
+
+fn thinking_input(value: &str) -> Result<Option<ThinkingLevel>, Error> {
+    if value == "default" {
+        Ok(None)
+    } else {
+        serde_json::from_value(json!(value))
+            .map(Some)
+            .map_err(failed)
+    }
+}
+
+fn thinking_label(words: &Words, level: ThinkingLevel) -> String {
+    let (en, cn, tw) = match level {
+        ThinkingLevel::Off => ("Off", "关闭", "關閉"),
+        ThinkingLevel::Minimal => ("Minimal", "极少", "極少"),
+        ThinkingLevel::Low => ("Low", "低", "低"),
+        ThinkingLevel::Medium => ("Medium", "中", "中"),
+        ThinkingLevel::High => ("High", "高", "高"),
+        ThinkingLevel::Xhigh => ("Very high", "很高", "很高"),
+        ThinkingLevel::Max => ("Maximum", "最高", "最高"),
+        ThinkingLevel::Ultra => ("Ultra", "超高", "超高"),
+    };
+    words.t(en, cn, tw)
 }
 
 fn form(
@@ -408,6 +560,7 @@ fn form(
     current: &Route,
     creation: Option<(u64, Creation)>,
     delegation: Option<&Delegation>,
+    model: Option<&llm::Choice>,
 ) -> Result<View, Error> {
     let mut fields = Vec::new();
     let target = current
@@ -419,6 +572,26 @@ fn form(
         Target::Executor { executor_id, .. } => executor_id.as_str().to_owned(),
     };
     let mut children = vec![text("target", clean(&label, false), Tone::Strong)];
+    if let Target::Model { thinking_level, .. } = target {
+        let model = model.ok_or_else(|| Error::Invalid("Model choices are unavailable".into()))?;
+        let mut options = vec![(
+            "default".into(),
+            words.t("Model default", "模型默认", "模型預設"),
+        )];
+        options.extend(
+            ThinkingLevel::ALL
+                .into_iter()
+                .filter(|level| model.thinking_levels.contains(level))
+                .map(|level| (thinking_value(Some(level)), thinking_label(words, level))),
+        );
+        let value = thinking_level.filter(|level| model.thinking_levels.contains(level));
+        fields.push(choice("thinking", thinking_value(value), options));
+        children.push(input(
+            "thinking",
+            "thinking",
+            words.t("Thinking", "思考级别", "思考等級"),
+        ));
+    }
     if matches!(current.purpose, Purpose::Creation) {
         let (kind, location, mode, collaboration) =
             match creation.as_ref().map(|(_, creation)| creation) {
@@ -694,10 +867,60 @@ pub(super) async fn submit(hub: &Hub, submission: Submission, cx: &Cx) -> Result
     let mut current = place
         .setup
         .ok_or_else(|| Error::Invalid("Open task setup first".into()))?;
-    if submission.action == "search" {
-        current.query = submission.text("query")?.trim().to_owned();
+    if matches!(
+        submission.action.as_str(),
+        "search"
+            | "choices-next"
+            | "choices-previous"
+            | "choices-more-models"
+            | "choices-more-executors"
+    ) {
+        let query = submission.text("query")?.trim().to_owned();
+        current.page = if submission.action == "search" || query != current.query {
+            current.models_cursor = None;
+            current.executors_cursor = None;
+            0
+        } else if submission.action == "choices-more-models" {
+            let result: llm::SearchResult = hub
+                .call(
+                    Call::Models,
+                    json!({"query":query,"cursor":current.models_cursor}),
+                    &cx.caller,
+                )
+                .await?;
+            let llm::SearchResult::Page { page } = result else {
+                return Ok(Reply::Conflict);
+            };
+            current.models_cursor = Some(
+                page.next_cursor
+                    .ok_or_else(|| Error::Invalid("No following model page".into()))?,
+            );
+            0
+        } else if submission.action == "choices-more-executors" {
+            let result: executor::SearchResult = hub
+                .call(
+                    Call::Executors,
+                    json!({"query":query,"cursor":current.executors_cursor}),
+                    &cx.caller,
+                )
+                .await?;
+            let executor::SearchResult::Page { page } = result else {
+                return Ok(Reply::Conflict);
+            };
+            current.executors_cursor = Some(
+                page.next_cursor
+                    .ok_or_else(|| Error::Invalid("No following executor page".into()))?,
+            );
+            0
+        } else if submission.action == "choices-next" {
+            current.page.saturating_add(1)
+        } else {
+            current.page.saturating_sub(1)
+        };
+        current.query = query;
         llm::Search {
             query: current.query.clone(),
+            cursor: None,
         }
         .validate()
         .map_err(failed)?;
@@ -707,13 +930,27 @@ pub(super) async fn submit(hub: &Hub, submission: Submission, cx: &Cx) -> Result
         });
     }
     let stamp: Stamp = serde_json::from_str(&submission.revision).map_err(failed)?;
-    let target = current
+    let mut target = current
         .target
-        .as_ref()
+        .clone()
         .ok_or_else(|| Error::Invalid("Choose an execution target".into()))?;
     target.validate().map_err(failed)?;
+    let model = model_choice(hub, &target).await?;
+    if let Target::Model { thinking_level, .. } = &mut target {
+        let level = thinking_input(submission.text("thinking")?)?;
+        if level.is_some_and(|level| {
+            !model
+                .as_ref()
+                .is_some_and(|model| model.thinking_levels.contains(&level))
+        }) {
+            return Err(Error::Invalid(
+                "This model no longer supports the selected thinking level; refresh".into(),
+            ));
+        }
+        *thinking_level = level;
+    }
     let (scope, collaboration) = match &current.purpose {
-        Purpose::Creation => creation_input(&submission, target)?,
+        Purpose::Creation => creation_input(&submission, &target)?,
         Purpose::Coordinator => (workspace(), CollaborationMode::Agent),
         Purpose::Delegation { assignment } => {
             let choice: Delegation = hub
@@ -946,6 +1183,9 @@ mod tests {
             let current = Route {
                 purpose: Purpose::Creation,
                 query: "model".into(),
+                page: 0,
+                models_cursor: None,
+                executors_cursor: None,
                 target: None,
             };
             let view = picker(
@@ -954,11 +1194,13 @@ mod tests {
                 llm::Choices {
                     revision: 42,
                     complete: true,
+                    next_cursor: None,
                     models: (0..25).map(model).collect(),
                 },
                 Some(executor::Choices {
                     revision: 7,
                     complete: true,
+                    next_cursor: None,
                     executors: vec![],
                 }),
             );
@@ -985,7 +1227,7 @@ mod tests {
             };
             let place: Place = serde_json::from_value(route.clone()).unwrap();
             assert_eq!(place.setup.unwrap().target, Some(target()));
-            assert!(matches!(children.last(), Some(Node::Text { key, .. }) if key == "more"));
+            assert!(view.action("choices-next").is_some());
         }
     }
 
@@ -996,6 +1238,9 @@ mod tests {
                 assignment: "task-a".into(),
             },
             query: String::new(),
+            page: 0,
+            models_cursor: None,
+            executors_cursor: None,
             target: Some(target()),
         };
         for locale in ["en", "zh-CN", "zh-TW"] {
@@ -1010,6 +1255,7 @@ mod tests {
                     },
                     name: "Task A".into(),
                 }),
+                Some(&model(0)),
             )
             .unwrap();
             view.validate().unwrap();
@@ -1062,10 +1308,14 @@ mod tests {
             &Route {
                 purpose: Purpose::Creation,
                 query: String::new(),
+                page: 0,
+                models_cursor: None,
+                executors_cursor: None,
                 target: Some(target()),
             },
             Some((17, saved)),
             None,
+            Some(&model(0)),
         )
         .unwrap();
         view.validate().unwrap();
@@ -1089,8 +1339,12 @@ mod tests {
                 &Route {
                     purpose: Purpose::Creation,
                     query: String::new(),
+                    page: 0,
+                    models_cursor: None,
+                    executors_cursor: None,
                     target: Some(executor.clone()),
                 },
+                None,
                 None,
                 None,
             )
@@ -1109,3 +1363,6 @@ mod tests {
         assert!(creation_input(&submission, &target()).is_err());
     }
 }
+
+#[cfg(test)]
+mod workflows;

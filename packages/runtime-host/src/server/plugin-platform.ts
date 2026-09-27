@@ -49,6 +49,7 @@ import { TrustedPluginPackageLoader } from './plugin-package-loader.js';
 import { PluginPackageStore, PluginPackageStoreError } from './plugin-package-store.js';
 import type {
   PluginMutationReceipt,
+  PluginPackageExportInput,
   PluginPackageProjection,
   PluginPlatformConvergence,
   PluginPlatformPhase,
@@ -65,7 +66,8 @@ export class HostPluginPlatformError extends Error {
       | 'recovery_failed'
       | 'mutation_failed'
       | 'not_ready'
-      | 'stale_cursor',
+      | 'stale_cursor'
+      | 'operation_conflict',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -562,6 +564,7 @@ export class HostPluginPlatform {
       projections.push(
         Object.freeze({
           extensionId,
+          baseGeneration: this.#authority.generation,
           contentDigest: installed.contentDigest,
           displayName: installed.manifest.displayName,
           ...(installed.manifest.description
@@ -578,8 +581,24 @@ export class HostPluginPlatform {
     return Object.freeze(projections);
   }
 
-  async exportPackage(extensionId: string, targetPath: string): Promise<void> {
-    await this.read(() => this.#packages.export(extensionId, targetPath));
+  async exportPackage(
+    extensionId: string,
+    targetPath: string,
+    expected: PluginPackageExportInput['expected'],
+  ): Promise<void> {
+    await this.read(async () => {
+      const installed = await this.#packages.load(extensionId);
+      if (
+        expected.baseGeneration !== this.#authority.generation ||
+        expected.contentDigest !== installed.contentDigest
+      ) {
+        throw new HostPluginPlatformError(
+          'operation_conflict',
+          'Installed package changed since review',
+        );
+      }
+      await this.#packages.export(extensionId, targetPath);
+    });
   }
 
   async reconcile(): Promise<PluginMutationReceipt> {

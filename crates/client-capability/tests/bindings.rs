@@ -52,6 +52,87 @@ fn attach(
 }
 
 #[tokio::test]
+async fn local_service_publications_preserve_tool_selection_and_remote_isolation() {
+    for kind in [PrincipalKind::LocalOwner, PrincipalKind::RemoteOwner] {
+        let mut registry = Registry::default();
+        let mut initiator = identity("terminal");
+        initiator.principal_kind = kind;
+        let (terminal, terminal_provider, _terminal_out) = attach(&mut registry, initiator);
+        registry
+            .replace(
+                terminal,
+                decode_replace_input(&json!({
+                    "registrationId":"terminal-services", "offers":[],
+                    "services":[{"serviceId":"notifications","version":"1"}]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let (forms, forms_provider, _forms_out) = attach(&mut registry, identity("forms"));
+        registry
+            .replace(forms, manifest("forms", &["session"]))
+            .unwrap();
+        registry
+            .bind_session("conversation", Some(terminal), BindingMode::Strict)
+            .unwrap();
+        let snapshot = registry.snapshot("conversation").unwrap();
+        if kind == PrincipalKind::RemoteOwner {
+            assert!(
+                snapshot.offers().is_empty(),
+                "a remote service client cannot borrow local tools"
+            );
+            continue;
+        }
+        assert_eq!(snapshot.offers().len(), 1);
+        assert_eq!(
+            snapshot.offers()[0]
+                .resolve(&registry)
+                .unwrap()
+                .provider_id(),
+            forms_provider
+        );
+        let mut own = manifest("own-tools", &["session"]);
+        own.session_id = Some("own-conversation".into());
+        registry.replace(terminal, own).unwrap();
+        registry
+            .bind_session("own-conversation", Some(terminal), BindingMode::Strict)
+            .unwrap();
+        assert_eq!(
+            registry.snapshot("own-conversation").unwrap().offers()[0]
+                .resolve(&registry)
+                .unwrap()
+                .provider_id(),
+            terminal_provider,
+            "a scoped tool publication still selects its exact provider alongside global services"
+        );
+        let (other, _, _other_out) = attach(&mut registry, identity("other"));
+        registry
+            .replace(other, manifest("other", &["session"]))
+            .unwrap();
+        registry
+            .bind_session("conversation", Some(terminal), BindingMode::Strict)
+            .unwrap();
+        assert_eq!(
+            registry.snapshot("conversation").unwrap().offers()[0]
+                .resolve(&registry)
+                .unwrap()
+                .provider_id(),
+            forms_provider,
+            "existing session pins survive another publication"
+        );
+        assert_eq!(
+            registry.bind_session("ambiguous", Some(terminal), BindingMode::Strict),
+            Err(BindingError::Ambiguous)
+        );
+        registry.detach(forms);
+        assert_eq!(
+            registry.bind_session("conversation", Some(terminal), BindingMode::Strict),
+            Err(BindingError::Lost)
+        );
+    }
+}
+
+#[tokio::test]
 async fn scoped_publications_isolate_selection_restore_and_retire_all_pinned_generations() {
     let mut registry = Registry::default();
     let (one, _, _out) = attach(&mut registry, identity("desktop"));

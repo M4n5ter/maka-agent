@@ -27,9 +27,34 @@ use serde_json::Value;
 pub struct Operations;
 impl OperationRegistry for Operations {
     fn decode_input(&self, operation: Operation, value: &Value) -> Result<Value> {
+        if crate::resources::errors(operation).is_some() {
+            return crate::resources::decode_input(operation, value);
+        }
+        if crate::controls::supports(operation) {
+            return crate::controls::decode_input(operation, value);
+        }
         if operation == Operation::ModelProviderCatalogQuery {
             maka_protocol::model_provider::decode_query(value)?;
             return Ok(value.clone());
+        }
+        match operation {
+            Operation::RuntimePolicyNetworkProxyUpdate => {
+                maka_protocol::runtime_policy::decode_network_proxy_update(value)?;
+                return Ok(value.clone());
+            }
+            Operation::NetworkProxyTest => {
+                maka_protocol::network_proxy::decode_input(value)?;
+                return Ok(value.clone());
+            }
+            Operation::ConnectionRequestHeadersQuery => {
+                maka_protocol::request_headers::decode_query(value)?;
+                return Ok(value.clone());
+            }
+            Operation::ConnectionRequestHeadersReplace => {
+                maka_protocol::request_headers::decode_replace(value)?;
+                return Ok(value.clone());
+            }
+            _ => {}
         }
         if operation == Operation::RuntimePolicyQuery {
             maka_protocol::runtime_policy::decode_query_input(value)?;
@@ -157,9 +182,34 @@ impl OperationRegistry for Operations {
         }
     }
     fn decode_output(&self, operation: Operation, value: &Value) -> Result<Value> {
+        if crate::resources::errors(operation).is_some() {
+            return crate::resources::decode_output(operation, value);
+        }
+        if crate::controls::supports(operation) {
+            return crate::controls::decode_output(operation, value);
+        }
         if operation == Operation::ModelProviderCatalogQuery {
             maka_protocol::model_provider::decode_page(value)?;
             return Ok(value.clone());
+        }
+        match operation {
+            Operation::RuntimePolicyNetworkProxyUpdate => {
+                maka_protocol::runtime_policy::decode_network_proxy_result(value)?;
+                return Ok(value.clone());
+            }
+            Operation::NetworkProxyTest => {
+                maka_protocol::network_proxy::decode_output(value)?;
+                return Ok(value.clone());
+            }
+            Operation::ConnectionRequestHeadersQuery => {
+                maka_protocol::request_headers::decode_query_result(value)?;
+                return Ok(value.clone());
+            }
+            Operation::ConnectionRequestHeadersReplace => {
+                maka_protocol::request_headers::decode_replace_result(value)?;
+                return Ok(value.clone());
+            }
+            _ => {}
         }
         if operation == Operation::RuntimePolicyQuery {
             return serde_json::to_value(maka_protocol::runtime_policy::decode_query_result(
@@ -265,8 +315,27 @@ impl OperationRegistry for Operations {
         }
     }
     fn error_codes(&self, operation: Operation) -> Option<&[OperationErrorCode]> {
+        if let Some(errors) = crate::resources::errors(operation) {
+            return Some(errors);
+        }
+        if crate::controls::supports(operation) {
+            return Some(crate::controls::errors(operation));
+        }
         if operation == Operation::ModelProviderCatalogQuery {
             return Some(maka_protocol::configuration::QUERY_ERRORS);
+        }
+        match operation {
+            Operation::RuntimePolicyNetworkProxyUpdate => {
+                return Some(maka_protocol::runtime_policy::MUTATION_ERRORS);
+            }
+            Operation::NetworkProxyTest => return Some(maka_protocol::network_proxy::ERRORS),
+            Operation::ConnectionRequestHeadersQuery => {
+                return Some(maka_protocol::configuration::QUERY_ERRORS);
+            }
+            Operation::ConnectionRequestHeadersReplace => {
+                return Some(maka_protocol::configuration::MUTATION_ERRORS);
+            }
+            _ => {}
         }
         if operation == Operation::RuntimePolicyQuery {
             return Some(maka_protocol::runtime_policy::QUERY_ERRORS);

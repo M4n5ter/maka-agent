@@ -130,6 +130,10 @@ async fn retirement_cancels_exact_executor_and_keeps_settlement_lease_or_fences_
                 &Scope::Session("session".into()),
                 Default::default()
             )
+            .map(|result| match result {
+                maka_plugins::executor::SearchResult::Page { page } => page,
+                maka_plugins::executor::SearchResult::Stale => panic!("fresh directory"),
+            })
             .unwrap()
             .executors
             .len(),
@@ -172,6 +176,10 @@ async fn retirement_cancels_exact_executor_and_keeps_settlement_lease_or_fences_
                 &Scope::Session("session".into()),
                 Default::default()
             )
+            .map(|result| match result {
+                maka_plugins::executor::SearchResult::Page { page } => page,
+                maka_plugins::executor::SearchResult::Stale => panic!("fresh directory"),
+            })
             .unwrap()
             .executors
             .is_empty()

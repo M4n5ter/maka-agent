@@ -104,8 +104,6 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(1),
     ])
     .split(area);
-    shell::header(frame, app, rows[0]);
-
     let nav_width = if app.fullscreen() {
         app.chrome.stop_animation();
         0
@@ -143,6 +141,8 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         Route::Plugins(_) => crate::pages::plugins::draw(frame, app, page),
     }
     crate::files::resolve_hits(app);
+    // Session commands use the durable message exposed by this frame's reader.
+    shell::header(frame, app, rows[0]);
     let hint = if app.shutdown.stopping {
         app.i18n.text("shutdown-working")
     } else if app.closing {
@@ -261,13 +261,19 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         Rect::new(page.x, rows[2].y, page.width, 1),
         hint,
     );
+    shell::repaint_popovers(frame, app);
     if let Some(overlay) = app.overlay() {
         crate::overlay::draw(frame, app, overlay, area, base);
     } else {
         app.layer.close();
-        if app.tooltip_visible() {
+        if !app.completion_open() && app.tooltip_visible() {
             draw_tooltip(frame, app, area, base);
         }
+    }
+    if app.completion_editor_active() {
+        crate::pages::completion::draw(frame, app, area);
+    } else {
+        app.completion.invalidate_geometry();
     }
 }
 
@@ -405,7 +411,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::NextTab => ("›", ">"),
         Action::PreviousTab => ("‹", "<"),
         Action::CloseTab(_) => ("×", "x"),
-        Action::Copy(_) => ("⧉", "C"),
+        Action::Copy(_) | Action::CopyMessage { .. } => ("⧉", "C"),
         Action::CopyFile(_) => ("⧉", "C"),
         Action::OpenInteraction => ("!", "!"),
         Action::Interaction(_) => ("?", "?"),
@@ -507,6 +513,11 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::Recap(_) => ("≡", "="),
         Action::Resume(_) => ("↻", "R"),
         Action::Branch(_) => ("↳", "+"),
+        Action::Bundle(_) => ("⇄", "<>"),
+        Action::SessionControls(_) => ("⋯", "..."),
+        Action::Completion(_) => ("@", "@"),
+        Action::Resources(_) => ("▣", "T"),
+        Action::Attention(_) => ("●", "N"),
         Action::Revision(_) => ("↶", "<"),
         Action::Onboard(_) => ("⊕", "+"),
         Action::Forward => ("›", ">"),
@@ -621,7 +632,7 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
         Action::NextTab => "tabs-next",
         Action::PreviousTab => "tabs-previous",
         Action::CloseTab(_) => "tabs-close",
-        Action::Copy(mode) => mode.label(),
+        Action::Copy(mode) | Action::CopyMessage { mode, .. } => mode.label(),
         Action::CopyFile(_) => "file-copy-path",
         Action::Interaction(command) => command.label(),
         Action::OpenInteraction => "interaction-open",
@@ -648,6 +659,11 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
         Action::CreateSession => "session-create",
         Action::Manage(command) => command.label(),
         Action::Branch(command) => command.label(),
+        Action::Bundle(command) => command.label(),
+        Action::SessionControls(command) => command.label(),
+        Action::Resources(command) => command.label(),
+        Action::Completion(command) => command.label(),
+        Action::Attention(command) => command.label(),
         Action::Recap(command) => command.label(),
         Action::Resume(command) => command.label(),
         Action::Revision(command) => command.label(),

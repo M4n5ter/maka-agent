@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::{advance, invalidate_test, write_secret};
+use super::{advance, invalidate_test, status, status_basis, write_secret};
 use crate::{ConfigError, ConfigurationStore, Result, TransactionMode, catalog};
 use maka_runtime::configuration::{headers::*, *};
 use sqlx::SqliteConnection;
@@ -47,12 +47,17 @@ impl ConfigurationStore {
         validation::entity_id(&id).map_err(ConfigError::Invalid)?;
         self.transaction(TransactionMode::Deferred, move |tx| {
             Box::pin(async move {
-                if catalog::find(tx, &id).await?.is_none() {
+                let Some(connection) = catalog::find(tx, &id).await? else {
                     return Ok(RequestHeadersQueryResult::ConnectionNotFound);
-                }
-                let secret = read(tx, &locator(id)).await?;
+                };
+                let locator = locator(id);
+                let secret = read(tx, &locator).await?;
                 Ok(RequestHeadersQueryResult::Found {
                     names: parse(secret.as_deref())?.into_keys().collect(),
+                    basis: RequestHeadersBasis {
+                        connection: catalog::basis(&connection),
+                        credential: status_basis(&status(tx, &locator).await?),
+                    },
                 })
             })
         })
@@ -60,7 +65,8 @@ impl ConfigurationStore {
     }
 
     /// Complete replacement under the vault's existing transaction owner.
-    /// Missing values retain that name's value; omitted names are deleted.
+    /// The name snapshot's connection and credential bases must still match.
+    /// Missing values retain that known name's value; omitted names are deleted.
     pub async fn replace_request_headers(
         &self,
         mut input: RequestHeadersReplace,
@@ -70,10 +76,25 @@ impl ConfigurationStore {
         validation::revision(now, false).map_err(ConfigError::Invalid)?;
         self.transaction(TransactionMode::Immediate, move |tx| {
             Box::pin(async move {
-                if catalog::find(tx, &input.connection_id).await?.is_none() {
+                let id = &input.expected.connection.connection_id;
+                let Some(connection) = catalog::find(tx, id).await? else {
                     return Ok(RequestHeadersReplaceResult::ConnectionNotFound);
+                };
+                let actual_connection = catalog::basis(&connection);
+                if actual_connection != input.expected.connection {
+                    return Ok(RequestHeadersReplaceResult::ConnectionStale {
+                        expected: input.expected.connection,
+                        actual: actual_connection,
+                    });
                 }
-                let locator = locator(input.connection_id);
+                let locator = locator(id.clone());
+                let actual_credential = status_basis(&status(tx, &locator).await?);
+                if actual_credential != input.expected.credential {
+                    return Ok(RequestHeadersReplaceResult::CredentialStale {
+                        expected: input.expected.credential,
+                        actual: actual_credential,
+                    });
+                }
                 let previous = read(tx, &locator).await?;
                 let saved = parse(previous.as_deref())?;
                 let by_name: BTreeMap<_, _> = saved
@@ -101,7 +122,10 @@ impl ConfigurationStore {
                     .map_err(ConfigError::Invalid)?;
                 let names = headers.keys().cloned().collect();
                 if saved == headers && !(headers.is_empty() && previous.is_some()) {
-                    return Ok(RequestHeadersReplaceResult::Unchanged { names });
+                    return Ok(RequestHeadersReplaceResult::Unchanged {
+                        names,
+                        basis: input.expected,
+                    });
                 }
                 if headers.is_empty() {
                     sqlx::query("DELETE FROM credentials WHERE locator = ?")
@@ -113,7 +137,16 @@ impl ConfigurationStore {
                 }
                 invalidate_test(tx, &locator).await?;
                 advance(tx).await?;
-                Ok(RequestHeadersReplaceResult::Committed { names })
+                let connection = catalog::find(tx, id)
+                    .await?
+                    .ok_or_else(|| ConfigError::Invalid("connection disappeared".into()))?;
+                Ok(RequestHeadersReplaceResult::Committed {
+                    names,
+                    basis: RequestHeadersBasis {
+                        connection: catalog::basis(&connection),
+                        credential: status_basis(&status(tx, &locator).await?),
+                    },
+                })
             })
         })
         .await

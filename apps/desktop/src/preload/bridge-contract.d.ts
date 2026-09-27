@@ -958,7 +958,7 @@ export interface MakaBridge {
   };
 
   newTasks: {
-    searchExecutors(host: DesktopNewTaskHostRef, query: { query: string }): Promise<import('@maka-agent/plugin-sdk/host').ExecutorChoices>;
+    searchExecutors(host: DesktopNewTaskHostRef, query: import('@maka-agent/plugin-sdk/host').ExecutorSearch): Promise<import('@maka-agent/plugin-sdk/host').ExecutorSearchResult>;
     getCatalog(): Promise<DesktopNewTaskCatalog>;
     subscribeChanges(handler: () => void): () => void;
     addProject(host: DesktopNewTaskHostRef, name?: string): Promise<
@@ -1304,7 +1304,7 @@ export interface MakaBridge {
       thinkingLevel: ThinkingLevel | null;
     }): Promise<DesktopSessionUpdateResult<DesktopSessionSummary>>;
     setExecutorConfiguration(sessionId: string, input: { executorId: string; settings: import('@maka-agent/plugin-sdk/host').ExecutorSettings }): Promise<DesktopSessionUpdateResult<DesktopSessionSummary>>;
-    searchExecutors(sessionId: string, query: { query: string }): Promise<import('@maka-agent/plugin-sdk/host').ExecutorChoices>;
+    searchExecutors(sessionId: string, query: import('@maka-agent/plugin-sdk/host').ExecutorSearch): Promise<import('@maka-agent/plugin-sdk/host').ExecutorSearchResult>;
     setThinkingLevel(sessionId: string, level: ThinkingLevel | undefined | null): Promise<DesktopSessionUpdateResult<DesktopSessionSummary>>;
     /**
      * `requireArchived` holds the caller's premise through the deletion: a task
@@ -1482,6 +1482,7 @@ export interface MakaBridge {
     getRequestHeaders(connection: import('../shared/desktop-connection-snapshot').DesktopConnectionIdentity, host?: DesktopRuntimeHostRef): Promise<import('@maka/core/llm-connections').SavedRequestHeaders>;
     setRequestHeaders(
       connection: import('../shared/desktop-connection-snapshot').DesktopConnectionIdentity,
+      expected: import('@maka/core/llm-connections').RequestHeadersBasis,
       headers: readonly import('@maka/core/llm-connections').RequestHeaderUpdate[],
       host?: DesktopRuntimeHostRef,
     ): Promise<import('@maka/core/llm-connections').SavedRequestHeaders>;

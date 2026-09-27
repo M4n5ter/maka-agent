@@ -209,6 +209,7 @@ impl Executions {
                             // Accepted source content already contains the frozen
                             // instructions; recovery must not load it a second time.
                             input_selections: Default::default(),
+                            input_selection_sources: Default::default(),
                             turn_orchestration: intent
                                 .and_then(|intent| intent.turn_orchestration.clone()),
                             max_steps: None,

@@ -21,7 +21,7 @@ use crate::{Error, catalog, intent, source};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     execution::{Access, CommandError},
-    llm::{Choices, Models, Search},
+    llm::{Models, Search, SearchResult},
     remote::{Caller, Error as RemoteError, Method},
     storage::{Store, StoreError},
 };
@@ -89,7 +89,7 @@ pub enum Request {
     rename_all_fields = "camelCase"
 )]
 enum Response {
-    Models { choices: Choices },
+    Models { choices: SearchResult },
     Sources { snapshot: source::Snapshot },
     Catalog { page: catalog::Page },
     Copy { copy: intent::Copy },

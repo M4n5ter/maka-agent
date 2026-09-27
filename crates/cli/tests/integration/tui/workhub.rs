@@ -77,7 +77,7 @@ fn new_root_delegates_repairs_the_same_task_and_composes_a_runtime_js_filler() {
     tui.wait_for("Result alpha complete");
     tui.click_page_text("Open the session doing it");
     tui.wait_for("Message…");
-    tui.click_text("ⓘ");
+    tui.session_view_action("Show / hide session details");
     tui.wait_for(&format!("Session ID: {alpha_session}"));
     setup::open_task(&mut tui, "Task alpha");
 

@@ -20,6 +20,7 @@
 use super::support::client_probe::ClientFixture;
 mod fixtures;
 mod host;
+mod recovery;
 use fixtures::{configure, seed};
 use host::Running;
 use maka_client::Notification;
@@ -29,7 +30,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 #[tokio::test]
-async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_restart() {
+async fn native_bundle_transfer_binds_preview_and_recovers_original_receipt_after_restart() {
     let source = ClientFixture::new("maka-bundle-source-");
     let destination = ClientFixture::new("maka-bundle-destination-");
     let log = source.log().await;
@@ -69,6 +70,16 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
         OperationErrorCode::OperationConflict,
     );
     assert_eq!(tokio::fs::read(&path).await.unwrap(), bytes);
+    let alternate_path = source.workspace.join("alternate.maka-session");
+    source_host
+        .client
+        .request(
+            Operation::SessionBundleExport,
+            json!({"sessionId":"child","destination":alternate_path}),
+        )
+        .await
+        .unwrap();
+    let alternate_bytes = tokio::fs::read(&alternate_path).await.unwrap();
     source_host.close().await;
     let recovered = source.log().await;
     fixtures::assert_interrupted(&recovered).await;
@@ -76,8 +87,26 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
 
     let mut target = Running::open(&destination).await;
     configure(&target.client).await;
-    let request =
+    let mut request =
         json!({"source":path,"workspace":{"kind":"host_path","path":destination.workspace}});
+    let expected = target
+        .client
+        .request(Operation::SessionBundleImportPreview, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(expected["sessionCount"], 3);
+    assert_eq!(expected["artifactFiles"], 0);
+    let query =
+        json!({"bundleDigest":expected["bundleDigest"],"bindingDigest":expected["bindingDigest"]});
+    assert_eq!(
+        target
+            .client
+            .request(Operation::SessionBundleImportQuery, query.clone())
+            .await
+            .unwrap(),
+        json!({"receipt":null})
+    );
+    request["expected"] = expected.clone();
     let invalid = source.workspace.join("truncated.maka-session");
     tokio::fs::write(&invalid, &bytes[..bytes.len() / 2])
         .await
@@ -86,13 +115,53 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
         target
             .client
             .request(
-                Operation::SessionBundleImport,
+                Operation::SessionBundleImportPreview,
                 json!({
                     "source":invalid,"workspace":request["workspace"]
                 }),
             )
             .await,
         OperationErrorCode::SourceUnreadable,
+    );
+    // The same path now contains another valid archive. It must not turn the
+    // user's confirmation into permission to import these different bytes.
+    tokio::fs::write(&path, &alternate_bytes).await.unwrap();
+    rejected(
+        target
+            .client
+            .request(Operation::SessionBundleImport, request.clone())
+            .await,
+        OperationErrorCode::CandidateSetStale,
+    );
+    tokio::fs::write(&path, &bytes).await.unwrap();
+    for field in [
+        "bundleDigest",
+        "bindingDigest",
+        "sessionCount",
+        "artifactFiles",
+    ] {
+        let mut changed = request.clone();
+        changed["expected"][field] = if field.ends_with("Digest") {
+            json!(format!("sha256:{}", "f".repeat(64)))
+        } else {
+            json!(expected[field].as_u64().unwrap() + 1)
+        };
+        rejected(
+            target
+                .client
+                .request(Operation::SessionBundleImport, changed)
+                .await,
+            OperationErrorCode::CandidateSetStale,
+        );
+    }
+    let mut changed_workspace = request.clone();
+    changed_workspace["workspace"]["path"] = json!(source.workspace);
+    rejected(
+        target
+            .client
+            .request(Operation::SessionBundleImport, changed_workspace)
+            .await,
+        OperationErrorCode::CandidateSetStale,
     );
     let before = target
         .client
@@ -112,7 +181,21 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
     );
     let imported = first.unwrap();
     assert_eq!(concurrent.unwrap(), imported, "concurrent exact retry");
-    assert_eq!(imported, json!({"sessionCount":3,"artifactFiles":0}));
+    assert_eq!(
+        imported,
+        json!({"sessionCount":3,"artifactFiles":0,
+        "rootSessionId":"source","sessionIds":["child","managed","source"]})
+    );
+    let receipt =
+        json!({"receipt":{"rootSessionId":"source","sessionIds":["child","managed","source"]}});
+    assert_eq!(
+        target
+            .client
+            .request(Operation::SessionBundleImportQuery, query.clone())
+            .await
+            .unwrap(),
+        receipt
+    );
     assert_eq!(
         target
             .client
@@ -139,7 +222,8 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
             break;
         }
     }
-    // A lost response must replay the accepted binding even if defaults disappear.
+    // An explicit duplicate write remains content-bound, including its original
+    // destination binding even if defaults disappear. Recovery itself is read-only.
     target
         .client
         .request(
@@ -156,17 +240,37 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
             .unwrap(),
         imported
     );
+    let other_preview = target
+        .client
+        .request(
+            Operation::SessionBundleImportPreview,
+            json!({"source":path,"workspace":{"kind":"host_path","path":source.workspace}}),
+        )
+        .await
+        .unwrap();
     rejected(
         target
             .client
             .request(
                 Operation::SessionBundleImport,
                 json!({
-                    "source":path,"workspace":{"kind":"host_path","path":source.workspace}
+                    "source":path,"workspace":{"kind":"host_path","path":source.workspace},"expected":other_preview
                 }),
             )
             .await,
         OperationErrorCode::OperationConflict,
+    );
+    rejected(target.client.request(Operation::SessionBundleImportQuery,
+        json!({"bundleDigest":query["bundleDigest"],"bindingDigest":other_preview["bindingDigest"]})).await,
+        OperationErrorCode::OperationConflict);
+    tokio::fs::remove_file(&path).await.unwrap();
+    assert_eq!(
+        target
+            .client
+            .request(Operation::SessionBundleImportQuery, query.clone())
+            .await
+            .unwrap(),
+        receipt
     );
     target.close().await;
 
@@ -198,10 +302,10 @@ async fn native_bundle_file_transfer_binds_local_authority_and_retries_after_res
     assert_eq!(
         target
             .client
-            .request(Operation::SessionBundleImport, request)
+            .request(Operation::SessionBundleImportQuery, query)
             .await
             .unwrap(),
-        imported
+        receipt
     );
     target.close().await;
     let names: Vec<_> = std::fs::read_dir(&source.workspace)

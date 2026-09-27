@@ -32,6 +32,14 @@ pub struct Input {
     pub directories: Vec<turn::DirectoryReference>,
     pub skills: Vec<crate::pages::skills::Picked>,
     pub excluded: Vec<super::resources::Resource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<crate::editor::marks::Mark>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_marks: Vec<crate::editor::marks::Mark>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub bindings: std::collections::BTreeMap<String, crate::pages::completion::Binding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved: Vec<crate::pages::completion::Binding>,
 }
 
 impl Input {
@@ -39,6 +47,10 @@ impl Input {
         Self {
             content: original.content.clone(),
             excluded: vec![],
+            marks: vec![],
+            display_marks: vec![],
+            bindings: Default::default(),
+            resolved: vec![],
             files: vec![],
             directories: vec![],
             skills: vec![],
@@ -96,6 +108,7 @@ impl Input {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_completion()?;
         self.validate_resources()?;
         crate::pages::skills::validate(&self.skills)?;
         maka_runtime::input::validate_selections(&self.message().input_selections)
@@ -142,20 +155,16 @@ impl Input {
     }
 }
 
-pub fn batch(
-    inputs: &[Input],
-    target: &sources::Output,
-    turn_id: &str,
-) -> Result<TurnBatchStartInput, String> {
+pub(super) fn validate_mapping(inputs: &[Input], target: &sources::Output) -> Result<(), String> {
     if inputs.len() != target.messages.len() || inputs.is_empty() {
         return Err("revision-changed".into());
     }
     let orchestration = inputs[0].original.turn_orchestration.clone();
-    let mut messages = Vec::with_capacity(inputs.len());
     for (input, mapped) in inputs.iter().zip(&target.messages) {
         let original = &input.original;
         if original.message_id != mapped.message_id
             || original.input_selections != mapped.input_selections
+            || original.input_selection_sources != mapped.input_selection_sources
             || original.turn_orchestration != mapped.turn_orchestration
             || original.turn_orchestration != orchestration
         {
@@ -182,6 +191,20 @@ pub fn batch(
                 return Err("revision-changed".into());
             }
         }
+    }
+    Ok(())
+}
+
+pub fn batch(
+    inputs: &[Input],
+    target: &sources::Output,
+    turn_id: &str,
+) -> Result<TurnBatchStartInput, String> {
+    validate_mapping(inputs, target)?;
+    let orchestration = inputs[0].original.turn_orchestration.clone();
+    let mut messages = Vec::with_capacity(inputs.len());
+    for (input, mapped) in inputs.iter().zip(&target.messages) {
+        input.validate()?;
         let mut message = input.message();
         message.content.attachments = mapped
             .content

@@ -162,6 +162,7 @@ impl Plugin for JavaScript {
                 .call(vec!["activate".into()], vec![json!(identity), config])
                 .await
                 .map_err(message)?;
+            bridge.retain_initial_metadata(&registrations)?;
             let staged = registration::stage(
                 registrations,
                 &module,

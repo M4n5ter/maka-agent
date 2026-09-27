@@ -46,6 +46,8 @@ impl Cursor {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Saved {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<super::marks::Mark>,
     pub text: String,
     pub cursor: usize,
     pub anchor: Option<usize>,
@@ -54,6 +56,7 @@ pub struct Saved {
 
 impl Saved {
     pub fn validate(&self) -> Result<(), &'static str> {
+        super::marks::validate(&self.marks, &self.text)?;
         Cursor {
             cursor: self.cursor,
             anchor: self.anchor,
@@ -86,6 +89,7 @@ impl Editor {
     }
     pub fn save(&self) -> Saved {
         Saved {
+            marks: self.marks.clone(),
             text: self.text.clone(),
             cursor: self.selection.cursor,
             anchor: self.selection.anchor,
@@ -96,6 +100,7 @@ impl Editor {
         saved.validate()?;
         let mut editor = Self {
             text: saved.text,
+            marks: saved.marks,
             selection: Selection {
                 cursor: saved.cursor,
                 anchor: saved.anchor,

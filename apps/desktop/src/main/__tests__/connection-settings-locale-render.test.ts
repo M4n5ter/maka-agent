@@ -332,6 +332,72 @@ test('credential probing does not flash a page-level loading warning', async () 
   });
 });
 
+test('header editing refreshes its basis after other connection edits and requires reopening after conflict', async () => {
+  const harness = installRenderer();
+  const connection = relayConnection();
+  let revision = 1;
+  let queries = 0;
+  const submitted: number[] = [];
+  const bridge = connectionDetailBridge({
+    hasSecret: async () => true,
+    getRequestHeaders: async () => {
+      queries += 1;
+      return { names: [`X-Revision-${revision}`], basis: {
+        connection: { connectionId: connection.connectionId, revision }, credential: null,
+      } };
+    },
+    setRequestHeaders: async (_identity, expected, headers) => {
+      submitted.push(expected.connection.revision);
+      if (expected.connection.revision !== revision) {
+        throw new Error('Unable to save custom request headers: connection_stale');
+      }
+      return { names: headers.map(({ name }) => name), basis: expected };
+    },
+  });
+  const render = (name: string) => harness.render('en', createElement(components.RuntimeHostSettingsTarget, {
+    host: { profileId: 'local', hostId: 'host-local' },
+    children: createElement(components.ConnectionDetail, {
+      bridge, connection: { ...connection, name }, isDefault: true,
+      onChanged: async () => {}, onDeleted: async () => {},
+    }),
+  }));
+  const button = (label: string) => {
+    const scope = label.startsWith('Edit:') ? harness.document
+      : harness.document.querySelector('.settingsExpandableEditor');
+    assert.ok(scope);
+    const result = [...scope.querySelectorAll<HTMLButtonElement>('button')]
+      .find((item) => item.getAttribute('aria-label') === label || item.textContent === label);
+    assert.ok(result, `missing ${label} button`);
+    return result;
+  };
+  await render(connection.name);
+  assert.equal(queries, 1);
+  revision = 2;
+  await render('Renamed connection');
+  await act(async () => button('Edit: Custom request headers').click());
+  assert.equal(queries, 2);
+  assert.ok([...harness.document.querySelectorAll<HTMLInputElement>('input')]
+    .some((input) => input.value === 'X-Revision-2'));
+
+  revision = 3;
+  await act(async () => button('Remove').click());
+  assert.equal(harness.document.querySelector('.requestHeaderRow'), null);
+  assert.equal(button('Save').disabled, false);
+  await act(async () => button('Save').click());
+  assert.deepEqual(submitted, [2]);
+  assert.equal(queries, 2, 'save must not silently refresh or retry the editing basis');
+  assert.ok(harness.document.body.textContent.includes('Cancel and reopen the header editor'));
+  assert.equal(harness.document.querySelector('.requestHeaderRow'), null, 'conflict preserves the removal draft');
+
+  await act(async () => button('Cancel').click());
+  await act(async () => button('Edit: Custom request headers').click());
+  assert.ok([...harness.document.querySelectorAll<HTMLInputElement>('input')]
+    .some((input) => input.value === 'X-Revision-3'));
+  await act(async () => button('Remove').click());
+  await act(async () => button('Save').click());
+  assert.deepEqual(submitted, [2, 3]);
+});
+
 test('model rows retain named parameter actions without mounting a tooltip layer per row', async () => {
   const harness = installRenderer();
   const base = relayConnection();
@@ -449,7 +515,9 @@ function connectionDetailBridge(overrides: Partial<ConnectionsBridge>): Connecti
     test: unexpectedCall,
     fetchModels: unexpectedCall,
     hasSecret: unexpectedCall,
-    getRequestHeaders: async () => ({ names: [] }),
+    getRequestHeaders: async (connection) => ({ names: [], basis: {
+      connection: { connectionId: connection.connectionId, revision: 1 }, credential: null,
+    } }),
     setRequestHeaders: unexpectedCall,
     ...overrides,
   };

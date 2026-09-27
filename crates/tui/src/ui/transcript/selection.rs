@@ -452,6 +452,25 @@ impl Transcript {
         }
     }
     pub fn copy_text(&self, mode: CopyMode, ascii: bool) -> Result<String, &'static str> {
+        self.copy_text_with(mode, ascii, None)
+    }
+    pub(crate) fn copy_text_at(
+        &self,
+        key: &MessageKey,
+        mode: CopyMode,
+        ascii: bool,
+    ) -> Result<String, &'static str> {
+        if mode == CopyMode::Selection {
+            return Err("chat-copy-empty");
+        }
+        self.copy_text_with(mode, ascii, Some(key))
+    }
+    fn copy_text_with(
+        &self,
+        mode: CopyMode,
+        ascii: bool,
+        key: Option<&MessageKey>,
+    ) -> Result<String, &'static str> {
         let text = match mode {
             CopyMode::Selection => {
                 if self.text_selection.too_large {
@@ -477,8 +496,11 @@ impl Transcript {
                     .join("\n\n")
             }
             CopyMode::Message | CopyMode::Source => {
-                let key = self.selection().ok_or("chat-copy-empty")?;
-                let block = &self.blocks[&key];
+                let key = key
+                    .cloned()
+                    .or_else(|| self.selection())
+                    .ok_or("chat-copy-empty")?;
+                let block = self.blocks.get(&key).ok_or("chat-copy-empty")?;
                 if mode == CopyMode::Source {
                     if block.text.len() > MAX_COPY_BYTES {
                         return Err("chat-copy-too-large");

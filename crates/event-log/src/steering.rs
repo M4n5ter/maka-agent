@@ -26,12 +26,15 @@ pub(crate) async fn validate_append(
     tx: &mut SqliteConnection,
     event: &RuntimeEvent,
 ) -> Result<(), StoreError> {
-    let Fact::MessageSteered { message, .. } = &event.fact else {
+    let Fact::MessageSteered { message, source } = &event.fact else {
         return Ok(());
     };
-    message
-        .validate()
-        .map_err(|error| StoreError::InvalidTransition(error.into()))?;
+    maka_runtime::event::validate_steered_source(
+        message,
+        source.as_deref(),
+        &event.invocation.session_id,
+    )
+    .map_err(|error| StoreError::InvalidTransition(error.into()))?;
     let eligible: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE invocation_id = ?
          AND kind = 'invocation_opened' AND json_extract(event_json, '$.fact.input.kind') IN ('message', 'continuation', 'handoff'))"
@@ -88,13 +91,14 @@ impl EventLog {
                     row.map(|(sequence, json)| {
                         let json = json.ok_or(StoreError::PrefixTooLarge)?;
                         let event: RuntimeEvent = serde_json::from_str(&json)?;
-                        let Fact::MessageSteered { message, .. } = &event.fact else {
+                        let Fact::MessageSteered { message, source } = &event.fact else {
                             return Err(StoreError::InvalidTransition(
                                 "invalid steering proof".into(),
                             ));
                         };
-                        message
-                            .validate()
+                        maka_runtime::event::validate_steered_source(
+                            message, source.as_deref(), &event.invocation.session_id,
+                        )
                             .map_err(|error| StoreError::InvalidTransition(error.into()))?;
                         if event.invocation.session_id != session_id
                             || message.message_id != message_id

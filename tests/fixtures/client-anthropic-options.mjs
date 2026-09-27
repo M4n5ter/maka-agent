@@ -180,13 +180,35 @@ export async function verifyAnthropicOptions(connection, workspace, reopened) {
       (await request('connection.models.fetch', { connectionId: basis.connectionId })).kind,
       'committed',
     );
-    assert.deepEqual(
-      await request('connection.request-headers.replace', {
+    const replaceHeaders = async (value) => {
+      const query = () =>
+        request('connection.request-headers.query', {
+          connectionId: basis.connectionId,
+        });
+      const { basis: expected } = await query();
+      const result = await request('connection.request-headers.replace', {
+        expected,
+        headers: [{ name: 'X-Maka-Context', value }],
+      });
+      assert.deepEqual(result, {
+        kind: 'committed',
+        names: ['X-Maka-Context'],
+        basis: result.basis,
+      });
+      assert.deepEqual(result.basis.connection, expected.connection);
+      assert.deepEqual(result.basis.credential.locator, {
+        scope: 'connection',
         connectionId: basis.connectionId,
-        headers: [{ name: 'X-Maka-Context', value: 'initial' }],
-      }),
-      { kind: 'committed', names: ['X-Maka-Context'] },
-    );
+        kind: 'request_headers',
+      });
+      assert.notDeepEqual(result.basis.credential, expected.credential);
+      assert.deepEqual(await query(), {
+        kind: 'found',
+        names: result.names,
+        basis: result.basis,
+      });
+    };
+    await replaceHeaders('initial');
     const catalog = await request('connection.catalog.query', { kind: 'start' });
     for (const [modelIndex, model] of models.entries()) {
       const entry = catalog.items.find(
@@ -217,13 +239,7 @@ export async function verifyAnthropicOptions(connection, workspace, reopened) {
         ].entries()) {
           if (index > 0) {
             if (modelIndex === 0 && index === 1) {
-              assert.deepEqual(
-                await request('connection.request-headers.replace', {
-                  connectionId: basis.connectionId,
-                  headers: [{ name: 'X-Maka-Context', value: 'updated' }],
-                }),
-                { kind: 'committed', names: ['X-Maka-Context'] },
-              );
+              await replaceHeaders('updated');
               const page = await request('connection.catalog.query', { kind: 'start' });
               const row = page.items.find((item) => item.kind === 'connection');
               assert.equal(

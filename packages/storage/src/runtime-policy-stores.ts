@@ -244,8 +244,8 @@ function createWriterFacade(coordinator: RuntimePolicyCoordinator): RuntimePolic
             )) as OperationCoordinator['exportCredentialMaterial'],
       getConnectionRequestHeaders: (connectionId) =>
         coordinator.getConnectionRequestHeaders(connectionId),
-      replaceConnectionRequestHeaders: (connectionId, updates) =>
-        coordinator.replaceConnectionRequestHeaders(connectionId, updates),
+      replaceConnectionRequestHeaders: (expected, updates) =>
+        coordinator.replaceConnectionRequestHeaders(expected, updates),
       resolveExecutionConnection: (ref) => coordinator.resolveExecutionConnection(ref),
       resolveHostOutboundExecution: () => coordinator.resolveHostOutboundExecution(),
       resolveNetworkProxyExecution: (input) => coordinator.resolveNetworkProxyExecution(input),

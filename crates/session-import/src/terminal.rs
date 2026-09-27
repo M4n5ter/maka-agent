@@ -26,6 +26,7 @@ use crate::remote::Import;
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     contributions::Staged,
+    llm::{Choice, Choices, SearchResult},
     remote::{Caller, Error, Method, key},
     session::import::{ImportState, Receipt},
     terminal_ui::{
@@ -37,6 +38,8 @@ use maka_plugins::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+mod projects;
 
 pub(crate) fn publish(
     backend: Arc<Import>,
@@ -155,34 +158,13 @@ impl Copy {
 }
 #[derive(Deserialize)]
 struct Modeled {
-    choices: Choices,
+    choices: SearchResult,
 }
-#[derive(Deserialize)]
-struct Choices {
-    models: Vec<Choice>,
-    complete: bool,
-}
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Choice {
-    model: Value,
-    display_name: String,
-    connection_name: String,
-    default_thinking_level: Option<Value>,
-    is_default: bool,
-}
-impl Choice {
-    /// A stable identity for the choice, from what it binds.
-    fn id(&self) -> String {
-        let part = |name: &str| {
-            self.model
-                .get(name)
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        };
-        format!("{}:{}", part("connectionSlug"), part("model"))
-    }
+/// Keep the full connection identity without exceeding a choice's wire key budget.
+fn model_id(choice: &Choice) -> String {
+    maka_runtime::artifact::content_digest(
+        &serde_json::to_vec(&choice.model).expect("model binding"),
+    )
 }
 
 /// Where the category is: the sources, one source's conversations, one
@@ -193,6 +175,8 @@ enum Route {
     Browse {
         source: uuid::Uuid,
         text: String,
+        #[serde(default)]
+        archived: bool,
         cursor: Option<String>,
     },
     Import {
@@ -201,6 +185,7 @@ enum Route {
         #[serde(default)]
         models: ModelQuery,
     },
+    Projects(projects::Location),
     Copies {
         after: Option<uuid::Uuid>,
     },
@@ -212,23 +197,76 @@ enum Route {
     },
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct ModelQuery {
     #[serde(default)]
     query: String,
     #[serde(default)]
     page: usize,
+    cursor: Option<maka_plugins::llm::Cursor>,
     destination: Option<String>,
+    project: Option<projects::Selection>,
+    selected_model: Option<String>,
     sandbox: Option<String>,
 }
 
 const MODEL_PAGE: usize = 32;
+
+fn destination_target(
+    query: &ModelQuery,
+    value: &str,
+) -> Result<maka_runtime::execution::WorkspaceTarget, Error> {
+    use maka_runtime::execution::WorkspaceTarget;
+    if let Some(project) = &query.project {
+        return Ok(WorkspaceTarget::Project {
+            project_id: project.id.clone(),
+        });
+    }
+    if value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
+        return Err(Error::Invalid("Invalid import destination".into()));
+    }
+    Ok(WorkspaceTarget::HostPath { path: value.into() })
+}
+
+fn remember_destination(models: &mut ModelQuery, submission: &Submission) -> Result<(), Error> {
+    if models.project.is_none() {
+        models.destination = Some(submission.text("destination")?.to_owned());
+    }
+    models.sandbox = Some(submission.text("sandbox")?.to_owned());
+    let query = submission.text("query")?.trim().to_owned();
+    if query != models.query {
+        models.cursor = None;
+        models.page = 0;
+    }
+    models.query = query;
+    if let Some(model) = submission.fields.get("model") {
+        models.selected_model = Some(
+            model
+                .as_str()
+                .ok_or_else(|| Error::Invalid("Invalid model choice".into()))?
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
 
 fn failed(error: impl std::fmt::Display) -> Error {
     Error::Provider(error.to_string())
 }
 fn clean(value: &str) -> String {
     view::build::clean(value, false)
+}
+fn choice_label(value: &str) -> String {
+    let value = clean(value);
+    if value.len() <= 256 {
+        value
+    } else {
+        format!(
+            "{}…{}",
+            &value[..value.floor_char_boundary(120)],
+            &value[value.ceil_char_boundary(value.len() - 120)..]
+        )
+    }
 }
 fn stamp(sources: &Sources) -> String {
     sources.revision.unwrap_or(0).to_string()
@@ -282,6 +320,7 @@ impl App for Importing {
                 Route::Browse {
                     source,
                     text,
+                    archived,
                     cursor,
                 } => {
                     let found = sources
@@ -294,7 +333,7 @@ impl App for Importing {
                             let cataloged: Cataloged = this
                                 .call(
                                     json!({"kind":"catalog","sourceId":source,"revision":sources.revision.unwrap_or(0),
-                                        "query":{"text":text,"includeArchived":false,"limit":20,"cursor":cursor}}),
+                                        "query":{"text":text,"includeArchived":archived,"limit":20,"cursor":cursor}}),
                                     &cx.caller,
                                 )
                                 .await?;
@@ -302,7 +341,14 @@ impl App for Importing {
                         }
                         None => None,
                     };
-                    Ok(browse(words, &sources, found, &text, catalog.as_ref()))
+                    Ok(browse(
+                        words,
+                        &sources,
+                        found,
+                        &text,
+                        archived,
+                        catalog.as_ref(),
+                    ))
                 }
                 Route::Copies { after } => {
                     let copies: Copied = this
@@ -317,18 +363,47 @@ impl App for Importing {
                 } => {
                     let choices: Modeled = this
                         .call(
-                            json!({"kind":"models","query":{"query":models.query}}),
+                            json!({"kind":"models","query":{"query":models.query,"cursor":models.cursor}}),
                             &cx.caller,
                         )
                         .await?;
-                    Ok(import(
-                        words,
-                        &sources,
-                        source,
-                        &entry,
-                        &models,
-                        &choices.choices,
-                    ))
+                    let (choices, stale) = match choices.choices {
+                        SearchResult::Page { page } => (page, false),
+                        SearchResult::Stale => (
+                            Choices {
+                                revision: 0,
+                                models: vec![],
+                                complete: true,
+                                next_cursor: None,
+                            },
+                            true,
+                        ),
+                    };
+                    let mut view = import(words, &sources, source, &entry, &models, &choices);
+                    if let Some(project) = &models.project
+                        && !projects::current(&cx.caller, project).await?
+                    {
+                        projects::changed(&mut view, words);
+                    }
+                    if stale && let Node::Column { children, .. } = &mut view.root {
+                        children.insert(
+                            0,
+                            text(
+                                "stale",
+                                words.t(
+                                    "Models changed. Search again to load current choices.",
+                                    "模型已变化，请重新搜索以加载当前选项。",
+                                    "模型已變更，請重新搜尋以載入目前選項。",
+                                ),
+                                Tone::Warning,
+                            ),
+                        );
+                    }
+                    Ok(view)
+                }
+                Route::Projects(location) => {
+                    let result = cx.caller.views.projects(location.page.clone()).await?;
+                    Ok(projects::view(words, &sources, &location, result))
                 }
                 Route::Edit { source } => {
                     let found = source.and_then(|id| {
@@ -360,21 +435,52 @@ impl App for Importing {
             let route: Option<Route> = serde_json::from_value(submission.route.clone()).ok();
             match (submission.action.as_str(), route) {
                 ("search", Some(Route::Browse { source, .. })) => Ok(Reply::Applied {
-                    route: json!({"kind":"browse","source":source,"text":submission.text("text")?.trim(),"cursor":null}),
+                    route: json!({"kind":"browse","source":source,"text":submission.text("text")?.trim(),"archived":submission.toggle("archived")?,"cursor":null}),
                 }),
                 (
-                    action @ ("search-models" | "models-next" | "models-previous"),
+                    action @ ("projects-open" | "directory"),
                     Some(Route::Import {
                         source,
                         entry,
                         mut models,
                     }),
                 ) => {
-                    models.destination = Some(submission.text("destination")?.to_owned());
-                    models.sandbox = Some(submission.text("sandbox")?.to_owned());
+                    remember_destination(&mut models, &submission)?;
+                    if action == "directory" {
+                        models.project = None;
+                        Ok(Reply::Applied {
+                            route: json!({"kind":"import","source":source,"entry":entry,"models":models}),
+                        })
+                    } else {
+                        Ok(Reply::Applied {
+                            route: json!({"kind":"projects","source":source,"entry":entry,"models":models,"page":{"kind":"start"}}),
+                        })
+                    }
+                }
+                (
+                    action @ ("search-models" | "models-next" | "models-previous" | "models-more"),
+                    Some(Route::Import {
+                        source,
+                        entry,
+                        mut models,
+                    }),
+                ) => {
+                    let original_query = models.query.clone();
+                    remember_destination(&mut models, &submission)?;
                     let query = submission.text("query")?.trim().to_owned();
-                    if action == "search-models" || query != models.query {
+                    if action == "search-models" || query != original_query {
                         models.query = query;
+                        models.page = 0;
+                        models.cursor = None;
+                    } else if action == "models-more" {
+                        let result: Modeled = this.call(json!({"kind":"models","query":{"query":models.query,"cursor":models.cursor}}), &cx.caller).await?;
+                        let SearchResult::Page { page } = result.choices else {
+                            return Ok(Reply::Conflict);
+                        };
+                        let Some(cursor) = page.next_cursor else {
+                            return Ok(Reply::Conflict);
+                        };
+                        models.cursor = Some(cursor);
                         models.page = 0;
                     } else if action == "models-next" {
                         models.page = models.page.saturating_add(1);
@@ -393,28 +499,37 @@ impl App for Importing {
                         models,
                     }),
                 ) => {
-                    let destination = submission.text("destination")?.trim().to_owned();
-                    if destination.is_empty() {
+                    let destination = if models.project.is_none() {
+                        submission.text("destination")?.trim().to_owned()
+                    } else {
+                        String::new()
+                    };
+                    if models.project.is_none() && destination.is_empty() {
                         return Ok(Reply::Rejected {
                             message: cx.t(
-                                "Choose the folder the session works in.",
-                                "请选择会话的工作目录。",
-                                "請選擇工作階段的工作目錄。",
+                                "Enter the destination directory or choose a project.",
+                                "请输入目标目录或选择项目。",
+                                "請輸入目的目錄或選擇專案。",
                             ),
                         });
                     }
+                    if let Some(project) = &models.project
+                        && !projects::current(&cx.caller, project).await?
+                    {
+                        return Ok(Reply::Rejected { message: cx.t("The selected project changed or is unavailable. Choose it again before importing.", "所选项目已变化或不可用，请重新选择后导入。", "所選專案已變更或無法使用，請重新選擇後匯入。") });
+                    }
+                    let workspace = destination_target(&models, &destination)?;
                     let models: Modeled = this
                         .call(
-                            json!({"kind":"models","query":{"query":models.query}}),
+                            json!({"kind":"models","query":{"query":models.query,"cursor":models.cursor}}),
                             &cx.caller,
                         )
                         .await?;
                     let choice = submission.text("model")?;
-                    let Some(model) = models
-                        .choices
-                        .models
-                        .iter()
-                        .find(|item| item.id() == choice)
+                    let SearchResult::Page { page: models } = models.choices else {
+                        return Ok(Reply::Conflict);
+                    };
+                    let Some(model) = models.models.iter().find(|item| model_id(item) == choice)
                     else {
                         return Ok(Reply::Conflict);
                     };
@@ -423,7 +538,7 @@ impl App for Importing {
                         "operationId": operation,
                         "selection": {"sourceId": source, "sourceRevision": sources.revision.unwrap_or(0),
                             "sessionId": entry.id, "path": entry.path},
-                        "workspace": {"kind":"host_path","path":destination},
+                        "workspace": workspace,
                         "settings": {
                             "target": {"kind":"model","model":model.model,"thinkingLevel":model.default_thinking_level},
                             "sandboxMode": submission.text("sandbox")?,
@@ -631,6 +746,7 @@ fn browse(
     sources: &Sources,
     source: Option<&Source>,
     query: &str,
+    archived: bool,
     catalog: Option<&Catalog>,
 ) -> View {
     let Some(source) = source else {
@@ -657,6 +773,11 @@ fn browse(
         "search",
         vec![
             input("text", "text", words.t("Find", "查找", "尋找")),
+            input(
+                "archived",
+                "archived",
+                words.t("Include archived", "包括归档", "包括封存"),
+            ),
             row(
                 "go",
                 vec![
@@ -708,7 +829,7 @@ fn browse(
                 link(
                     "more",
                     words.t("More", "更多", "更多"),
-                    json!({"kind":"browse","source":source.id,"text":query,"cursor":next}),
+                    json!({"kind":"browse","source":source.id,"text":query,"archived":archived,"cursor":next}),
                 )
                 .into(),
             );
@@ -717,9 +838,12 @@ fn browse(
     view_of(
         clean(&source.name),
         sources,
-        vec![view::build::line("text", clean(query), 256)],
+        vec![
+            view::build::line("text", clean(query), 256),
+            toggle("archived", archived),
+        ],
         vec![Action {
-            fields: vec!["text".into()],
+            fields: vec!["text".into(), "archived".into()],
             ..view::build::action("search", words.t("Search", "搜索", "搜尋"))
         }],
         column("root", children),
@@ -739,19 +863,13 @@ fn import(
     models.sort_by_key(|model| !model.is_default);
     let page = query.page.min(models.len().saturating_sub(1) / MODEL_PAGE);
     let visible = &models[page * MODEL_PAGE..models.len().min((page + 1) * MODEL_PAGE)];
-    let default = visible.first();
+    let default = visible
+        .iter()
+        .copied()
+        .find(|choice| query.selected_model.as_deref() == Some(model_id(choice).as_str()))
+        .or_else(|| visible.first().copied());
     let mut fields = vec![
         view::build::line("query", clean(&query.query), 512),
-        view::build::line(
-            "destination",
-            query
-                .destination
-                .as_deref()
-                .or(entry.cwd.as_deref())
-                .map(clean)
-                .unwrap_or_default(),
-            4096,
-        ),
         choice(
             "sandbox",
             query.sandbox.as_deref().unwrap_or("read-only"),
@@ -764,12 +882,33 @@ fn import(
             ],
         ),
     ];
-    let mut form = vec![input(
-        "destination",
-        "destination",
-        words.t("Folder", "目录", "目錄"),
-    )];
-    let mut sent = vec!["destination".to_owned(), "sandbox".to_owned()];
+    let mut form = vec![];
+    let mut sent = vec!["sandbox".to_owned()];
+    if let Some(project) = &query.project {
+        form.push(text(
+            "project-label",
+            words.t("Project", "项目", "專案"),
+            Tone::Subtle,
+        ));
+        form.push(text("project-name", clean(&project.name), Tone::Normal));
+    } else {
+        fields.push(view::build::line(
+            "destination",
+            query
+                .destination
+                .as_deref()
+                .or(entry.cwd.as_deref())
+                .map(clean)
+                .unwrap_or_default(),
+            4096,
+        ));
+        form.push(input(
+            "destination",
+            "destination",
+            words.t("Folder", "目录", "目錄"),
+        ));
+        sent.push("destination".to_owned());
+    }
     let mut children = vec![
         heading("title", clean(&entry.title)),
         stack(
@@ -780,28 +919,17 @@ fn import(
             ],
         ),
     ];
-    if !choices.complete {
-        children.push(text(
-            "incomplete",
-            words.t(
-                "More models are available. Refine your search.",
-                "还有更多模型，请缩小搜索范围。",
-                "還有更多模型，請縮小搜尋範圍。",
-            ),
-            Tone::Muted,
-        ));
-    }
     match default {
         Some(default) => {
             fields.push(choice(
                 "model",
-                default.id(),
+                model_id(default),
                 visible
                     .iter()
                     .map(|model| {
                         (
-                            model.id(),
-                            clean(&format!(
+                            model_id(model),
+                            choice_label(&format!(
                                 "{} · {}",
                                 model.display_name, model.connection_name
                             )),
@@ -828,14 +956,33 @@ fn import(
         words.t("Access", "权限", "權限"),
     ));
     children.push(stack("form", form));
+    let mut draft_fields = vec!["query".into()];
+    draft_fields.extend(sent.iter().cloned());
     let navigation = |id, label| Action {
-        fields: vec!["query".into(), "destination".into(), "sandbox".into()],
+        fields: draft_fields.clone(),
         ..view::build::action(id, label)
     };
     let mut actions = vec![navigation(
         "search-models",
         words.t("Search models", "搜索模型", "搜尋模型"),
     )];
+    actions.push(navigation(
+        "projects-open",
+        if query.project.is_some() {
+            words.t("Change project", "更换项目", "更換專案")
+        } else {
+            words.t("Choose a project", "选择项目", "選擇專案")
+        },
+    ));
+    let mut destinations = vec![button("projects-open", "projects-open", Role::Normal)];
+    if query.project.is_some() {
+        actions.push(navigation(
+            "directory",
+            words.t("Use a Host directory", "使用 Host 目录", "使用 Host 目錄"),
+        ));
+        destinations.push(button("directory", "directory", Role::Normal));
+    }
+    children.push(row("destinations", destinations));
     let mut pages = vec![];
     if page > 0 {
         actions.push(navigation(
@@ -850,6 +997,12 @@ fn import(
             words.t("More models", "更多模型", "更多模型"),
         ));
         pages.push(button("models-next", "models-next", Role::Normal));
+    } else if choices.next_cursor.is_some() {
+        actions.push(navigation(
+            "models-more",
+            words.t("More models", "更多模型", "更多模型"),
+        ));
+        pages.push(button("models-more", "models-more", Role::Normal));
     }
     if !pages.is_empty() {
         children.push(row("model-pages", pages));
@@ -1089,19 +1242,26 @@ mod tests {
             entries: vec![entry.clone()],
             next: Some("next".into()),
         };
-        browse(&words, &sources, source, "", Some(&catalog))
+        browse(&words, &sources, source, "", false, Some(&catalog))
             .validate()
             .unwrap();
         let model = Choice {
-            model: json!({"connectionId":"c","connectionSlug":"openai","model":"gpt"}),
+            model: maka_runtime::execution::ModelBinding {
+                connection_id: "c".into(),
+                connection_slug: "openai".into(),
+                model: "gpt".into(),
+            },
             display_name: "GPT".into(),
             connection_name: "OpenAI".into(),
             default_thinking_level: None,
+            thinking_levels: vec![],
             is_default: true,
         };
         let models = Choices {
+            revision: 1,
             models: vec![model],
             complete: true,
+            next_cursor: None,
         };
         let view = import(
             &words,
@@ -1123,8 +1283,10 @@ mod tests {
             &entry,
             &ModelQuery::default(),
             &Choices {
+                revision: 1,
                 models: vec![],
                 complete: true,
+                next_cursor: None,
             },
         )
         .validate()
@@ -1147,16 +1309,29 @@ mod tests {
             archived: false,
         };
         let choices = Choices {
+            revision: 1,
             models: (0..50)
                 .map(|index| Choice {
-                    model: json!({"connectionSlug":"fixture","model":format!("model-{index:02}")}),
+                    model: maka_runtime::execution::ModelBinding {
+                        connection_id: "fixture-id".into(),
+                        connection_slug: "fixture".into(),
+                        model: format!("model-{index:02}"),
+                    },
                     display_name: format!("Model {index:02}"),
                     connection_name: "Fixture".into(),
                     default_thinking_level: None,
+                    thinking_levels: vec![],
                     is_default: index == 40,
                 })
                 .collect(),
             complete: false,
+            next_cursor: Some(maka_plugins::llm::Cursor {
+                query: String::new(),
+                generation: uuid::Uuid::nil(),
+                configuration_revision: 1,
+                provider_revision: 1,
+                offset: 50,
+            }),
         };
         for locale in ["en", "zh-CN", "zh-TW"] {
             let mut admitted = std::collections::BTreeSet::new();
@@ -1181,7 +1356,7 @@ mod tests {
                     panic!("model choices")
                 };
                 if page == 0 {
-                    assert_eq!(value, "fixture:model-40");
+                    assert_eq!(value, &model_id(&choices.models[40]));
                 }
                 admitted.extend(options.iter().map(|option| option.value.clone()));
                 assert!(view.action("search-models").is_some());
@@ -1190,3 +1365,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod workflows;

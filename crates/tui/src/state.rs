@@ -22,7 +22,10 @@ mod store;
 
 use crate::{
     app::App,
-    pages::{branch, manage::oauth, recap, resume, revision, sending::Submission},
+    pages::{
+        branch, bundle, manage::oauth, recap, resume, revision, sending::Submission,
+        session_controls,
+    },
 };
 use maka_client::Error;
 use snapshot::Snapshot;
@@ -41,6 +44,9 @@ pub struct State {
     oauth: Option<oauth::Request>,
     branch: Option<branch::Request>,
     recap: Option<recap::Request>,
+    bundle: Option<bundle::Request>,
+    session_controls: Option<session_controls::Request>,
+    resources: Option<crate::pages::resources::Request>,
     plugins: Option<crate::pages::plugins::Request>,
     resume: Option<resume::Request>,
     revision: Option<revision::Request>,
@@ -56,6 +62,9 @@ struct Writing {
     oauth: Option<oauth::Request>,
     branch: Option<branch::Request>,
     recap: Option<recap::Request>,
+    bundle: Option<bundle::Request>,
+    session_controls: Option<session_controls::Request>,
+    resources: Option<crate::pages::resources::Request>,
     plugins: Option<crate::pages::plugins::Request>,
     resume: Option<resume::Request>,
     revision: Option<revision::Request>,
@@ -70,6 +79,9 @@ pub struct Written {
     pub oauth: Option<oauth::Request>,
     pub branch: Option<branch::Request>,
     pub recap: Option<recap::Request>,
+    pub bundle: Option<bundle::Request>,
+    pub session_controls: Option<session_controls::Request>,
+    pub resources: Option<crate::pages::resources::Request>,
     pub plugins: Option<crate::pages::plugins::Request>,
     pub resume: Option<resume::Request>,
     pub revision: Option<revision::Request>,
@@ -107,6 +119,9 @@ impl State {
                     oauth: None,
                     branch: None,
                     recap: None,
+                    bundle: None,
+                    session_controls: None,
+                    resources: None,
                     plugins: None,
                     resume: None,
                     revision: None,
@@ -149,6 +164,9 @@ impl State {
         self.oauth = None;
         self.branch = None;
         self.recap = None;
+        self.bundle = None;
+        self.session_controls = None;
+        self.resources = None;
         self.plugins = None;
         self.resume = None;
         self.revision = None;
@@ -173,6 +191,18 @@ impl State {
     }
     pub fn submit_recap(&mut self, request: recap::Request, app: &mut App) {
         self.recap = Some(request);
+        self.force(app);
+    }
+    pub fn submit_bundle(&mut self, request: bundle::Request, app: &mut App) {
+        self.bundle = Some(request);
+        self.force(app);
+    }
+    pub fn submit_resources(&mut self, request: crate::pages::resources::Request, app: &mut App) {
+        self.resources = Some(request);
+        self.force(app);
+    }
+    pub fn submit_session_controls(&mut self, request: session_controls::Request, app: &mut App) {
+        self.session_controls = Some(request);
         self.force(app);
     }
     pub fn submit_resume(&mut self, request: resume::Request, app: &mut App) {
@@ -220,6 +250,9 @@ impl State {
             oauth: self.oauth.take(),
             branch: self.branch.take(),
             recap: self.recap.take(),
+            bundle: self.bundle.take(),
+            session_controls: self.session_controls.take(),
+            resources: self.resources.take(),
             plugins: self.plugins.take(),
             resume: self.resume.take(),
             revision: self.revision.take(),
@@ -274,6 +307,21 @@ impl State {
             } else {
                 None
             },
+            bundle: if job.generation == self.generation {
+                job.bundle
+            } else {
+                None
+            },
+            resources: if job.generation == self.generation {
+                job.resources
+            } else {
+                None
+            },
+            session_controls: if job.generation == self.generation {
+                job.session_controls
+            } else {
+                None
+            },
             resume: if job.generation == self.generation {
                 job.resume
             } else {
@@ -320,6 +368,9 @@ mod tests {
             oauth: None,
             branch: None,
             recap: None,
+            bundle: None,
+            session_controls: None,
+            resources: None,
             plugins: None,
             resume: None,
             revision: None,
@@ -569,7 +620,7 @@ mod tests {
         assert_eq!(written.revision, Some(request.clone()));
         assert!(written.result.is_ok());
         let bytes = read(&directory);
-        assert_eq!(bytes["version"], 23);
+        assert_eq!(bytes["version"], 24);
         assert_eq!(bytes["revision"]["copy"]["targetSessionId"], "revised");
         assert_eq!(bytes["revision"]["inputs"][0]["content"]["text"], "edited");
         let mut incomplete = bytes.clone();

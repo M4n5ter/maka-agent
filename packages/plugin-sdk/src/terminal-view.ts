@@ -55,8 +55,17 @@ export type TerminalPlacement =
   /** Inside other views that declare a slot of this name. */
   | { kind: 'slot'; name: string };
 
+/** Inert slash metadata: opens this Page app with its original registration. */
+export interface TerminalCommand {
+  name: string;
+  aliases?: readonly string[];
+  title: TerminalText;
+  description: TerminalText;
+  route: Json;
+}
+
 export interface TerminalView {
-  version: 8;
+  version: 9;
   title: TerminalText;
   context: 'application' | 'session';
   placement?: TerminalPlacement;
@@ -66,6 +75,8 @@ export interface TerminalView {
   changes?: string;
   /** Lower first among views of the same placement. */
   order?: number;
+  /** Only Page placement may declare commands; no callback runs during discovery. */
+  commands?: readonly TerminalCommand[];
 }
 
 export type TerminalTone =
@@ -110,7 +121,9 @@ export type TerminalTarget =
   /** Submit a declared action. */
   | { kind: 'action'; action: string }
   /** Open a Maka session in the shell, such as one the plugin started. */
-  | { kind: 'session'; session: string };
+  | { kind: 'session'; session: string }
+  /** Locate an exact canonical message in a Maka session. */
+  | { kind: 'session_message'; session: string; turn: string; message: string; sequence: number };
 
 /** Keys are unique among siblings, contain no `/`, and stay stable across reads. */
 export type TerminalNode =
@@ -187,7 +200,7 @@ export interface TerminalAction {
 }
 
 export interface TerminalViewTree {
-  version: 8;
+  version: 9;
   title: string;
   /** Opaque; echoed with every submission so writes can compare and swap. */
   revision: string;
@@ -267,6 +280,12 @@ export interface TerminalBuilders {
   link(key: string, title: string, route: Json, extra?: ItemExtra): TerminalNode;
   act(key: string, title: string, action: string, extra?: ItemExtra): TerminalNode;
   open(key: string, title: string, session: string, extra?: ItemExtra): TerminalNode;
+  openMessage(
+    key: string,
+    title: string,
+    anchor: { session: string; turn: string; message: string; sequence: number },
+    extra?: ItemExtra,
+  ): TerminalNode;
   button(
     key: string,
     action: string,

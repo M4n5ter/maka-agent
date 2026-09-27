@@ -57,12 +57,62 @@ pub(crate) fn action(
 
 pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let session = matches!(app.navigation.current(), Route::Session(_));
-    let actions = app.header_actions();
-    let right_width = (actions.len() as u16 + 1) * 3;
+    let mut actions = app.header_actions();
+    if session {
+        // The task remains visible; secondary controls live with this session.
+        actions.retain(|action| matches!(action, Action::OpenInteraction | Action::LatestMessages));
+        actions.push(Action::Search(crate::ui::transcript::search::Command::Open));
+    }
+    if app.navigation.current() == Route::Connections {
+        actions.extend(app.oauth_commands().into_iter().filter_map(|(action, _)| {
+            matches!(&action, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment()).then_some(action)
+        }));
+    }
+    let object_menu = match app.navigation.current() {
+        Route::Session(ref id) => Some(crate::pages::actions::menu(
+            app,
+            "session-actions",
+            &crate::pages::actions::session_scope(app, id),
+            "session-actions",
+            crate::pages::actions::session_commands(app),
+        )),
+        Route::Connections => app
+            .connections
+            .rows
+            .iter()
+            .find(|row| app.connections.selected.as_ref() == Some(&row.id))
+            .map(|row| {
+                crate::pages::actions::menu(
+                    app,
+                    "connection-actions",
+                    &format!("connection/{}", row.id),
+                    "connection-actions",
+                    crate::pages::actions::connection_commands(app, row),
+                )
+            }),
+        Route::Projects => app
+            .projects
+            .items
+            .iter()
+            .find(|item| app.projects.selected.as_ref() == Some(&item.id))
+            .map(|item| {
+                crate::pages::actions::menu(
+                    app,
+                    "project-actions",
+                    &format!("project/{}", item.id),
+                    "project-actions",
+                    crate::pages::actions::project_commands(app, item),
+                )
+            }),
+        _ => None,
+    };
+    let right_width = (actions.len() as u16 + 1 + u16::from(object_menu.is_some())) * 3 + 5;
     let side = right_width.max(6);
+    let balanced = session && area.width >= side.saturating_mul(2).saturating_add(8);
+    let left_width = if balanced { side } else { 6 };
     let title_width = area
         .width
-        .saturating_sub(if session { side * 2 } else { 6 + right_width });
+        .saturating_sub(left_width + if balanced { side } else { right_width });
     let mut title = match (&app.navigation.current(), &app.sessions.detail) {
         (Route::Session(id), Detail::Ready(item)) if *id == item.id => safe(&item.name),
         (Route::App(key), _) => app
@@ -125,15 +175,44 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             action(app, "back", Action::Back),
         ],
     )
-    .size(Size::Fixed(if session { side } else { 6 }));
+    .size(Size::Fixed(left_width));
     let mut right = Vec::new();
-    if session && side > right_width {
+    if balanced && side > right_width {
         right.push(Node::text("space", vec![]).size(Size::Fixed(side - right_width)));
     }
     right.extend(
         actions
             .into_iter()
             .map(|value| action(app, format!("{value:?}"), value)),
+    );
+    if let Some(menu) = object_menu {
+        right.push(menu);
+    }
+    let unread = app.attention.unread();
+    let count = if unread > 99 {
+        "99+".to_owned()
+    } else {
+        unread.to_string()
+    };
+    right.push(
+        Node::text(
+            "attention",
+            vec![(
+                format!("{}{count}", app.chrome.symbol("●", "N")),
+                if unread > 0 {
+                    Tone::Accent
+                } else {
+                    Tone::Muted
+                },
+            )],
+        )
+        .align(Align::Center)
+        .clip()
+        .size(Size::Fixed(5))
+        .on(On::Activate(Action::Attention(
+            crate::pages::attention::Command::Open,
+        )))
+        .hint(app.i18n.text("attention-title")),
     );
     right.push(action(app, "palette", Action::Palette));
     let tree = Node::row(
@@ -142,9 +221,13 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             left,
             Node::text("title", spans)
                 .clip()
-                .align(if session { Align::Center } else { Align::Start })
+                .align(if balanced {
+                    Align::Center
+                } else {
+                    Align::Start
+                })
                 .size(Size::Fill),
-            Node::row("right", right).size(Size::Fixed(if session { side } else { right_width })),
+            Node::row("right", right).size(Size::Fixed(if balanced { side } else { right_width })),
         ],
     );
     let context = Context {
@@ -179,4 +262,21 @@ pub(super) fn footer(frame: &mut Frame<'_>, app: &mut App, area: Rect, hint: Str
         focused: false,
     };
     app.chrome.footer.render(frame, area, tree, context);
+}
+
+/// Shell menus can extend beyond their one-line/short owner surface. Repaint
+/// after all ordinary page content and before trusted sheets or tooltips.
+pub(super) fn repaint_popovers(frame: &mut Frame<'_>, app: &mut App) {
+    let context = Context {
+        colors: app.theme.colors(),
+        ascii: app.chrome.ascii,
+        focused: true,
+    };
+    match app.navigation.current() {
+        Route::Connections => app.connections.surface.repaint_popover(frame, &context),
+        Route::Projects => app.projects.surface.repaint_popover(frame, &context),
+        _ => {}
+    }
+    app.chrome.composer.repaint_popover(frame, &context);
+    app.chrome.header.repaint_popover(frame, &context);
 }

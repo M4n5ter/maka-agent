@@ -158,6 +158,25 @@ fn tree(app: &App, width: u16) -> Node<Command> {
             app.i18n.text("plugins-unknown"),
             Tone::Warning,
         ));
+        rows.extend(
+            state
+                .unknown
+                .iter()
+                .enumerate()
+                .filter_map(|(index, pending)| {
+                    pending.export_location().map(|path| {
+                        text(
+                            format!("export-unknown-{index}"),
+                            format!(
+                                "{}\n{}",
+                                app.i18n.text("plugins-export-unknown"),
+                                safe(path)
+                            ),
+                            Tone::Warning,
+                        )
+                    })
+                }),
+        );
         if state.details {
             rows.extend(
                 state

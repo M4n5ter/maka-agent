@@ -19,6 +19,7 @@
 
 mod key;
 mod mouse;
+mod wire;
 
 pub use key::{Key, Modifier, Modifiers};
 pub use mouse::{MouseAction, MouseButton, MouseEvent, ScrollDirection};
@@ -37,6 +38,7 @@ pub struct InputError(pub &'static str);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Text(String),
+    Paste(String),
     Key { key: Key, modifiers: Modifiers },
     Mouse(MouseAction),
 }
@@ -59,6 +61,10 @@ impl InputAction {
                     ));
                 }
                 Self::Text(text)
+            }
+            RawAction::Paste { text } => {
+                validate_paste(&text)?;
+                Self::Paste(text)
             }
             RawAction::Key { key, modifiers } => {
                 let key = Key::parse(&key)?;
@@ -86,6 +92,16 @@ pub fn encode_actions(
     modes: TerminalInputModes,
     size: TerminalSize,
 ) -> Result<String, InputError> {
+    encode_actions_with_paste(actions, modes, size, false)
+}
+
+/// Paste framing is read from the same native parser cut as keyboard modes.
+pub fn encode_actions_with_paste(
+    actions: &[InputAction],
+    modes: TerminalInputModes,
+    size: TerminalSize,
+    bracketed_paste: bool,
+) -> Result<String, InputError> {
     if actions.is_empty() || actions.len() > MAX_INPUT_ACTIONS {
         return Err(InputError("expected 1..64 input actions"));
     }
@@ -107,6 +123,18 @@ pub fn encode_actions(
                 }
                 output.push_str(text);
                 continue;
+            }
+            InputAction::Paste(text) => {
+                validate_paste(text)?;
+                if text.len() + 12 > MAX_INPUT_BYTES.saturating_sub(output.len()) {
+                    return Err(InputError("encoded input exceeds 64 KiB"));
+                }
+                let text = text.replace("\r\n", "\n").replace('\r', "\n");
+                if bracketed_paste {
+                    format!("\x1b[200~{text}\x1b[201~")
+                } else {
+                    text.replace('\n', "\r")
+                }
             }
             InputAction::Key { key, modifiers } => {
                 key.encode(*modifiers, modes.application_cursor_keys_mode)?
@@ -131,6 +159,10 @@ pub fn encoded_actions_byte_len(actions: &[InputAction]) -> Result<usize, InputE
     for action in actions {
         length += match action {
             InputAction::Text(text) => text.len(),
+            InputAction::Paste(text) => {
+                validate_paste(text)?;
+                text.len() + 12
+            }
             InputAction::Key { key, modifiers } => key.encode(*modifiers, false)?.len(),
             InputAction::Mouse(mouse) => mouse.encode_sgr().len(),
         };
@@ -145,6 +177,9 @@ pub fn encoded_actions_byte_len(actions: &[InputAction]) -> Result<usize, InputE
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum RawAction {
     Text {
+        text: String,
+    },
+    Paste {
         text: String,
     },
     Key {
@@ -184,4 +219,39 @@ fn coordinate<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> 
         ));
     }
     Ok(value as u64)
+}
+
+fn validate_paste(text: &str) -> Result<(), InputError> {
+    if text.is_empty()
+        || text
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+    {
+        return Err(InputError(
+            "paste must be nonempty and contain no terminal controls except whitespace",
+        ));
+    }
+    Ok(())
+}
+
+/// Pointer events from an attached human terminal may race native mode/size changes.
+/// Only those explicit unsupported pointer events are ignored; other input stays strict.
+pub fn encode_controller_actions(
+    actions: &[InputAction],
+    modes: TerminalInputModes,
+    size: TerminalSize,
+    bracketed_paste: bool,
+) -> Result<String, InputError> {
+    encoded_actions_byte_len(actions)?;
+    let applicable: Vec<_> = actions
+        .iter()
+        .filter(
+            |action| !matches!(action, InputAction::Mouse(mouse) if !mouse.applicable(modes, size)),
+        )
+        .cloned()
+        .collect();
+    if applicable.is_empty() {
+        return Ok(String::new());
+    }
+    encode_actions_with_paste(&applicable, modes, size, bracketed_paste)
 }

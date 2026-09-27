@@ -20,7 +20,10 @@
 //! Recall as an app: find what was said in earlier conversations, and
 //! open the session each match came from.
 
+mod filters;
+
 use super::{Recall, remote::Search};
+use filters::Filters;
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     contributions::Staged,
@@ -81,6 +84,9 @@ enum Match {
         title: String,
         text: String,
         truncated: bool,
+        turn_id: String,
+        message_id: String,
+        sequence: u64,
     },
 }
 
@@ -88,7 +94,6 @@ enum Match {
 fn terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()
-        .filter(|term| term.chars().count() <= 64)
         .take(8)
         .map(str::to_owned)
         .collect()
@@ -98,40 +103,62 @@ impl App for Finder {
     fn read(&self, route: Value, cx: Cx) -> BoxFuture<'static, Result<View, Error>> {
         let search = self.0.clone();
         Box::pin(async move {
-            let query = route
-                .get("query")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let terms = terms(&query);
-            let found = if terms.is_empty() {
+            let mut filters = Filters::read(&route)?;
+            if let Some(session) = &cx.caller.session_id {
+                filters.session = Some(filters::Selected {
+                    id: session.clone(),
+                    title: cx.t("Current conversation", "当前对话", "目前對話"),
+                });
+            }
+            if route["pickSession"] == true {
+                return filters::sessions(&search.0, &route, &filters, cx).await;
+            }
+            let found = if terms(&filters.query).is_empty() {
                 None
             } else {
                 let value = search
-                    .call(json!({"terms":terms,"limit":20}), cx.caller.clone())
+                    .call(
+                        filters.request(cx.caller.session_id.as_deref())?,
+                        cx.caller.clone(),
+                    )
                     .await;
                 Some(value.and_then(|value| {
                     serde_json::from_value::<Found>(value)
                         .map_err(|error| Error::Provider(error.to_string()))
                 }))
             };
-            Ok(finder(&cx.words, &query, found))
+            Ok(finder(&cx.words, &filters, found))
         })
     }
 
-    fn submit(&self, submission: Submission, _: Cx) -> BoxFuture<'static, Result<Reply, Error>> {
+    fn submit(&self, submission: Submission, cx: Cx) -> BoxFuture<'static, Result<Reply, Error>> {
         Box::pin(async move {
-            if submission.action != "find" {
+            if !matches!(submission.action.as_str(), "find" | "choose-session") {
                 return Err(Error::Invalid("Unknown recall action".into()));
             }
-            Ok(Reply::Applied {
-                route: json!({"query": submission.text("query")?.trim()}),
-            })
+            let mut filters = Filters::read(&submission.route)?;
+            filters.query = submission.text("query")?.trim().to_owned();
+            filters.since = submission.text("since")?.trim().to_owned();
+            filters.until = submission.text("until")?.trim().to_owned();
+            if let Err(error) = filters.validate() {
+                return Ok(Reply::Rejected {
+                    message: cx.t(
+                        &error,
+                        "请输入最多八个词；日期使用 YYYY-MM-DD（UTC），起始日期不得晚于结束日期。",
+                        "請輸入最多八個詞；日期使用 YYYY-MM-DD（UTC），起始日期不得晚於結束日期。",
+                    ),
+                });
+            }
+            let mut route = serde_json::to_value(filters).expect("recall filters");
+            if submission.action == "choose-session" {
+                route["pickSession"] = json!(true);
+            }
+            Ok(Reply::Applied { route })
         })
     }
 }
 
-fn finder(words: &Words, query: &str, found: Option<Result<Found, Error>>) -> View {
+fn finder(words: &Words, filters: &Filters, found: Option<Result<Found, Error>>) -> View {
     let mut children = vec![
         text(
             "intro",
@@ -150,6 +177,7 @@ fn finder(words: &Words, query: &str, found: Option<Result<Found, Error>>) -> Vi
             ],
         ),
     ];
+    children.push(filters.controls(words));
     match found {
         None => {}
         Some(Ok(found)) if found.matches.is_empty() => children.push(text(
@@ -161,35 +189,48 @@ fn finder(words: &Words, query: &str, found: Option<Result<Found, Error>>) -> Vi
             let rows: Vec<Node> = found
                 .matches
                 .iter()
-                .enumerate()
-                .map(|(index, found)| {
-                    let (session, title, detail) = match found {
-                        Match::Title { session_id, title } => (session_id, title, String::new()),
+                .map(|found| {
+                    use sha2::{Digest, Sha256};
+                    let (title, detail, target) = match found {
+                        Match::Title { session_id, title } => (
+                            title,
+                            String::new(),
+                            Target::Session {
+                                session: session_id.clone(),
+                            },
+                        ),
                         Match::Passage {
                             session_id,
                             title,
                             text,
                             truncated,
+                            turn_id,
+                            message_id,
+                            sequence,
                         } => (
-                            session_id,
                             title,
                             format!(
                                 "{}{}",
                                 view::build::clean(text, false),
                                 if *truncated { "…" } else { "" }
                             ),
+                            Target::SessionMessage {
+                                session: session_id.clone(),
+                                turn: turn_id.clone(),
+                                message: message_id.clone(),
+                                sequence: *sequence,
+                            },
                         ),
                     };
+                    let identity = serde_json::to_vec(&target).expect("recall target");
                     Node::Item {
-                        key: format!("match-{index}"),
+                        key: format!("match-{:x}", Sha256::digest(identity)),
                         title: view::build::clean(title, false),
                         detail,
                         meta: String::new(),
                         tone: Tone::Normal,
                         current: false,
-                        target: Target::Session {
-                            session: session.clone(),
-                        },
+                        target,
                     }
                 })
                 .collect();
@@ -219,15 +260,20 @@ fn finder(words: &Words, query: &str, found: Option<Result<Found, Error>>) -> Vi
         version: VERSION,
         title: words.t("Recall", "回忆", "回憶"),
         revision: "recall".into(),
-        fields: vec![view::build::line(
-            "query",
-            view::build::clean(query, false),
-            512,
-        )],
-        actions: vec![Action {
-            fields: vec!["query".into()],
-            ..view::build::action("find", words.t("Find", "查找", "尋找"))
-        }],
+        fields: filters.fields(),
+        actions: vec![
+            Action {
+                fields: vec!["query".into(), "since".into(), "until".into()],
+                ..view::build::action("find", words.t("Find", "查找", "尋找"))
+            },
+            Action {
+                fields: vec!["query".into(), "since".into(), "until".into()],
+                ..view::build::action(
+                    "choose-session",
+                    words.t("Choose session", "选择会话", "選擇對話"),
+                )
+            },
+        ],
         root: column("root", children),
     }
 }
@@ -239,7 +285,9 @@ mod tests {
     #[test]
     fn matches_open_the_session_they_came_from() {
         let words = Words::new("en");
-        finder(&words, "", None).validate().unwrap();
+        finder(&words, &Filters::default(), None)
+            .validate()
+            .unwrap();
         let found = Found {
             matches: vec![
                 Match::Title {
@@ -251,14 +299,36 @@ mod tests {
                     title: "Refactor".into(),
                     text: "We chose the kernel".into(),
                     truncated: true,
+                    turn_id: "turn-b".into(),
+                    message_id: "message-b".into(),
+                    sequence: 17,
                 },
             ],
             complete: false,
         };
-        let view = finder(&words, "kernel", Some(Ok(found)));
+        let view = finder(
+            &words,
+            &Filters {
+                query: "kernel".into(),
+                ..Default::default()
+            },
+            Some(Ok(found)),
+        );
         view.validate().unwrap();
-        let text = serde_json::to_string(&view).unwrap();
-        assert!(text.contains("\"session\":\"b\"") && text.contains("We chose the kernel…"));
+        fn anchor(node: &Node) -> Option<&Target> {
+            if let Node::Item {
+                target: target @ Target::SessionMessage { .. },
+                ..
+            } = node
+            {
+                return Some(target);
+            }
+            node.children().into_iter().find_map(anchor)
+        }
+        assert!(
+            matches!(anchor(&view.root), Some(Target::SessionMessage { session, turn, message, sequence })
+            if session == "b" && turn == "turn-b" && message == "message-b" && *sequence == 17)
+        );
         assert_eq!(terms("a b c d e f g h i j").len(), 8);
     }
 }

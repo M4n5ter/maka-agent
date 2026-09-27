@@ -18,7 +18,9 @@
  */
 
 use crate::{ProtocolError, Result};
-use maka_runtime::configuration::{headers::*, validation};
+use maka_runtime::configuration::{
+    ConnectionCredentialKind, CredentialLocator, headers::*, validation,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -55,8 +57,9 @@ fn normalize_names(names: &mut Vec<String>) -> Result<()> {
 pub fn decode_query_result(value: &Value) -> Result<RequestHeadersQueryResult> {
     result_fields(value)?;
     let mut result = decode(value)?;
-    if let RequestHeadersQueryResult::Found { names } = &mut result {
+    if let RequestHeadersQueryResult::Found { names, basis } = &mut result {
         normalize_names(names)?;
+        basis.validate().map_err(ProtocolError::invalid)?;
     }
     Ok(result)
 }
@@ -65,9 +68,42 @@ pub fn decode_replace_result(value: &Value) -> Result<RequestHeadersReplaceResul
     result_fields(value)?;
     let mut result = decode(value)?;
     match &mut result {
-        RequestHeadersReplaceResult::Committed { names }
-        | RequestHeadersReplaceResult::Unchanged { names } => normalize_names(names)?,
+        RequestHeadersReplaceResult::Committed { names, basis }
+        | RequestHeadersReplaceResult::Unchanged { names, basis } => {
+            normalize_names(names)?;
+            basis.validate().map_err(ProtocolError::invalid)?;
+        }
         RequestHeadersReplaceResult::ConnectionNotFound => {}
+        RequestHeadersReplaceResult::ConnectionStale { expected, actual } => {
+            validation::basis(expected).map_err(ProtocolError::invalid)?;
+            validation::basis(actual).map_err(ProtocolError::invalid)?;
+            if expected.connection_id != actual.connection_id {
+                return Err(ProtocolError::invalid(
+                    "Request headers connection mismatch",
+                ));
+            }
+        }
+        RequestHeadersReplaceResult::CredentialStale { expected, actual } => {
+            for basis in [expected.as_ref(), actual.as_ref()].into_iter().flatten() {
+                validation::credential_basis(basis).map_err(ProtocolError::invalid)?;
+                if !matches!(
+                    basis.locator,
+                    CredentialLocator::Connection {
+                        kind: ConnectionCredentialKind::RequestHeaders,
+                        ..
+                    }
+                ) {
+                    return Err(ProtocolError::invalid("Invalid request headers credential"));
+                }
+            }
+            if let (Some(expected), Some(actual)) = (expected, actual)
+                && expected.locator != actual.locator
+            {
+                return Err(ProtocolError::invalid(
+                    "Request headers credential mismatch",
+                ));
+            }
+        }
     }
     Ok(result)
 }
@@ -76,10 +112,10 @@ fn result_fields(value: &Value) -> Result<()> {
     let record = crate::codec::record(value, "request headers result")?;
     crate::codec::exact(
         record,
-        if value["kind"] == "connection_not_found" {
-            &["kind"]
-        } else {
-            &["kind", "names"]
+        match value["kind"].as_str() {
+            Some("connection_not_found") => &["kind"],
+            Some("connection_stale" | "credential_stale") => &["kind", "expected", "actual"],
+            _ => &["kind", "names", "basis"],
         },
     )
 }

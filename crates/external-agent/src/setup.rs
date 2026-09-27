@@ -248,6 +248,9 @@ async fn work(
                 .map_err(|error| match error {
                     crate::install::Error::Cleanup => Error::CleanupUnconfirmed,
                     crate::install::Error::Cancelled => Error::Cancelled,
+                    crate::install::Error::Storage(
+                        maka_plugins::storage::StoreError::OutcomeUnknown(reason),
+                    ) => Error::OutcomeUnknown(reason),
                     other => provider(other),
                 })
             }

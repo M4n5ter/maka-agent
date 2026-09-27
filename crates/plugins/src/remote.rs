@@ -19,6 +19,7 @@
 
 //! Client-facing handlers are distinct from Agent tools: a UI call never fabricates
 //! an Agent invocation or inherits its permissions.
+pub mod projects;
 use crate::fiber::Identity;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,9 @@ pub struct WorkspaceViewInput {
     pub collaboration_mode: maka_runtime::execution::CollaborationMode,
 }
 pub trait Views: Send + Sync {
+    fn projects(&self, _query: projects::Query) -> BoxFuture<'_, Result<projects::Output, Error>> {
+        Box::pin(async { Err(Error::Invalid("Project catalog is unavailable".into())) })
+    }
     fn authorize(
         &self,
         request: crate::authorization::Request,
@@ -184,6 +188,10 @@ impl Endpoint {
             registration: Uuid::new_v4(),
             terminal_view: None,
         }
+    }
+    pub(crate) fn with_registration(mut self, registration: Uuid) -> Self {
+        self.registration = registration;
+        self
     }
     pub fn requiring_host_paths(mut self) -> Self {
         self.access = Access::HostPaths;

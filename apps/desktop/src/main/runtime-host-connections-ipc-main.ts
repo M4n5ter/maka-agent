@@ -38,7 +38,7 @@ import type {
   RuntimeHostConnectionCatalogEntry as ConnectionCatalogEntry,
   RuntimeHostConnectionCatalogSnapshot as ConnectionCatalogSnapshot,
 } from '@maka/runtime-host/client';
-import { normalizeRequestHeaderUpdates } from '@maka/core/runtime-policy';
+import { decodeRequestHeadersBasis, normalizeRequestHeaderUpdates } from '@maka/core/runtime-policy';
 import {
   CONNECTION_EFFECT_OPERATION_SPECS,
   type ConnectionTestRunResult,
@@ -121,20 +121,27 @@ export function registerRuntimeHostConnectionsIpc(
       const connection = requireConnectionIdentity(await snapshot(), identity);
       const result = await deps.client.getConnectionRequestHeaders(connection.connectionId);
       if (result.kind !== 'found') throw new Error('Connection no longer exists');
-      return { names: result.names } satisfies SavedRequestHeaders;
+      return { names: result.names, basis: result.basis } satisfies SavedRequestHeaders;
     },
   );
   deps.ipcMain.handle(
     'connections:setRequestHeaders',
-    async (_event, identity: unknown, rawUpdates: unknown) => {
+    async (_event, identity: unknown, rawExpected: unknown, rawUpdates: unknown) => {
       const connection = requireConnectionIdentity(await snapshot(), identity);
+      const expected = decodeRequestHeadersBasis(rawExpected);
+      if (expected.connection.connectionId !== connection.connectionId) {
+        throw new Error('Unable to save custom request headers: connection_stale');
+      }
       const result = await deps.client.replaceConnectionRequestHeaders(
-        connection.connectionId,
+        expected,
         normalizeRequestHeaderUpdates(rawUpdates),
       );
       if (result.kind === 'connection_not_found') throw new Error('Connection no longer exists');
+      if (result.kind === 'connection_stale' || result.kind === 'credential_stale') {
+        throw new Error(`Unable to save custom request headers: ${result.kind}`);
+      }
       if (result.kind === 'committed') deps.emitConnectionListChanged();
-      return { names: result.names } satisfies SavedRequestHeaders;
+      return { names: result.names, basis: result.basis } satisfies SavedRequestHeaders;
     },
   );
   deps.ipcMain.handle('connections:setDefault', async (_event, identity: unknown) => {
@@ -224,8 +231,10 @@ export function registerRuntimeHostConnectionsIpc(
         }
       }
       if (input.requestHeaders && Object.keys(input.requestHeaders).length > 0) {
+        const saved = await deps.client.getConnectionRequestHeaders(entry.connectionId);
+        if (saved.kind !== 'found') throw new Error('Connection no longer exists');
         const requestHeaders = await deps.client.replaceConnectionRequestHeaders(
-          entry.connectionId,
+          saved.basis,
           Object.entries(input.requestHeaders).map(([name, value]) => ({ name, value })),
         );
         if (requestHeaders.kind !== 'committed') {

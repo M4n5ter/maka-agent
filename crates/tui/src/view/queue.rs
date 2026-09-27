@@ -56,7 +56,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     app.queue.surface.render(frame, area, tree, context);
 }
 
-fn entry(app: &App, row: &Row, width: u16) -> Node<Command> {
+fn entry(app: &App, row: &Row, _width: u16) -> Node<Command> {
     let current = app.queue.selected.as_ref() == Some(&row.target.entry);
     let focused = app.focus == Focus::Queue && current;
     let prefix = row.target.control_key("");
@@ -93,18 +93,16 @@ fn entry(app: &App, row: &Row, width: u16) -> Node<Command> {
             children.push(action(app, "promote", Command::Promote(row.target.clone())));
         }
         if row.kind != Kind::InFlight {
-            if width >= 60 {
-                children.push(action(
-                    app,
-                    "up",
-                    Command::Reorder(row.target.clone(), false),
-                ));
-                children.push(action(
-                    app,
-                    "down",
-                    Command::Reorder(row.target.clone(), true),
-                ));
-            }
+            children.push(action(
+                app,
+                "up",
+                Command::Reorder(row.target.clone(), false),
+            ));
+            children.push(action(
+                app,
+                "down",
+                Command::Reorder(row.target.clone(), true),
+            ));
             children.push(action(app, "edit", Command::Edit(row.target.clone())));
             children.push(action(app, "retract", Command::Retract(row.target.clone())));
         }

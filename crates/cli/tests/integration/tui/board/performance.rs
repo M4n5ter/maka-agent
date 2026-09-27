@@ -66,7 +66,7 @@ fn run(rtt: u64, report: &mut report::Report, extended: bool) {
     std::fs::write(
         package.join("maka.extension.json"),
         json!({"schemaVersion":1,
-        "id":"example.board","runtime":{"entry":"host.mjs","sdkVersion":2}})
+        "id":"example.board","runtime":{"entry":"host.mjs","sdkVersion":3}})
         .to_string(),
     )
     .unwrap();

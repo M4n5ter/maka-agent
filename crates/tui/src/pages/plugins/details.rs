@@ -53,6 +53,13 @@ pub(super) fn package(app: &App, snapshot: &Snapshot, id: &str, rows: &mut Vec<N
         )
         .gap(1),
     );
+    rows.push(button_row(
+        app,
+        "export",
+        "plugins-export",
+        Command::Visit(Place::Export(id.into())),
+        Role::Normal,
+    ));
     rows.push(text(
         "instances",
         app.i18n.text("plugins-instances"),

@@ -49,20 +49,18 @@ fn terminal_creation_reopens_queries_and_retries_without_duplicating_or_resurrec
             let proxy = super::super::recovery::LostReply::terminal_submit(&host.root, directory.path(), accepted).await;
             let mut tui = Pty::spawn(&["--root", host.root.to_str().unwrap()]);
             tui.wait_for("No sessions yet"); // Plugin commands require the live Host.
-            tui.filter_command("Plugin pages");
-            tui.click_text("Plugin pages");
             tui.wait_for("Scheduled tasks");
             tui.click_text("Scheduled tasks");
-            tui.wait_for("New reminder");
-            tui.click_text("New reminder");
-            tui.wait_for("Once");
-            tui.click_text("Once");
+            tui.wait_for("New task");
+            tui.click_text("New task");
+            tui.wait_for("Local notification");
+            tui.click_text("Local notification");
             tui.wait_for("Content");
             tui.click_text("Title");
             tui.send(b"\x1b[200~Saved original reminder\x1b[201~");
             tui.click_text("Content");
             tui.send(b"\x1b[200~Original recovery content\x1b[201~");
-            tui.click_text("Create reminder");
+            tui.click_text("Create task");
             tui.wait_for("result is unconfirmed");
             tui.wait_for("connection failed");
             assert_eq!(proxy.requests().len(), 1);

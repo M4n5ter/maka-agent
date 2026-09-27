@@ -26,6 +26,7 @@ use std::time::Duration;
 use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
 
 mod broker;
+mod native197;
 
 struct Fixture {
     client: Client,

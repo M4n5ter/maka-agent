@@ -17,6 +17,8 @@
  * under the License.
  */
 
+mod export197;
+
 use super::*;
 use maka_protocol::{
     Operation,
@@ -35,7 +37,7 @@ fn package(
     std::fs::create_dir(&path).unwrap();
     std::fs::write(path.join("host.mjs"), source).unwrap();
     std::fs::write(path.join(ui.0), ui.1).unwrap();
-    std::fs::write(path.join("maka.extension.json"),json!({"schemaVersion":1,"id":id,"displayName":title,"runtime":{"entry":"host.mjs","sdkVersion":2}}).to_string()).unwrap();
+    std::fs::write(path.join("maka.extension.json"),json!({"schemaVersion":1,"id":id,"displayName":title,"runtime":{"entry":"host.mjs","sdkVersion":3}}).to_string()).unwrap();
     path
 }
 fn host(directory: &std::path::Path) -> super::super::candidate::CandidateFixture {
@@ -66,8 +68,15 @@ fn field(tui: &mut Pty, label: &str, value: &str) {
     tui.send(format!("\x1b[200~{value}\x1b[201~").as_bytes());
     tui.wait_for(value);
 }
+fn open_manager(tui: &mut Pty) {
+    tui.wait_for("Settings");
+    tui.click_text("Settings");
+    tui.wait_for("Plugins");
+    tui.click_page_text("Plugins");
+    tui.wait_for("Installed packages");
+}
 fn install(tui: &mut Pty, path: &std::path::Path, title: &str) {
-    tui.command("Plugins");
+    open_manager(tui);
     tui.wait_for("Installed packages");
     tui.click_page_text("Install package");
     tui.wait_for("Package path on Host");
@@ -225,7 +234,7 @@ fn local_plugin_management_installs_board_and_owns_instance_lifecycle_through_th
     tui.click_page_text("A new card");
     tui.send(b"\x1b[200~Keep this board draft\x1b[201~");
     tui.wait_for("Keep this board draft");
-    tui.command("Plugins");
+    open_manager(&mut tui);
     tui.wait_for("aa-managed-board");
     tui.click_page_text("aa-managed-board");
     tui.wait_for("Disable instance");
@@ -237,7 +246,7 @@ fn local_plugin_management_installs_board_and_owns_instance_lifecycle_through_th
     assert!(!current(&runtime, &client, "aa-managed-board").local_disabled);
     open_app(&mut tui, "Board");
     tui.wait_for("Keep this board draft");
-    tui.command("Plugins");
+    open_manager(&mut tui);
     tui.wait_for("Managed Board");
     tui.click_page_text("Managed Board");
     tui.wait_for("Restart plugin");
@@ -313,7 +322,7 @@ fn plugin_config_draft_survives_conflict_and_changes_real_plugin_behavior_after_
     assert_eq!(initial.config, json!({"greeting":"Before configuration"}));
     open_app(&mut tui, "Greeting");
     tui.wait_for("Before configuration");
-    tui.command("Plugins");
+    open_manager(&mut tui);
     tui.wait_for("aa-configured");
     tui.click_page_text("aa-configured");
     tui.wait_for("Advanced configuration (JSON)");

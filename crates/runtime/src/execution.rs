@@ -27,6 +27,13 @@ pub enum CollaborationMode {
     Plan,
 }
 
+/// A native tool surface selected by the Host, independent of plugin tool names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolProfile {
+    #[serde(rename = "headless-coding-v1")]
+    HeadlessCodingV1,
+}
+
 mod behavior;
 pub use behavior::BehaviorId;
 mod tool_policy;

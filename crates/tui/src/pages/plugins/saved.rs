@@ -32,23 +32,41 @@ pub(super) struct Pending {
     package_digest: Option<String>,
     source_digest: Option<String>,
     payload_withheld: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    export_target: Option<String>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Checkpoint {
     pending: Vec<Pending>,
     withheld: Vec<Place>,
+    #[serde(default)]
+    exports: Vec<export::Draft>,
+    #[serde(default)]
+    exported: Option<export::Exported>,
 }
 impl Checkpoint {
     pub fn validate(&self, root: &str) -> Result<(), String> {
         if self.pending.len() > LIMIT
             || self.withheld.len() > LIMIT
+            || self.exports.len() > LIMIT
             || self.pending.iter().any(|p| {
                 p.binding.root != root
                     || p.binding.epoch.is_empty()
                     || p.binding.epoch.len() > 256
                     || !p.place.valid()
                     || !p.payload_withheld
+                    || match (&p.change, &p.place, &p.export_target) {
+                        (Change::Export, Place::Export(_), Some(path)) => {
+                            !export::valid_path(path)
+                                || p.package_digest
+                                    .as_ref()
+                                    .is_none_or(|digest| !export::valid_digest(digest))
+                        }
+                        (Change::Export, _, _) => true,
+                        (_, _, Some(_)) => true,
+                        _ => false,
+                    }
                     || p.package_digest
                         .iter()
                         .chain(p.source_digest.iter())
@@ -57,6 +75,16 @@ impl Checkpoint {
             || self.withheld.iter().any(|p| !p.valid())
         {
             return Err("Invalid plugin management checkpoint".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for draft in &self.exports {
+            draft.validate()?;
+            if !seen.insert(&draft.package) {
+                return Err("Duplicate plugin export draft".into());
+            }
+        }
+        if let Some(exported) = &self.exported {
+            exported.validate()?;
         }
         Ok(())
     }
@@ -80,11 +108,16 @@ impl Pending {
                 None,
             ),
             io::Mutation::Apply(_) => (None, None),
+            io::Mutation::Export(input) => (input.expected.content_digest.clone(), None),
         };
         Some(Self {
             package_digest,
             source_digest,
             payload_withheld: true,
+            export_target: match request.mutation()? {
+                io::Mutation::Export(input) => Some(input.target_path.clone()),
+                _ => None,
+            },
             binding: request.binding.clone(),
             token: request.token,
             change,
@@ -92,21 +125,38 @@ impl Pending {
             base,
         })
     }
+    pub(super) fn export_target(&self, package: &str) -> Option<&str> {
+        if matches!(&self.place, Place::Export(id) if id == package) {
+            self.export_target.as_deref()
+        } else {
+            None
+        }
+    }
+    pub(super) fn export_location(&self) -> Option<&str> {
+        self.export_target.as_deref()
+    }
     pub(super) fn description(&self, app: &App) -> String {
-        format!(
+        let mut description = format!(
             "{} · {} · {} · {} · {}",
             self.token,
             self.binding.epoch,
             self.base,
             app.i18n.text(self.change.label()),
             match &self.place {
-                Place::Package(id) | Place::New(id) => id.clone(),
+                Place::Package(id) | Place::New(id) | Place::Export(id) => id.clone(),
                 place => place
                     .entry()
                     .map(|key| format!("{} / {}", String::from(key.scope.clone()), key.id))
                     .unwrap_or_default(),
             }
-        )
+        );
+        if let Some(path) = &self.export_target {
+            description.push_str(&format!(
+                "\n{path}\n{}",
+                self.package_digest.as_deref().unwrap_or_default()
+            ));
+        }
+        description
     }
 }
 impl State {
@@ -120,17 +170,40 @@ impl State {
         let mut withheld = self.withheld.clone();
         for (place, draft) in &self.drafts {
             if draft.dirty.iter().any(|dirty| *dirty)
+                && !matches!(place, Place::Export(_))
                 && !withheld.contains(place)
                 && withheld.len() < LIMIT
             {
                 withheld.push(place.clone());
             }
         }
-        Checkpoint { pending, withheld }
+        let exports = self
+            .drafts
+            .iter()
+            .filter_map(|(place, draft)| {
+                let Place::Export(package) = place else {
+                    return None;
+                };
+                Some(export::Draft {
+                    package: package.clone(),
+                    path: draft.fields[0].text().into(),
+                    cursor: draft.fields[0].cursor(),
+                })
+            })
+            .collect();
+        Checkpoint {
+            pending,
+            withheld,
+            exports,
+            exported: self.exported.clone(),
+        }
     }
     pub fn restore(&mut self, saved: Checkpoint) {
         self.unknown = saved.pending;
         self.withheld = saved.withheld;
+        self.drafts
+            .extend(saved.exports.into_iter().map(export::Draft::restore));
+        self.exported = saved.exported;
     }
     pub(super) fn remember_unknown(&mut self, request: &Request) {
         if self.unknown.len() < LIMIT

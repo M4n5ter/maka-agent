@@ -5131,6 +5131,7 @@ name = "maka-insights"
 version = "0.2.0"
 dependencies = [
  "futures-util",
+ "jiff",
  "maka-plugins",
  "maka-runtime",
  "serde",
@@ -5597,6 +5598,7 @@ dependencies = [
  "maka-client",
  "maka-event-log",
  "maka-plugins",
+ "maka-presentation",
  "maka-protocol",
  "maka-runtime",
  "maka-sandbox",

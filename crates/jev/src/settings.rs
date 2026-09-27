@@ -17,6 +17,9 @@
  * under the License.
  */
 
+mod patch;
+pub use patch::{HeaderPatch, SecretChange, SecretsPatch};
+
 use maka_plugins::{credentials, storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -70,6 +73,7 @@ pub struct Snapshot {
     pub settings: Settings,
     pub credential_revision: Option<u64>,
     pub configured: bool,
+    pub api_key_configured: bool,
     pub header_names: Vec<String>,
 }
 #[derive(Clone)]
@@ -93,21 +97,26 @@ impl Repository {
     pub async fn snapshot(&self) -> Result<Snapshot, storage::StoreError> {
         let (revision, settings) = self.settings().await?;
         let credential = self.credentials.read(settings.credential_key()).await?;
+        let secrets = credential
+            .as_ref()
+            .and_then(|record| record.secret.as_ref())
+            .map(|secret| serde_json::from_str::<Secrets>(secret))
+            .transpose()
+            .map_err(|_| invalid())?;
         Ok(Snapshot {
             revision,
             settings,
-            credential_revision: credential.as_ref().map(|r| r.revision),
-            header_names: credential
+            credential_revision: credential.as_ref().map(|record| record.revision),
+            configured: secrets.is_some(),
+            api_key_configured: secrets
                 .as_ref()
-                .and_then(|r| r.secret.as_ref())
-                .map(|s| serde_json::from_str::<Secrets>(s))
-                .transpose()
-                .map_err(|_| invalid())?
-                .map(|s| s.headers.into_keys().collect())
+                .is_some_and(|secret| secret.api_key.is_some()),
+            header_names: secrets
+                .map(|secret| secret.headers.into_keys().collect())
                 .unwrap_or_default(),
-            configured: credential.and_then(|r| r.secret).is_some(),
         })
     }
+
     pub async fn save(
         &self,
         expected: Option<u64>,

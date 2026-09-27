@@ -39,6 +39,7 @@ import {
   requireString,
 } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
+import { decodeHostPath } from './workspace.js';
 
 /** Current package, composition or activation facts changed; query them again. */
 export interface PluginPlatformChangedFrame {
@@ -211,6 +212,10 @@ export interface PluginPackageUninstallInput {
 
 export interface PluginPackageExportInput extends PluginPackageUninstallInput {
   readonly targetPath: string;
+  readonly expected: {
+    readonly baseGeneration: number;
+    readonly contentDigest: string;
+  };
 }
 
 export interface PluginPackageExportResult {
@@ -280,10 +285,22 @@ export const PLUGIN_PLATFORM_OPERATION_SPECS = {
       const input = requireExactRecord(value, 'Plugin package export input', [
         'extensionId',
         'targetPath',
+        'expected',
       ]);
+      const expected = requireExactRecord(input.expected, 'Plugin package export precondition', [
+        'baseGeneration',
+        'contentDigest',
+      ]);
+      const targetPath = decodeHostPath(input.targetPath, 'Plugin package export path', 4096);
+      if (/\p{Cc}/u.test(targetPath))
+        throw invalidProtocolFrame('Plugin package export path contains control characters');
       return {
         extensionId: requireId(input.extensionId, 'Plugin package identity'),
-        targetPath: requireString(input.targetPath, 'Plugin package export path', 4096),
+        targetPath,
+        expected: {
+          baseGeneration: requireCount(expected.baseGeneration, 'Plugin package generation'),
+          contentDigest: requireDigest(expected.contentDigest, 'Plugin package content digest'),
+        },
       };
     },
     decodeOutput: (value) => {

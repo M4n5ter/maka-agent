@@ -50,7 +50,7 @@ fn a_javascript_plugin_installed_at_runtime_brings_its_own_app_into_the_running_
     std::fs::write(
         package.join("maka.extension.json"),
         json!({"schemaVersion":1, "id":"example.board",
-            "runtime":{"entry":"host.mjs", "sdkVersion":2}})
+            "runtime":{"entry":"host.mjs", "sdkVersion":3}})
         .to_string(),
     )
     .unwrap();
@@ -181,7 +181,7 @@ fn a_javascript_plugin_installed_at_runtime_brings_its_own_app_into_the_running_
     tui.wait_until(|_| {
         let saved: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
         assert_eq!(saved["root"], client.identity.root_id);
-        assert_eq!(saved["version"], 23);
+        assert_eq!(saved["version"], 24);
         !saved["apps"].as_array().unwrap().iter().any(|page| {
             page["key"]["package"] == "example.board"
                 && page["key"]["method"] == "board"

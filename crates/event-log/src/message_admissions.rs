@@ -70,7 +70,18 @@ impl PendingMessageAdmission {
                 crate::sessions::validate_id(id)?;
             }
         }
-        if self.source.submitted_intent.is_some()
+        if let Some(intent) = &self.source.submitted_intent {
+            maka_runtime::input::validate_selection_session(
+                &intent.input_selection_sources,
+                &self.invocation.session_id,
+            )
+            .map_err(invalid)?;
+        }
+        if self
+            .source
+            .submitted_intent
+            .as_ref()
+            .is_some_and(maka_runtime::message::SubmittedTurnIntent::is_exact_turn)
             && self.source.disposition != MessageDisposition::TurnStarted
         {
             return Err(invalid(
@@ -224,11 +235,16 @@ pub(crate) async fn consume(
             continue;
         };
         let matches = match &event.fact {
-            Fact::MessageSteered { message } => {
+            Fact::MessageSteered { message, source } => {
                 *pending.steering_target() == event.invocation
                     && pending.source.disposition == MessageDisposition::Steering
-                    && pending.source.submitted_intent.is_none()
-                    && pending.source.message == **message
+                    && match source.as_deref() {
+                        Some(source) => source == &pending.source,
+                        None => {
+                            pending.source.submitted_intent.is_none()
+                                && pending.source.message == **message
+                        }
+                    }
             }
             Fact::InvocationOpened { .. } => {
                 crate::message_sources::roots(event).iter().any(|source| {

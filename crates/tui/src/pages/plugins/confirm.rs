@@ -38,6 +38,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             let (change, _, _) = request.intent()?;
             let note = match change {
                 Change::Install => "plugins-install-impact",
+                Change::Export => "plugins-export-impact",
                 Change::Uninstall => "plugins-uninstall-impact",
                 Change::Restart => "plugins-restart-impact",
                 Change::Enable | Change::Disable => "plugins-toggle-impact",

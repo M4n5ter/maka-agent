@@ -383,6 +383,7 @@ async fn queue_edits_cancel_or_deliver_once_with_atomic_revision_and_original_ow
     let omitted_receipt = EventWrite::plain(RuntimeEvent::new(
         second.clone(),
         Fact::MessageSteered {
+            source: None,
             message: Box::new(omitted),
         },
     ))
@@ -410,7 +411,7 @@ async fn queue_edits_cancel_or_deliver_once_with_atomic_revision_and_original_ow
         .unwrap();
     assert_eq!(proof.event.invocation, second);
     assert!(
-        matches!(&proof.event.fact, Fact::MessageSteered { message } if message.content.preparation == [receipt])
+        matches!(&proof.event.fact, Fact::MessageSteered { message, .. } if message.content.preparation == [receipt])
     );
     let queue = log.message_queue("session").await.unwrap();
     let cancelled = log
@@ -439,6 +440,7 @@ async fn queue_edits_cancel_or_deliver_once_with_atomic_revision_and_original_ow
                 &EventWrite::plain(RuntimeEvent::new(
                     second.clone(),
                     Fact::MessageSteered {
+                        source: None,
                         message: Box::new(
                             admission(&second, id, Disposition::Steering).source.message
                         ),

@@ -22,7 +22,7 @@ use super::{
     mutation::{active_session, fault},
 };
 use crate::controllers::{self as state, conflict};
-use crate::shell::{ControlInput, ShellHandle};
+use crate::shell::{ControlErrorKind, ControlInput, ShellHandle};
 use maka_presentation::shell::RESOURCE_REF_PREFIX;
 use maka_protocol::{Operation, OperationErrorCode as Code, Outcome, resource::*};
 use serde::Serialize;
@@ -156,12 +156,12 @@ pub(super) async fn control(
             return conflict("Runtime Resource controller sequence is out of order");
         }
     }
-    let (bytes, size) = input.control.parts().expect("decoded control");
-    let pending = handle.enqueue_control(
-        ControlInput::Raw(bytes.to_owned()),
-        size,
-        CancellationToken::new(),
-    );
+    let (data, size) = input.control.parts().expect("decoded control");
+    let data = match data {
+        PtyInput::Raw(bytes) => ControlInput::Raw(bytes.to_owned()),
+        PtyInput::Actions(actions) => ControlInput::Interactive(actions.to_vec()),
+    };
+    let pending = handle.enqueue_control(data, size, CancellationToken::new());
     // Queue acceptance and permission updates share one admission boundary.
     // Native I/O retains only the per-resource gate, including across disconnect.
     drop(admission);
@@ -179,6 +179,10 @@ pub(super) async fn control(
             },
         ),
         Err(error) => {
+            if error.kind == ControlErrorKind::Rejected {
+                // Worker rejected before native effects; retain lease and sequence.
+                return failure(Code::InvalidRequest, &error.message);
+            }
             handle.stop();
             if error.accepted_bytes.is_none() || error.resized.is_none() {
                 fault(host, error) // Only an unknown outcome invalidates Host admission.

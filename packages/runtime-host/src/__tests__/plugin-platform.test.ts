@@ -65,7 +65,11 @@ import {
 import { HostPluginPlatformCoordinator } from '../server/plugin-platform-coordinator.js';
 import { TrustedPluginPackageLoader } from '../server/plugin-package-loader.js';
 import { PluginPackageStore } from '../server/plugin-package-store.js';
-import { HostPluginPlatform, type HostPluginPlatformOptions } from '../server/plugin-platform.js';
+import {
+  HostPluginPlatform,
+  HostPluginPlatformError,
+  type HostPluginPlatformOptions,
+} from '../server/plugin-platform.js';
 import { HostPluginDataRuntime } from '../server/plugin-data-runtime.js';
 
 interface TestPlatformInternals {
@@ -129,7 +133,20 @@ test('Plugin Platform installs, activates, persists, and recovers a generic pack
     const published = internals(platform).composition.package('fixture-package');
     assert.deepEqual(published.contributions, [{ id: 'first', kind: 'foundation-test' }]);
     const bundle = join(root, 'fixture-package.maka-extension');
-    await platform.exportPackage('fixture-package', bundle);
+    const installedPackage = (await platform.packageProjections())[0]!;
+    await assert.rejects(
+      () =>
+        platform.exportPackage('fixture-package', bundle, {
+          baseGeneration: 0,
+          contentDigest: installedPackage.contentDigest,
+        }),
+      (error: unknown) =>
+        error instanceof HostPluginPlatformError && error.code === 'operation_conflict',
+    );
+    await platform.exportPackage('fixture-package', bundle, {
+      baseGeneration: installedPackage.baseGeneration!,
+      contentDigest: installedPackage.contentDigest,
+    });
     const imported = createPlatform(join(root, 'import-control'));
     await imported.recover();
     assert.equal((await imported.installPackage(bundle)).convergence, 'converged');

@@ -87,6 +87,7 @@ export {
   decodeCredentialLocator,
   decodeCredentialStatus,
   decodeCredentialVersionBasis,
+  decodeRequestHeadersBasis,
   normalizeCredentialSecret,
   normalizeDeleteCredentialInput,
   normalizeSetCredentialInput,
@@ -108,6 +109,7 @@ export type {
   JsonPrimitive,
   JsonValue,
   RequestHeaderUpdate,
+  RequestHeadersBasis,
   SavedRequestHeaders,
 } from './request-customization.js';
 

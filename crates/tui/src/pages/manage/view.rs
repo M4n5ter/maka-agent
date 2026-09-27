@@ -32,6 +32,9 @@ use ratatui::Frame;
 pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     use super::connection::Change;
     let dialog = app.management.dialog.as_ref()?;
+    if dialog.preferences.is_some() {
+        return Some(super::preferences::sheet(app, dialog));
+    }
     if dialog.kind == Kind::Oauth {
         return Some(super::oauth::sheet(app));
     }
@@ -260,6 +263,14 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
 
 /// Paints the sheet's text field, or forgets its geometry when none is shown.
 pub(crate) fn draw_field(frame: &mut Frame<'_>, app: &mut App) {
+    if app
+        .management
+        .dialog
+        .as_ref()
+        .is_some_and(|dialog| dialog.preferences.is_some())
+    {
+        return super::preferences::draw(frame, app);
+    }
     if app
         .management
         .dialog

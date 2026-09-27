@@ -135,6 +135,10 @@ pub enum Fact {
     },
     MessageSteered {
         message: Box<crate::input::DeliveredMessage>,
+        /// Canonical input at consumption, including accepted queue edits.
+        /// Absent only in older facts; never reconstruct it from the submit receipt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<Box<crate::message::RootSourceMessage>>,
     },
     ContextCheckpointRecorded {
         checkpoint: crate::context::ContextCheckpoint,
@@ -182,6 +186,30 @@ pub enum Fact {
     InvocationEnded {
         outcome: InvocationOutcome,
     },
+}
+
+pub fn validate_steered_source(
+    message: &crate::input::DeliveredMessage,
+    source: Option<&crate::message::RootSourceMessage>,
+    session: &str,
+) -> Result<(), &'static str> {
+    message.validate()?;
+    if let Some(source) = source {
+        source.validate()?;
+        if source.message != *message
+            || source.disposition != crate::message::MessageDisposition::Steering
+            || source
+                .submitted_intent
+                .as_ref()
+                .is_some_and(crate::message::SubmittedTurnIntent::is_exact_turn)
+        {
+            return Err("steering differs from its canonical source");
+        }
+        if let Some(intent) = &source.submitted_intent {
+            crate::input::validate_selection_session(&intent.input_selection_sources, session)?;
+        }
+    }
+    Ok(())
 }
 
 impl Fact {

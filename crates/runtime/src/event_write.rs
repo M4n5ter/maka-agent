@@ -128,6 +128,15 @@ impl EventWrite {
         {
             crate::message::validate_sources(content, source_messages)
                 .map_err(|message| CommitError::Rejected(message.into()))?;
+            for source in source_messages {
+                if let Some(intent) = &source.submitted_intent {
+                    crate::input::validate_selection_session(
+                        &intent.input_selection_sources,
+                        &event.invocation.session_id,
+                    )
+                    .map_err(|message| CommitError::Rejected(message.into()))?;
+                }
+            }
             if !source_messages.is_empty()
                 && serde_json::to_vec(&event)
                     .map_err(|error| CommitError::Rejected(error.to_string()))?
@@ -139,10 +148,22 @@ impl EventWrite {
                 ));
             }
         }
-        if let Fact::MessageSteered { message } = &event.fact {
-            message
-                .validate()
-                .map_err(|message| CommitError::Rejected(message.into()))?;
+        if let Fact::MessageSteered { message, source } = &event.fact {
+            crate::event::validate_steered_source(
+                message,
+                source.as_deref(),
+                &event.invocation.session_id,
+            )
+            .map_err(|message| CommitError::Rejected(message.into()))?;
+            if serde_json::to_vec(&event)
+                .map_err(|error| CommitError::Rejected(error.to_string()))?
+                .len()
+                > 1024 * 1024
+            {
+                return Err(CommitError::Rejected(
+                    "steering message exceeds durable capacity".into(),
+                ));
+            }
         }
         if let Fact::InvocationOpened {
             configuration: Some(configuration),

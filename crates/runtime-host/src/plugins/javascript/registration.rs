@@ -56,6 +56,11 @@ pub(super) enum Registration {
         name: String,
         callback: u32,
     },
+    InputResources {
+        name: String,
+        callback: u32,
+        descriptor: maka_plugins::input::resources::Descriptor,
+    },
     RemoteMethod {
         name: String,
         callback: u32,
@@ -218,9 +223,6 @@ pub(super) fn stage_entries(
     source: &super::remote::Source,
     lifecycle: &maka_plugins::fiber::Context,
 ) -> Result<Staged, String> {
-    if registrations.len() > 128 {
-        return Err("plugin contribution limit exceeded".into());
-    }
     let mut staged = Staged::default();
     terminal::stage(
         &mut registrations,
@@ -275,7 +277,7 @@ pub(super) fn stage_entries(
                 staged
                     .insert(
                         name.clone(),
-                        maka_plugins::input::InputPreparation(Arc::new(super::input::Input {
+                        maka_plugins::input::InputPreparation::new(Arc::new(super::input::Input {
                             callback: Arc::new(callbacks::Callback {
                                 module: module.clone(),
                                 id: callback,
@@ -284,6 +286,32 @@ pub(super) fn stage_entries(
                         })),
                     )
                     .map_err(super::message)?;
+            }
+            Registration::InputResources {
+                name,
+                callback,
+                descriptor,
+            } => {
+                validate_callback(callback)?;
+                let input = Arc::new(super::input::Input {
+                    callback: Arc::new(callbacks::Callback {
+                        module: module.clone(),
+                        id: callback,
+                        calls: calls.clone(),
+                    }),
+                });
+                maka_plugins::input::resources::stage(
+                    &mut staged,
+                    lifecycle,
+                    &name,
+                    input.clone(),
+                    maka_plugins::input::resources::Resources {
+                        descriptor,
+                        provider: input,
+                    },
+                    Some(source.package.digest().into()),
+                )
+                .map_err(super::message)?;
             }
             Registration::RemoteMethod { .. }
             | Registration::RemoteStream { .. }
@@ -459,6 +487,7 @@ pub(super) enum Kind {
     Background,
     Behavior,
     InputPreparation,
+    InputResources,
     RemoteMethod,
     RemoteStream,
     TerminalApp,
@@ -485,6 +514,7 @@ pub(super) fn withdraw(
         Kind::InputPreparation => {
             publisher.withdraw_many::<maka_plugins::input::InputPreparation>(names)
         }
+        Kind::InputResources => maka_plugins::input::resources::withdraw(publisher, context, names),
         Kind::RemoteMethod | Kind::RemoteStream | Kind::TerminalApp => {
             let package = context.identity()?.package_id;
             publisher.withdraw_many::<maka_plugins::remote::Endpoint>(

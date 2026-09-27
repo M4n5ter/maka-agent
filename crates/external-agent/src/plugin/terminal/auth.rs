@@ -31,8 +31,13 @@ type Owner = (Uuid, Uuid);
 pub(super) struct Pages(Arc<Mutex<BTreeMap<Owner, Arc<Page>>>>);
 struct Page {
     state: watch::Sender<Option<Attempt>>,
-    commands: mpsc::Sender<Attempt>,
+    commands: mpsc::Sender<Work>,
+    installation: watch::Sender<Option<install::Attempt>>,
     checked: Mutex<Option<Checked>>,
+}
+enum Work {
+    Authenticate(Attempt),
+    Install(install::Attempt),
 }
 #[derive(Clone)]
 pub(super) struct Attempt {
@@ -103,7 +108,13 @@ impl Pages {
         let page = pages
             .get(&(caller.connection_id, caller.document_id))
             .ok_or_else(|| Error::Invalid("The sign-in page is not connected; reopen it".into()))?;
-        if page.state.borrow().as_ref().is_some_and(Attempt::active) {
+        if page.state.borrow().as_ref().is_some_and(Attempt::active)
+            || page
+                .installation
+                .borrow()
+                .as_ref()
+                .is_some_and(install::Attempt::active)
+        {
             return Err(Error::Invalid("Sign-in is already in progress".into()));
         }
         let attempt = Attempt {
@@ -119,7 +130,7 @@ impl Pages {
         let permit = page.commands.try_reserve().map_err(|_| Error::Retired)?;
         let id = attempt.id;
         page.state.send_replace(Some(attempt.clone()));
-        permit.send(attempt);
+        permit.send(Work::Authenticate(attempt));
         Ok(id)
     }
     pub fn cancel(&self, caller: &Caller, id: Uuid) -> Result<(), Error> {
@@ -128,6 +139,50 @@ impl Pages {
             .filter(|value| value.id == id)
             .ok_or_else(|| Error::Invalid("This sign-in is no longer active".into()))?;
         attempt.stop.cancel();
+        Ok(())
+    }
+    pub fn installation(&self, caller: &Caller) -> Option<install::Attempt> {
+        self.page(caller)?.installation.borrow().clone()
+    }
+    pub fn begin_install(&self, caller: &Caller) -> Result<(), Error> {
+        let page = self.page(caller).ok_or(Error::Cancelled)?;
+        if page.state.borrow().as_ref().is_some_and(Attempt::active)
+            || page
+                .installation
+                .borrow()
+                .as_ref()
+                .is_some_and(|attempt| attempt.active() || attempt.phase == install::Phase::Unknown)
+        {
+            return Err(Error::Invalid(
+                "Finish the current setup before installing".into(),
+            ));
+        }
+        let attempt = install::Attempt::new();
+        let permit = page.commands.try_reserve().map_err(|_| Error::Retired)?;
+        page.installation.send_replace(Some(attempt.clone()));
+        permit.send(Work::Install(attempt));
+        Ok(())
+    }
+    pub fn cancel_install(&self, caller: &Caller, id: Uuid) -> Result<(), Error> {
+        let page = self.page(caller).ok_or(Error::Cancelled)?;
+        let attempt = page
+            .installation
+            .borrow()
+            .clone()
+            .filter(|attempt| attempt.id == id)
+            .ok_or(Error::Cancelled)?;
+        attempt.stop.cancel();
+        page.installation.send_if_modified(|value| {
+            if let Some(attempt) = value
+                .as_mut()
+                .filter(|attempt| attempt.id == id && attempt.active())
+            {
+                attempt.phase = install::Phase::Cancelling;
+                true
+            } else {
+                false
+            }
+        });
         Ok(())
     }
     pub fn provider(&self, setup: Arc<crate::setup::Provider>) -> Arc<dyn StreamProvider> {
@@ -156,10 +211,12 @@ impl StreamProvider for Changes {
             let owner = (caller.connection_id, caller.document_id);
             let stop = caller.cancellation.child_token();
             let (state, receive) = watch::channel(None);
-            let (commands, mut requests) = mpsc::channel::<Attempt>(1);
+            let (commands, mut requests) = mpsc::channel::<Work>(1);
+            let (installation, install_receive) = watch::channel(None);
             let page = Arc::new(Page {
                 state,
                 commands,
+                installation,
                 checked: Mutex::new(None),
             });
             let mut entries = pages.0.lock().unwrap();
@@ -169,7 +226,7 @@ impl StreamProvider for Changes {
             let worker_page = page.clone();
             let worker_stop = stop.clone();
             let provider = setup.clone();
-            let done = setup.context.spawn_resource("external agent sign-in page", move |stopping| async move {
+            let done = setup.context.spawn_resource("external agent setup page", move |stopping| async move {
                 loop {
                     let attempt = tokio::select! {
                         biased;
@@ -177,7 +234,10 @@ impl StreamProvider for Changes {
                         _ = stopping.cancelled() => break,
                         attempt = requests.recv() => match attempt { Some(value) => value, None => break },
                     };
-                    let result = authenticate(&provider, &caller, &worker_page.state, &attempt, &worker_stop, &stopping).await;
+                    let result = match attempt {
+                        Work::Authenticate(attempt) => authenticate(&provider, &caller, &worker_page.state, &attempt, &worker_stop, &stopping).await,
+                        Work::Install(attempt) => install::run(&provider, &caller, &worker_page.installation, &attempt, &worker_stop, &stopping).await,
+                    };
                     if matches!(result, Err(Error::CleanupUnconfirmed)) {
                         return Err("External agent sign-in cleanup is unconfirmed".into());
                     }
@@ -191,6 +251,7 @@ impl StreamProvider for Changes {
                 owner,
                 page,
                 receive: tokio::sync::Mutex::new(receive),
+                install_receive: tokio::sync::Mutex::new(install_receive),
                 stop,
                 done,
             }) as Box<dyn Stream>)
@@ -202,6 +263,7 @@ struct Watching {
     owner: Owner,
     page: Arc<Page>,
     receive: tokio::sync::Mutex<watch::Receiver<Option<Attempt>>>,
+    install_receive: tokio::sync::Mutex<watch::Receiver<Option<install::Attempt>>>,
     stop: CancellationToken,
     done: oneshot::Receiver<Result<(), String>>,
 }
@@ -209,9 +271,11 @@ impl Stream for Watching {
     fn next(&self) -> BoxFuture<'_, Result<Option<Value>, Error>> {
         Box::pin(async move {
             let mut receive = self.receive.lock().await;
+            let mut installation = self.install_receive.lock().await;
             tokio::select! {
                 biased;
                 _ = self.stop.cancelled() => Ok(None),
+                value = installation.changed() => { value.map_err(|_| Error::Retired)?; Ok(Some(Value::Null)) },
                 value = receive.changed() => { value.map_err(|_| Error::Retired)?; Ok(Some(Value::Null)) }
             }
         })
@@ -307,3 +371,6 @@ async fn authenticate(
     });
     cleanup.and(result)
 }
+
+#[cfg(test)]
+mod testing;

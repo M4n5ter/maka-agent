@@ -121,6 +121,12 @@ impl Screen {
         .expect("validated terminal dimensions")
     }
 
+    /// Input clients must use the application's current paste mode, not infer
+    /// support from the shell name or terminal environment.
+    pub fn bracketed_paste(&self) -> bool {
+        self.state.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     pub fn snapshot(&self) -> Result<TerminalScreen, ScreenError> {
         self.check()?;
         let term = &self.state.term;

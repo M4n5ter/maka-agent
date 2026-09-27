@@ -325,7 +325,7 @@ impl Instance {
                 view.field(id).is_some_and(|field| field.enabled)
             }
             // A session opens beside the app; drafts stay where they are.
-            Intent::Open(_) => true,
+            Intent::Open(_) | Intent::OpenMessage { .. } => true,
         }
     }
     /// What Return in a one-line field submits: the primary button that

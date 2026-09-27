@@ -111,6 +111,7 @@ async fn giant_bodies_and_metadata_do_not_block_stream_delivery() {
     })
     .await;
     let steered = append(Fact::MessageSteered {
+        source: None,
         message: Box::new(maka_runtime::input::DeliveredMessage {
             message_id: "steering".into(),
             content: "s".repeat(64 * 1024).into(),

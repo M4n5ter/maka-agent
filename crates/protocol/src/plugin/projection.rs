@@ -113,11 +113,23 @@ pub struct ToolProjection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommandProjection {
+    pub package_id: String,
+    pub scope_id: Scope,
+    pub method: String,
+    pub target: maka_plugins::remote::Target,
     #[serde(flatten)]
-    pub identity: ContributionIdentity,
-    pub name: String,
-    pub description: String,
-    pub aliases: Vec<String>,
+    pub command: maka_plugins::terminal_ui::Command,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InputResourceProjection {
+    pub provider: String,
+    pub package_id: String,
+    pub scope_id: Scope,
+    pub method: String,
+    pub target: maka_plugins::remote::Target,
+    pub descriptor: maka_plugins::input::resources::Descriptor,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

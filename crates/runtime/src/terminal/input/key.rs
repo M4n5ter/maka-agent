@@ -111,6 +111,45 @@ impl Key {
         Ok(Self(encoding))
     }
 
+    pub(super) fn name(self) -> String {
+        if let Encoding::Character(byte) = self.0 {
+            return char::from(byte).to_string();
+        }
+        // Every non-character encoding has exactly one canonical named key.
+        [
+            "enter",
+            "escape",
+            "tab",
+            "backspace",
+            "arrow_up",
+            "arrow_down",
+            "arrow_right",
+            "arrow_left",
+            "home",
+            "end",
+            "insert",
+            "delete",
+            "page_up",
+            "page_down",
+            "f1",
+            "f2",
+            "f3",
+            "f4",
+            "f5",
+            "f6",
+            "f7",
+            "f8",
+            "f9",
+            "f10",
+            "f11",
+            "f12",
+        ]
+        .into_iter()
+        .find(|name| Self::parse(name) == Ok(self))
+        .expect("closed key encoding has a name")
+        .to_owned()
+    }
+
     pub(super) fn encode(
         self,
         modifiers: Modifiers,

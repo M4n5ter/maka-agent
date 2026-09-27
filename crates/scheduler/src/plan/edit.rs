@@ -93,7 +93,7 @@ impl Plan {
             };
         }
         next.check_expiry()?;
-        next.task.updated_at = now;
+        next.task.updated_at = next.task.updated_at.max(now);
         next.task.bound_history()?;
         next.validate()?;
         Ok(next)
@@ -103,7 +103,7 @@ impl Plan {
         next.cancel_waiting_notification();
         if next.task.status == Status::Active {
             next.task.status = Status::Paused;
-            next.task.updated_at = now;
+            next.task.updated_at = next.task.updated_at.max(now);
         }
         next
     }
@@ -135,7 +135,7 @@ impl Plan {
             }
             next.check_expiry()?;
         }
-        next.task.updated_at = now;
+        next.task.updated_at = next.task.updated_at.max(now);
         Ok(next)
     }
     pub fn snooze(&self, delay_ms: i64, now: i64) -> Result<Self, Error> {
@@ -158,7 +158,7 @@ impl Plan {
             at.checked_add(delay_ms)
                 .ok_or_else(|| invalid("time overflow"))?,
         );
-        next.task.updated_at = now;
+        next.task.updated_at = next.task.updated_at.max(now);
         next.check_expiry()?;
         Ok(next)
     }
@@ -166,7 +166,7 @@ impl Plan {
         let mut next = self.clone();
         next.task.runs.clear();
         next.task.last_error = None;
-        next.task.updated_at = now;
+        next.task.updated_at = next.task.updated_at.max(now);
         next
     }
     fn check_expiry(&self) -> Result<(), Error> {
@@ -213,6 +213,30 @@ mod tests {
             1000,
         )
         .unwrap();
+        // A reschedule uses real wall time even before recorded creation time.
+        let mut rewound = plan
+            .update(
+                Update {
+                    schedule: Some(Schedule::Once { run_at: 750 }),
+                    ..Default::default()
+                },
+                500,
+            )
+            .unwrap();
+        assert_eq!(rewound.task.updated_at, 1000);
+        let mut recovered = rewound.clone();
+        recovered.recover(800).unwrap();
+        recovered.validate().unwrap();
+        assert_eq!(recovered.task.updated_at, 1000);
+        let fire = rewound.claim(750).unwrap().unwrap().clone();
+        assert_eq!(fire.scheduled_at, 750);
+        assert_eq!(rewound.task.updated_at, 1000);
+        let mut restored: Plan =
+            serde_json::from_value(serde_json::to_value(&rewound).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.pending.as_ref(), Some(&fire));
+        restored.pending.as_mut().unwrap().scheduled_at = -1;
+        assert!(restored.validate().is_err());
         let now = 2 * crate::MAX_DELAY_MS;
         let mut next = plan
             .update(

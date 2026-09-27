@@ -314,6 +314,10 @@ mod tests {
             ("column", "5"),
             ("setting", "Palette"),
             ("title", "Plan"),
+            ("latency", "42"),
+            ("status", "200"),
+            ("amount", "123"),
+            ("artifacts", "4"),
         ];
         for locale in Locale::ALL {
             assert_eq!(messages(SOURCES[locale.index()]), keys);

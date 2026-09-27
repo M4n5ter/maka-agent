@@ -44,7 +44,7 @@ const activate: HostPlugin = async (ctx) => {
 export default activate;
 ```
 
-打包为不含 import 和顶层 await 的单个 ESM 入口。在 `maka.extension.json` 中声明 `runtime: { entry: "index.mjs", sdkVersion: 2, vm: "shared" }`；`dedicated` 为该包当前加载代申请独立 VM。
+打包为不含 import 和顶层 await 的单个 ESM 入口。在 `maka.extension.json` 中声明 `runtime: { entry: "index.mjs", sdkVersion: 3, vm: "shared" }`；`dedicated` 为该包当前加载代申请独立 VM。
 
 Prompt 回调接收类型化的 Session 或模型步骤上下文，不伪造工具调用权限。section 和动态 context 默认解析模板；已解析内容或用户文本使用 `format: 'plain'`。一个 `complete` section 替换其它提示词 Contribution，不删除显式 Session／子任务指令。物理重试复用同一份冻结组合。
 
@@ -156,11 +156,23 @@ Remote 回调可以抛出携带 `RemoteFailure.code` 的 `Error`。`outcome_unkn
 
 `restoreRoot(operationId)` 按当前工作区和来源上限恢复本包／作用域创建的根会话，不依赖原模型；创建记录不会使普通根会话变成独占托管会话。`restoreChild` 要求原始子会话创建请求。两者均不创建资源；不存在的观察不能排除并发创建。`configure` 每次成功选择都会推进 Session revision，包括相同值，以阻止较早的配置 CAS 覆盖它，不修改事件历史。
 
+## Composer 发现
+
+Page 应用 descriptor 可声明 `commands: [{ name, aliases?, title, description, route }]`。它们只打开同一应用的路由；shell 在用户选择前保留原 Target，后续表单、确认和提交走原应用路径。其他 placement 不能声明 commands。
+
+输入 provider 可用 `ctx.input.prepare(name, prepare, { resources: { title, query, resolve } })` 提供上下文候选。query 接收 `{query,cursor?,limit,locale}`，返回 `{items:[{id,title,description?}],nextCursor?}`；resolve 接收 `{id,locale}`，返回 `{selector,label,quote?}`。两者的 cx 只有当前 Session 的只读 workspace、sessionId 与 signal，不能借发现过程执行动作或准备消息。
+
+Host 将来源与原 input provider 成对发表；客户端使用目录返回的 method 和精确 Target，每次查询拥有可取消的 Remote document。resolve 结果由 Host 标记原 provider、registration 与 Session。selector 放入已有 inputSelections，source 与捕获内容一起保存在 inputSelectionSources 和同一输入草稿中。来源退休或 Session 不符时必须明确重选，不能按同名新代码静默重绑定。
+
+目录 item.id、resolve 的 id 与返回 selector 必须是同一身份；可变记录使用带版本的 ID。修订到新 Session 时保留旧来源，用户必须明确在新作用域重新解析同一 ID 并确认 Host 返回的新来源；不能本地改写 sessionId。
+
+resources 注册表示该 provider 明确将这些 selector 视为可排队上下文；prepare 必须逐项校验并返回 ready 或 blocked，不能用 unchanged 忽略明确选择。其他 selector 和编排行为仍遵守精确 Turn 限制。已接受的队列内容与原回执在退休后继续保留，不重新解析或准备。初始声明和单次调用 JSON 仍受 1 MiB 限制，生命周期拥有的已保留注册元数据按实际编码字节限制为 32 MiB，注册退休时释放；VM 堆、CPU 和当前调用权限边界保留。
+
 ## 终端应用
 
 Host 插件通过 `ctx.tui.app(name, { entry, backend, resources? }, descriptor, options?)` 注册 TUI 应用。entry 指向同包内不可变、预构建且不含 import 或顶层 await 的 ESM 文件；不支持旧式内联 UI handlers，普通 Remote method/stream 也不能声明 `terminalView`。descriptor 选择 `page`、`panel`、`status`、`settings` 或命名 `slot`，上下文为 `application` 或 `session`；视图通过 `tui.slot(...)` 组合其他插件的贡献。
 
-UI entry 默认导出 `({ tui }) => ({ read, submit, recover? })` factory，每个稳定 document 在独立 VM 中仅初始化一次。factory 只收到纯节点与字段 builders；数据源创建、storage、services 与 jobs 留在原业务激活中。`read(route, cx)` 返回用 `tui` 构造的 View v8 内容，包括列、行、分栏、标签、文本、Markdown、控件和字段，SDK 自动添加版本。稳定的同级 key 保留焦点与编辑状态；`cx.t(en, zhCN, zhTW)` 选择当前语言。外壳负责布局、本地输入、滚动、确认与草稿恢复；插件使用语义颜色，不输出终端转义序列。
+UI entry 默认导出 `({ tui }) => ({ read, submit, recover? })` factory，每个稳定 document 在独立 VM 中仅初始化一次。factory 只收到纯节点与字段 builders；数据源创建、storage、services 与 jobs 留在原业务激活中。`read(route, cx)` 返回用 `tui` 构造的 View v9 内容，包括列、行、分栏、标签、文本、Markdown、控件和字段，SDK 自动添加版本。稳定的同级 key 保留焦点与编辑状态；`cx.t(en, zhCN, zhTW)` 选择当前语言。外壳负责布局、本地输入、滚动、确认与草稿恢复；插件使用语义颜色，不输出终端转义序列。
 
 Host 按需创建页面 VM，不按页面数量设置准入上限。每个 VM 的 JavaScript 堆上限为 128 MiB，同步执行片段上限为 200 ms。这是执行预算，不是进程总内存限制或恶意代码沙箱。隐藏草稿不占 VM；已准入写入保留原执行 owner 直到结算。页面失效后停止观察，保留最后有效视图及已加载的 transcript 供本地阅读；重新绑定需要显式操作，不重放结果未知的写入。页面故障不会重启插件的业务激活或其他页面 VM。
 
@@ -239,4 +251,4 @@ Space 拾取条目，方向键预览位置，Enter 提交，Escape 取消。
 `movement` 指定既有 action 和三个不同的隐藏单行 Text 字段：`item_field`、
 `group_field`、`before_field`，每个字段容纳 128 字节；空 before 表示追加。
 提交沿用既有 revision、CAS 与回执流程；输入、焦点和拖动预览不调用后端。
-独立编辑详情应使用独立 slot 贡献，保留各自的草稿和未知写入。需要 View 版本 8。
+独立编辑详情应使用独立 slot 贡献，保留各自的草稿和未知写入。需要 View 版本 9。

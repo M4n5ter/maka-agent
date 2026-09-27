@@ -27,6 +27,8 @@ pub fn supports(operation: Operation) -> bool {
             | Operation::SessionBundlePreview
             | Operation::SessionBundleExport
             | Operation::SessionBundleImport
+            | Operation::SessionBundleImportPreview
+            | Operation::SessionBundleImportQuery
             | Operation::SessionBranchCreate
             | Operation::SessionRevisionCreate
             | Operation::SessionRevisionAbandon
@@ -38,6 +40,8 @@ pub fn supports(operation: Operation) -> bool {
             | Operation::SessionReadMarkerSet
             | Operation::SessionConfigurationUpdate
             | Operation::SessionWorkspaceRelocate
+            | Operation::SessionWorkspaceQuery
+            | Operation::SessionWorkspaceCapture
             | Operation::SessionRemove
             | Operation::SessionRemovePreview
             | Operation::SessionRemoveQuery
@@ -46,6 +50,12 @@ pub fn supports(operation: Operation) -> bool {
 
 pub fn decode_input(operation: Operation, value: &Value) -> crate::Result<Value> {
     match operation {
+        Operation::SessionWorkspaceQuery => {
+            workspace_context::decode_query(value)?;
+        }
+        Operation::SessionWorkspaceCapture => {
+            workspace_context::decode_capture(value)?;
+        }
         Operation::SessionBundlePreview => {
             bundle::decode_preview(value)?;
         }
@@ -54,6 +64,12 @@ pub fn decode_input(operation: Operation, value: &Value) -> crate::Result<Value>
         }
         Operation::SessionBundleImport => {
             bundle::decode_import(value)?;
+        }
+        Operation::SessionBundleImportPreview => {
+            bundle::decode_import_preview(value)?;
+        }
+        Operation::SessionBundleImportQuery => {
+            bundle::decode_import_query(value)?;
         }
         Operation::SessionRemove => {
             decode_session_remove_input(value)?;
@@ -103,12 +119,20 @@ pub fn decode_input(operation: Operation, value: &Value) -> crate::Result<Value>
 }
 
 pub fn decode_output(operation: Operation, value: &Value) -> crate::Result<Value> {
-    if operation == Operation::SessionBundlePreview {
+    if operation == Operation::SessionWorkspaceQuery {
+        workspace_context::decode_page(value)?;
+    } else if operation == Operation::SessionWorkspaceCapture {
+        workspace_context::decode_captured(value)?;
+    } else if operation == Operation::SessionBundlePreview {
         bundle::decode_previewed(value)?;
     } else if operation == Operation::SessionBundleExport {
         bundle::decode_exported(value)?;
     } else if operation == Operation::SessionBundleImport {
         bundle::decode_imported(value)?;
+    } else if operation == Operation::SessionBundleImportPreview {
+        bundle::decode_import_previewed(value)?;
+    } else if operation == Operation::SessionBundleImportQuery {
+        bundle::decode_import_queried(value)?;
     } else if operation == Operation::SessionRemove {
         decode_session_remove_result(value)?;
     } else if operation == Operation::SessionRemovePreview {
@@ -209,9 +233,14 @@ pub const CONFIGURATION_ERRORS: &[OperationErrorCode] = &[
 
 pub fn errors(operation: Operation) -> Option<&'static [OperationErrorCode]> {
     match operation {
+        Operation::SessionWorkspaceQuery | Operation::SessionWorkspaceCapture => {
+            Some(workspace_context::ERRORS)
+        }
         Operation::SessionBundlePreview
         | Operation::SessionBundleExport
-        | Operation::SessionBundleImport => Some(bundle::ERRORS),
+        | Operation::SessionBundleImport
+        | Operation::SessionBundleImportPreview
+        | Operation::SessionBundleImportQuery => Some(bundle::ERRORS),
         Operation::SessionBranchCreate
         | Operation::SessionRevisionCreate
         | Operation::SessionRevisionAbandon

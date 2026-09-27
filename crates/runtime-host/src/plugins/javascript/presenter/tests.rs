@@ -160,7 +160,7 @@ async fn page_vm_failure_preserves_sibling_factory_and_business_job() {
         let entered = Arc::new(Semaphore::new(0));
         let backend = Arc::new(Backend(std::sync::Mutex::default(), entered.clone()));
         let package = Package::new(BTreeMap::from([
-            ("maka.extension.json".into(), serde_json::to_vec(&json!({"schemaVersion":1,"id":"example.page","runtime":{"entry":"host.mjs","sdkVersion":2}})).unwrap()),
+            ("maka.extension.json".into(), serde_json::to_vec(&json!({"schemaVersion":1,"id":"example.page","runtime":{"entry":"host.mjs","sdkVersion":3}})).unwrap()),
             ("host.mjs".into(), BUSINESS.as_bytes().to_vec()),
             ("page.mjs".into(), SOURCE.as_bytes().to_vec()),
         ])).unwrap();

@@ -20,7 +20,7 @@
 use super::Command;
 use crate::{
     app::{Action, App, ConnectionState, Focus},
-    ui::{self, Node, On, Tone},
+    ui::{self, Node, On, Size, Tone},
 };
 use ratatui::{
     Frame,
@@ -66,7 +66,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 if let Some(key) = status {
                     title.push((format!(" · {}", app.i18n.text(key)), Tone::Muted));
                 }
-                Node::text(item.id.clone(), title)
+                let summary = Node::text("summary", title)
                     .clip()
                     .on(On::Activate(Action::Project(Command::Select(
                         item.id.clone(),
@@ -75,6 +75,20 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     .follow_focus()
                     .current(state.selected.as_ref() == Some(&item.id))
                     .hint(app.i18n.text("project-create-session"))
+                    .size(Size::Fill);
+                Node::row(
+                    item.id.clone(),
+                    vec![
+                        summary,
+                        crate::pages::actions::menu(
+                            app,
+                            "actions",
+                            &format!("project/{}", item.id),
+                            "project-actions",
+                            crate::pages::actions::project_commands(app, item),
+                        ),
+                    ],
+                )
             })
             .collect()
     };
@@ -87,7 +101,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if app.projects.surface.focused().is_none()
         && let Some(id) = &app.projects.selected
     {
-        app.projects.surface.focus(format!("projects/rows/{id}"));
+        app.projects
+            .surface
+            .focus(format!("projects/rows/{id}/summary"));
     }
     app.projects.surface.render(frame, area, tree, context);
 }

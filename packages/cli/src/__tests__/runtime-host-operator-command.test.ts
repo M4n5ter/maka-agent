@@ -621,6 +621,22 @@ describe('Runtime Host operator commands', () => {
     const connection = {
       request: async (operation: string, input: unknown) => {
         requests.push({ operation, input });
+        if (
+          operation === 'plugin.platform.query' &&
+          (input as { view?: string }).view === 'packages'
+        ) {
+          return {
+            view: 'packages',
+            items: [
+              {
+                extensionId: 'plugin',
+                baseGeneration: 7,
+                contentDigest: `sha256-${'a'.repeat(64)}`,
+              },
+            ],
+            nextCursor: null,
+          };
+        }
         return {};
       },
       close: async () => {
@@ -662,6 +678,7 @@ describe('Runtime Host operator commands', () => {
         'plugin.package.install',
         'plugin.package.uninstall',
         'plugin.package.reload',
+        'plugin.platform.query',
         'plugin.package.export',
         'plugin.composition.apply',
         'plugin.platform.reconcile',

@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import type { ExecutorChoices } from '@maka-agent/plugin-sdk/host';
+import type { ExecutorCursor, ExecutorSearchResult } from '@maka-agent/plugin-sdk/host';
 import { isExecutorId } from '@maka/core/executor-id';
 import {
   requireCount,
@@ -32,12 +32,13 @@ import { defineOperation } from './operation-spec.js';
 export type ExecutorCatalogQuery = {
   scope?: 'profile' | 'desktop-ui' | `session:${string}`;
   query?: string;
+  cursor?: ExecutorCursor | null;
 };
 
 export const EXECUTOR_CATALOG_OPERATION_SPECS = {
   'executor.catalog.query': defineOperation<
     ExecutorCatalogQuery,
-    ExecutorChoices,
+    ExecutorSearchResult,
     | 'host_not_ready'
     | 'host_draining'
     | 'invalid_request'
@@ -56,7 +57,7 @@ export const EXECUTOR_CATALOG_OPERATION_SPECS = {
       'persistence_failed',
     ],
     decodeInput(value) {
-      const row = requireShapedRecord(value, 'executor query', [], ['scope', 'query']);
+      const row = requireShapedRecord(value, 'executor query', [], ['scope', 'query', 'cursor']);
       let scope: ExecutorCatalogQuery['scope'];
       if (row.scope !== undefined) {
         if (row.scope === 'profile' || row.scope === 'desktop-ui') scope = row.scope;
@@ -76,14 +77,22 @@ export const EXECUTOR_CATALOG_OPERATION_SPECS = {
       return {
         ...(scope === undefined ? {} : { scope }),
         ...(query === undefined ? {} : { query }),
+        ...(row.cursor === undefined ? {} : { cursor: decodeCursor(row.cursor) }),
       };
     },
     decodeOutput(value) {
       requireEncodedByteLimit(value, 'executor choices', 48 * 1024);
-      const page = requireExactRecord(value, 'executor choices', [
+      const envelope = requireShapedRecord(value, 'executor search result', ['kind'], ['page']);
+      if (envelope.kind === 'stale') {
+        requireExactRecord(value, 'stale executor search', ['kind']);
+        return { kind: 'stale' };
+      }
+      if (envelope.kind !== 'page') throw invalidProtocolFrame('Invalid executor search result');
+      const page = requireExactRecord(envelope.page, 'executor choices', [
         'revision',
         'executors',
         'complete',
+        'nextCursor',
       ]);
       if (
         !Array.isArray(page.executors) ||
@@ -125,11 +134,74 @@ export const EXECUTOR_CATALOG_OPERATION_SPECS = {
           },
         };
       });
-      return {
-        revision: requireCount(page.revision, 'executor revision'),
-        executors,
-        complete: page.complete,
-      };
+      const revision = requireCount(page.revision, 'executor revision');
+      const nextCursor = decodeCursor(page.nextCursor);
+      if (
+        page.complete !== (nextCursor === null) ||
+        (nextCursor && nextCursor.revision !== revision)
+      )
+        throw invalidProtocolFrame('Invalid executor continuation');
+      return { kind: 'page', page: { revision, executors, complete: page.complete, nextCursor } };
+    },
+    assertOutputForInput(input, output) {
+      if (output.kind === 'stale') return;
+      const query = input.query ?? '';
+      const scope = input.scope ?? 'profile';
+      const original = input.cursor;
+      if (
+        original &&
+        (original.query !== query ||
+          original.scope !== scope ||
+          original.revision !== output.page.revision)
+      )
+        throw invalidProtocolFrame('Executor page does not match its query');
+      const next = output.page.nextCursor;
+      if (
+        next &&
+        (output.page.executors.length === 0 ||
+          next.query !== query ||
+          next.scope !== scope ||
+          next.offset !== (original?.offset ?? 0) + output.page.executors.length ||
+          (original &&
+            (next.generation !== original.generation || next.revision !== original.revision)))
+      )
+        throw invalidProtocolFrame('Executor continuation does not match its page');
     },
   }),
 } as const;
+
+function decodeCursor(value: unknown): ExecutorCursor | null {
+  if (value === null) return null;
+  const row = requireExactRecord(value, 'executor cursor', [
+    'query',
+    'generation',
+    'revision',
+    'scope',
+    'offset',
+  ]);
+  const query = requireUtf8String(row.query, 'executor cursor query', 512);
+  const generation = requireUtf8String(row.generation, 'executor cursor generation', 36);
+  if (
+    /\p{Cc}/u.test(query) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(generation)
+  )
+    throw invalidProtocolFrame('Invalid executor cursor');
+  const scope = requireUtf8String(row.scope, 'executor cursor scope', 264);
+  if (
+    scope !== 'profile' &&
+    scope !== 'desktop-ui' &&
+    !(
+      scope.startsWith('session:') &&
+      scope.length > 8 &&
+      !/[\p{White_Space}\p{Cc}]/u.test(scope.slice(8))
+    )
+  )
+    throw invalidProtocolFrame('Invalid executor cursor scope');
+  return {
+    query,
+    generation,
+    revision: requireCount(row.revision, 'executor cursor revision'),
+    scope: scope as ExecutorCursor['scope'],
+    offset: requireCount(row.offset, 'executor cursor offset'),
+  };
+}

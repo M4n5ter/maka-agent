@@ -54,21 +54,20 @@ pub(super) fn draw(
     if app.has_skills(id) {
         content.push(crate::pages::skills::chips(app, id));
     }
+    if let Some(chip) = crate::pages::completion::chips(app, id) {
+        content.push(chip);
+    }
     let chip_rows = content.len() as u16;
     content.push(Node::slot("editor", editor_height).on(On::Activate(Action::Compose)));
-    let attach = shell::controls::compact(
-        "attach",
-        "+".into(),
-        Tone::Muted,
-        Action::Attachment(crate::pages::attachments::Command::Open),
-        app.enabled(&Action::Attachment(
-            crate::pages::attachments::Command::Open,
-        )),
-        action_label(
-            app,
-            &Action::Attachment(crate::pages::attachments::Command::Open),
-        ),
-    );
+    let attach = Node::text("attach", vec![("+".into(), Tone::Muted)])
+        .align(Align::Center)
+        .clip()
+        .size(Size::Fixed(3))
+        .on(On::Menu {
+            identity: crate::pages::actions::identity(app, &format!("composer-add/{id}")),
+            items: crate::pages::actions::items(app, crate::pages::actions::composer_add()),
+        })
+        .hint(app.i18n.text("composer-add"));
     let leading = Node::column(
         "leading",
         vec![
@@ -245,6 +244,32 @@ fn metadata(app: &App, width: u16) -> Option<Node<Action>> {
         String::new()
     };
     let mut children = Vec::new();
+    if model.is_empty() {
+        let id = match app.navigation.current() {
+            crate::navigation::Route::Session(id) => id,
+            _ => return None,
+        };
+        let commands = app
+            .model_action()
+            .into_iter()
+            .map(|action| (action, "session-model-change"))
+            .chain(
+                app.sandbox_action()
+                    .into_iter()
+                    .map(|action| (action, "session-sandbox-change")),
+            );
+        children.push(crate::pages::actions::menu(
+            app,
+            "options",
+            &format!("composer-options/{id}"),
+            "composer-options",
+            commands,
+        ));
+        children.push(Node::text(
+            "options-separator",
+            vec![(" · ".into(), Tone::Subtle)],
+        ));
+    }
     if !model.is_empty() {
         let mut label = Node::text("model", vec![(model, Tone::Subtle)]).clip();
         if let Some(action) = app.model_action() {

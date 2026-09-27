@@ -59,6 +59,8 @@ pub(super) enum Request {
     Preferences,
     #[serde(rename = "remote.session")]
     SessionView(Authority),
+    #[serde(rename = "remote.projects")]
+    ProjectsView(ProjectsView),
     #[serde(rename = "remote.workspace")]
     WorkspaceView(WorkspaceView),
     #[serde(rename = "remote.queryDatabase")]
@@ -334,6 +336,12 @@ pub(super) struct NotificationRequest {
 pub(super) struct WorkspaceView {
     pub authority: String,
     pub input: maka_plugins::remote::WorkspaceViewInput,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProjectsView {
+    pub authority: String,
+    pub input: maka_plugins::remote::projects::Query,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

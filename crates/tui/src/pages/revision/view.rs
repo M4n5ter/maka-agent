@@ -204,9 +204,13 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             );
         }
         sheet = tools(app, input, sheet);
+        if state.completion_reviewing() {
+            sheet = super::completion::review_rows(app, sheet, height);
+        }
     }
     let key = state.error.unwrap_or(match state.phase {
         Phase::Editing if listing => "revision-resources-note",
+        Phase::Editing if state.completion_reviewing() => "revision-resource-confirm",
         Phase::Editing => "revision-note",
         Phase::Ready => "revision-prepared",
         Phase::Done => "revision-started",
@@ -347,6 +351,15 @@ fn tools(app: &App, input: &super::draft::Input, sheet: Sheet<Action>) -> Sheet<
             },
             Command::Attachments,
         ));
+    }
+    if state.phase == Phase::Editing && (!input.marks.is_empty() || !input.display_marks.is_empty())
+    {
+        let command = crate::pages::completion::Command::Added;
+        tools.push(
+            Node::button("context", app.i18n.text(command.label()), Role::Normal)
+                .enabled(app.completion_enabled(&command))
+                .on(On::Activate(Action::Completion(command))),
+        );
     }
     if state.phase == Phase::Editing && !input.resources().is_empty() {
         let command = if state.resources.visible {
@@ -505,12 +518,15 @@ impl App {
             }
             _ => return,
         }
-        if before.text == state.editor.text() {
+        if before.text == state.editor.text() && before.marks == state.editor.marks() {
             return;
         }
         let input = &mut state.saved.as_mut().unwrap().inputs[state.selected];
         match input.replace(state.editor.text().into(), state.display) {
-            Ok(()) => state.error = None,
+            Ok(()) => {
+                *input.marks_mut(state.display) = state.editor.marks().to_vec();
+                state.error = None;
+            }
             Err(error) => {
                 // Reverse this one edit, preserving the editor's earlier history.
                 let redo = matches!(event, Event::Key(key) if key.modifiers.contains(KeyModifiers::CONTROL)

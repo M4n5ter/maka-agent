@@ -19,7 +19,7 @@
 
 use crate::{
     decision::{Evaluation, Jev, Question},
-    settings::{Secrets, Settings},
+    settings::{Secrets, SecretsPatch, Settings},
 };
 use futures_util::future::BoxFuture;
 use maka_plugins::{
@@ -49,6 +49,11 @@ enum Request {
         url: String,
         expected_revision: Option<u64>,
         secret: Option<Secrets>,
+    },
+    CredentialPatch {
+        url: String,
+        expected_revision: Option<u64>,
+        patch: SecretsPatch,
     },
     Test {
         operation_id: uuid::Uuid,
@@ -83,6 +88,7 @@ impl Method for Service {
         Box::pin(async move {
             let request: Request = serde_json::from_value(input)
                 .map_err(|_| Error::Invalid("Invalid Jev request".into()))?;
+            let mutated = !matches!(&request, Request::Read | Request::Test { .. });
             match request {
                 Request::Read => {}
                 Request::Configure {
@@ -92,7 +98,7 @@ impl Method for Service {
                     jev.settings
                         .save(expected_revision, settings)
                         .await
-                        .map_err(failed)?;
+                        .map_err(stored)?;
                 }
                 Request::Credential {
                     url,
@@ -120,7 +126,23 @@ impl Method for Service {
                             secret,
                         })
                         .await
-                        .map_err(failed)?;
+                        .map_err(stored)?;
+                    if matches!(receipt, credentials::WriteResult::Conflict { .. }) {
+                        return Err(Error::Provider(
+                            "Credential changed; refresh before retrying".into(),
+                        ));
+                    }
+                }
+                Request::CredentialPatch {
+                    url,
+                    expected_revision,
+                    patch,
+                } => {
+                    let receipt = jev
+                        .settings
+                        .patch_credentials(url, expected_revision, patch)
+                        .await
+                        .map_err(stored)?;
                     if matches!(receipt, credentials::WriteResult::Conflict { .. }) {
                         return Err(Error::Provider(
                             "Credential changed; refresh before retrying".into(),
@@ -177,9 +199,16 @@ impl Method for Service {
                         });
                 }
             }
-            Ok(
-                json!({"kind":"snapshot", "snapshot":jev.settings.snapshot().await.map_err(failed)?}),
-            )
+            let snapshot = jev.settings.snapshot().await.map_err(|error| {
+                if mutated {
+                    Error::OutcomeUnknown(
+                        "Jev settings were written but readback is unavailable".into(),
+                    )
+                } else {
+                    failed(error)
+                }
+            })?;
+            Ok(json!({"kind":"snapshot", "snapshot":snapshot}))
         })
     }
 }
@@ -188,4 +217,11 @@ fn message(e: impl std::fmt::Display) -> String {
 }
 fn failed(e: impl std::fmt::Display) -> Error {
     Error::Provider(e.to_string())
+}
+
+fn stored(error: maka_plugins::storage::StoreError) -> Error {
+    match error {
+        maka_plugins::storage::StoreError::OutcomeUnknown(reason) => Error::OutcomeUnknown(reason),
+        other => failed(other),
+    }
 }

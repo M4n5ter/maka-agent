@@ -249,7 +249,7 @@ fn code_mode_patch_stops_after_failure_and_keeps_real_tools_visible() {
     // result before measuring coordinates; a pending status row can disappear.
     tui.wait_for("Failed to find expected lines in snapshot: absent");
     tui.wait_for("Patch · created.txt");
-    assert!(!tui.screen.snapshot().unwrap().screen.contains("exec"));
+    assert!(!tui.screen.snapshot().unwrap().screen.contains("◆ exec"));
     tui.click_text("Patch · created.txt");
     tui.wait_for("+ +literal 中文🦀");
     tui.drag_last_text("+literal 中文🦀");
@@ -280,7 +280,7 @@ fn code_mode_patch_stops_after_failure_and_keeps_real_tools_visible() {
     );
     tui.filter_command("Show execution details");
     tui.click_text("Show execution details");
-    tui.wait_for("exec");
+    tui.wait_for("◆ exec");
     tui.close_terminal();
     tui.finish();
     client.disconnect();

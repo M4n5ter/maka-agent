@@ -33,6 +33,10 @@ pub(crate) fn roots(event: &RuntimeEvent) -> &[RootSourceMessage] {
             },
             ..
         } => source_messages,
+        Fact::MessageSteered {
+            source: Some(source),
+            ..
+        } => std::slice::from_ref(source.as_ref()),
         _ => &[],
     }
 }
@@ -41,7 +45,10 @@ pub(crate) fn identities(event: &RuntimeEvent) -> impl Iterator<Item = &str> {
         .iter()
         .map(|source| source.message.message_id.as_str())
         .chain(match &event.fact {
-            Fact::MessageSteered { message, .. } => Some(message.message_id.as_str()),
+            Fact::MessageSteered {
+                message,
+                source: None,
+            } => Some(message.message_id.as_str()),
             _ => None,
         })
 }
@@ -97,7 +104,7 @@ impl RootMessageProof {
 }
 
 impl EventLog {
-    /// Ordered opening messages of a logical Turn, before any preparation.
+    /// Ordered canonical messages of a logical Turn, before any preparation.
     /// Presentation aggregation never supplies an editable message identity.
     pub async fn editable_turn(
         &self,
@@ -117,8 +124,9 @@ impl EventLog {
             loop {
                 let row: Option<(i64, Option<String>)> = sqlx::query_as(
                     "SELECT e.sequence, CASE WHEN length(CAST(e.event_json AS BLOB)) <= 1048576 THEN e.event_json END
-                     FROM runtime_events e WHERE e.kind='invocation_opened'
-                       AND json_extract(e.event_json,'$.fact.input.kind')='message'
+                     FROM runtime_events e WHERE (
+                         (e.kind='invocation_opened' AND json_extract(e.event_json,'$.fact.input.kind')='message')
+                         OR (e.kind='message_steered' AND json_type(e.event_json,'$.fact.source')='object'))
                        AND CAST(json_extract(e.event_json,'$.invocation.turn_id') AS TEXT)=?2
                        AND e.sequence>?3
                        AND (json_extract(e.event_json,'$.invocation.session_id')=?1
@@ -127,7 +135,7 @@ impl EventLog {
                      ORDER BY e.sequence LIMIT 1"
                 ).bind(&session).bind(&turn).bind(after).fetch_optional(&mut *tx).await?;
                 let Some((sequence, json)) = row else { break };
-                let opening = decode_opening(sequence, json)?;
+                let opening = decode_delivery(sequence, json)?;
                 for source in roots(&opening.event) {
                     let message = editable(&mut tx, &session, &opening, source).await?;
                     text_bytes += message.content.text_bytes();
@@ -166,7 +174,8 @@ impl EventLog {
             let row: Option<(i64, Option<String>)> = sqlx::query_as(
                 "SELECT e.sequence, CASE WHEN length(CAST(e.event_json AS BLOB)) <= 1048576 THEN e.event_json END
                  FROM session_message_sources s JOIN runtime_events e ON e.event_id=s.event_id
-                 WHERE s.owner_session_id=?1 AND s.message_id=?2 AND e.kind='invocation_opened'
+                 WHERE s.owner_session_id=?1 AND s.message_id=?2
+                   AND (e.kind='invocation_opened' OR (e.kind='message_steered' AND json_type(e.event_json,'$.fact.source')='object'))
                    AND json_extract(e.event_json,'$.invocation.turn_id')=?3"
             ).bind(&session).bind(&message).bind(&turn).fetch_optional(&mut *tx).await?;
             let Some((sequence, json)) = row else { return Ok(None); };
@@ -195,7 +204,8 @@ impl EventLog {
             let row: Option<(i64, Option<String>)> = sqlx::query_as(
                 "SELECT e.sequence, CASE WHEN length(CAST(e.event_json AS BLOB)) <= 1048576 THEN e.event_json END
                  FROM message_sources s JOIN runtime_events e ON e.event_id = s.event_id
-                 WHERE s.session_id = ? AND s.message_id = ? AND e.kind = 'invocation_opened'"
+                 WHERE s.session_id = ? AND s.message_id = ?
+                   AND (e.kind='invocation_opened' OR (e.kind='message_steered' AND json_type(e.event_json,'$.fact.source')='object'))"
             ).bind(&session).bind(&message).fetch_optional(connection).await?;
             let Some((sequence, json)) = row else { return Ok(None); };
             let proof = decode_root(sequence, json, &message)?;
@@ -210,7 +220,7 @@ fn decode_root(
     json: Option<String>,
     message: &str,
 ) -> Result<RootMessageProof, StoreError> {
-    let opening = decode_opening(sequence, json)?;
+    let opening = decode_delivery(sequence, json)?;
     let index = roots(&opening.event)
         .iter()
         .position(|source| source.message.message_id == message)
@@ -218,21 +228,40 @@ fn decode_root(
     Ok(RootMessageProof { opening, index })
 }
 
-fn decode_opening(sequence: i64, json: Option<String>) -> Result<StoredEvent, StoreError> {
+fn decode_delivery(sequence: i64, json: Option<String>) -> Result<StoredEvent, StoreError> {
     let event: RuntimeEvent = serde_json::from_str(&json.ok_or(StoreError::PrefixTooLarge)?)?;
-    let Fact::InvocationOpened {
-        input:
-            InvocationInput::Message {
-                content,
-                source_messages,
-                ..
-            },
-        ..
-    } = &event.fact
-    else {
-        return Err(invalid("source proof is not a message opening"));
-    };
-    maka_runtime::message::validate_sources(content, source_messages).map_err(invalid)?;
+    match &event.fact {
+        Fact::InvocationOpened {
+            input:
+                InvocationInput::Message {
+                    content,
+                    source_messages,
+                    ..
+                },
+            ..
+        } => maka_runtime::message::validate_sources(content, source_messages).map_err(invalid)?,
+        Fact::MessageSteered {
+            message,
+            source: Some(source),
+        } => {
+            maka_runtime::event::validate_steered_source(
+                message,
+                Some(source),
+                &event.invocation.session_id,
+            )
+            .map_err(invalid)?;
+        }
+        _ => return Err(invalid("source proof has no canonical input")),
+    }
+    for source in roots(&event) {
+        if let Some(intent) = &source.submitted_intent {
+            maka_runtime::input::validate_selection_session(
+                &intent.input_selection_sources,
+                &event.invocation.session_id,
+            )
+            .map_err(invalid)?;
+        }
+    }
     Ok(StoredEvent {
         sequence: sequence_number(sequence)?,
         event,

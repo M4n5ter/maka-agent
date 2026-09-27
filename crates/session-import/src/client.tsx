@@ -21,7 +21,12 @@ import { copy } from './client/copy.js';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClientContext, ClientPlugin, ClientSlots } from '@maka-agent/plugin-sdk/client';
-import type { ModelChoice, ModelChoices, SandboxMode } from '@maka-agent/plugin-sdk/host';
+import type {
+  ModelChoice,
+  ModelChoices,
+  ModelCursor,
+  SandboxMode,
+} from '@maka-agent/plugin-sdk/host';
 import {
   connect,
   type Catalog,
@@ -46,6 +51,7 @@ export function ImportPage({
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [copies, setCopies] = useState<Copies>({ copies: [], next: null });
   const [models, setModels] = useState<ModelChoices>();
+  const [modelHistory, setModelHistory] = useState<(ModelCursor | null)[]>([null]);
   const [sourceId, setSourceId] = useState('');
   const [model, setModel] = useState('');
   const [modelQuery, setModelQuery] = useState('');
@@ -95,9 +101,10 @@ export function ImportPage({
           setSourceId(source.value.snapshot.configuration.sources[0]?.id ?? '');
         }
         if (history.status === 'fulfilled') setCopies(history.value.page);
-        if (choices.status === 'fulfilled') {
-          setModels(choices.value.choices);
-          const currentModel = choices.value.choices.models.find((choice) => choice.isDefault);
+        if (choices.status === 'fulfilled' && choices.value.choices.kind === 'page') {
+          setModels(choices.value.choices.page);
+          setModelHistory([null]);
+          const currentModel = choices.value.choices.page.models.find((choice) => choice.isDefault);
           setModel(currentModel ? modelKey(currentModel) : '');
         }
         setError(
@@ -136,6 +143,22 @@ export function ImportPage({
     } finally {
       if (epoch.current === current && !context.signal.aborted) setBusy(false);
     }
+  }
+  function loadModels(history: (ModelCursor | null)[]) {
+    const cursor = history[history.length - 1];
+    void run(async () => {
+      const result = await api({ kind: 'models', query: { query: modelQuery, cursor } }, 'models');
+      return () => {
+        if (result.choices.kind === 'stale') {
+          setModels(undefined);
+          setError(t.modelsChanged);
+        } else {
+          setModels(result.choices.page);
+          setModelHistory(history);
+        }
+        setModel('');
+      };
+    });
   }
   function invalidate() {
     setPage(undefined);
@@ -362,24 +385,23 @@ export function ImportPage({
               {t.findModel}
               <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} />
             </label>
-            <button
-              type="button"
-              onClick={() =>
-                void run(async () => {
-                  const result = await api(
-                    { kind: 'models', query: { query: modelQuery } },
-                    'models',
-                  );
-                  return () => {
-                    setModels(result.choices);
-                    setModel('');
-                  };
-                })
-              }
-            >
+            <button type="button" onClick={() => loadModels([null])}>
               {t.searchModels}
             </button>
-            {models && !models.complete && <p>{t.incompleteModels}</p>}
+            {modelHistory.length > 1 && (
+              <button type="button" onClick={() => loadModels(modelHistory.slice(0, -1))}>
+                {t.previousPage}
+              </button>
+            )}
+            {models?.nextCursor && (
+              <button
+                type="button"
+                disabled={models.nextCursor.query !== modelQuery}
+                onClick={() => loadModels([...modelHistory, models.nextCursor])}
+              >
+                {t.nextPage}
+              </button>
+            )}
             <label>
               {t.model}
               <select value={model} onChange={(event) => setModel(event.target.value)}>

@@ -314,7 +314,7 @@ export class HostRuntimePolicyCoordinator {
       const result = await this.#stores.operations.getConnectionRequestHeaders(input.connectionId);
       return result === null
         ? { kind: 'connection_not_found' as const }
-        : { kind: 'found' as const, names: result.names };
+        : { kind: 'found' as const, names: result.names, basis: result.basis };
     });
   }
 
@@ -322,7 +322,7 @@ export class HostRuntimePolicyCoordinator {
     input: ConnectionRequestHeadersReplaceInput,
   ): Promise<OperationOutcome<'connection.request-headers.replace'>> {
     return this.#storeMutation(() =>
-      this.#stores.operations.replaceConnectionRequestHeaders(input.connectionId, input.headers),
+      this.#stores.operations.replaceConnectionRequestHeaders(input.expected, input.headers),
     );
   }
 

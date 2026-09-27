@@ -86,6 +86,20 @@ fn patch(app: &App, value: &EntryPatch, lines: &mut Vec<String>) {
 pub(super) fn write(app: &App, request: &Request) -> Option<String> {
     let mut lines = vec![];
     match request.mutation()? {
+        io::Mutation::Export(input) => {
+            lines.push(field(app, "plugins-package", &input.extension_id));
+            lines.push(field(
+                app,
+                "plugins-export-source",
+                &app.i18n.text("plugins-export-installed"),
+            ));
+            lines.push(field(
+                app,
+                "plugins-export-version",
+                input.expected.content_digest.as_deref()?,
+            ));
+            lines.push(field(app, "plugins-export-target", &input.target_path));
+        }
         io::Mutation::Install(input) => {
             let (_, Place::Package(package), _) = request.intent()? else {
                 return None;

@@ -219,7 +219,7 @@ async fn install(client: &Client, directory: &std::path::Path) {
     std::fs::write(
         package.join("maka.extension.json"),
         json!({"schemaVersion":1,"id":PACKAGE,
-        "runtime":{"entry":"host.mjs","sdkVersion":2}})
+        "runtime":{"entry":"host.mjs","sdkVersion":3}})
         .to_string(),
     )
     .unwrap();

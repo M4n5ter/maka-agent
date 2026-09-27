@@ -29,6 +29,7 @@ import {
   decodeProviderType,
   decodeRuntimePolicyEntityId,
   decodeCredentialLocator,
+  decodeRequestHeadersBasis,
   normalizeDeleteCredentialInput,
   normalizeRemoveCatalogConnectionInput,
   normalizeRequestHeaderUpdates,
@@ -56,6 +57,7 @@ import {
   type RemoveCatalogConnectionInput,
   type RuntimePolicy,
   type RequestHeaderUpdate,
+  type RequestHeadersBasis,
   type SavedRequestHeaders,
   type SetCredentialInput,
   type SetDefaultConnectionTargetInput,
@@ -940,22 +942,28 @@ export class RuntimePolicyCoordinator {
         decodeRuntimePolicyEntityId(rawConnectionId),
       );
       const catalog = await this.catalog.read(root);
-      if (!findConnection(catalog, { connectionId })) return null;
+      const connection = findConnection(catalog, { connectionId });
+      if (!connection) return null;
       const locator = connectionRequestHeadersLocator(connectionId);
       const credential = findCredential(await this.vault.read(root), locator);
       const headers = credential ? parseRequestHeaders(credential.secret) : {};
-      return deepFreeze({ names: Object.keys(headers) });
+      return deepFreeze({
+        names: Object.keys(headers),
+        basis: {
+          connection: connectionBasis(connection),
+          credential: credential ? credentialBasis(credential) : null,
+        },
+      });
     });
   }
 
   replaceConnectionRequestHeaders(
-    rawConnectionId: string,
+    rawExpected: RequestHeadersBasis,
     rawUpdates: readonly RequestHeaderUpdate[],
   ): Promise<ReplaceConnectionRequestHeadersResult> {
     return this.inLane(async (root) => {
-      const connectionId = decodeConnectionInput(() =>
-        decodeRuntimePolicyEntityId(rawConnectionId),
-      );
+      const expected = decodeConnectionInput(() => decodeRequestHeadersBasis(rawExpected));
+      const connectionId = expected.connection.connectionId;
       const updates = decodeRequestHeaderUpdates(rawUpdates);
       const catalog = await this.catalog.read(root);
       const connection = findConnection(catalog, { connectionId });
@@ -963,10 +971,25 @@ export class RuntimePolicyCoordinator {
         return deepFreeze({ kind: 'connection_not_found' as const });
       }
       assertConnectionIsWritable(connection);
+      if (connection.revision !== expected.connection.revision) {
+        return deepFreeze({
+          kind: 'connection_stale' as const,
+          expected: expected.connection,
+          actual: connectionBasis(connection),
+        });
+      }
 
       const locator = connectionRequestHeadersLocator(connectionId);
       const vault = await this.vault.read(root);
       const existing = findCredential(vault, locator);
+      const actualCredential = existing ? credentialBasis(existing) : null;
+      if (!isDeepStrictEqual(expected.credential, actualCredential)) {
+        return deepFreeze({
+          kind: 'credential_stale' as const,
+          expected: expected.credential,
+          actual: actualCredential,
+        });
+      }
       const savedHeaders = existing ? parseRequestHeaders(existing.secret) : {};
       const savedByName = new Map(
         Object.entries(savedHeaders).map(([name, value]) => [name.toLowerCase(), value]),
@@ -984,7 +1007,7 @@ export class RuntimePolicyCoordinator {
       const names = Object.keys(headers);
 
       if (names.length === 0) {
-        if (!existing) return deepFreeze({ kind: 'unchanged' as const, names });
+        if (!existing) return deepFreeze({ kind: 'unchanged' as const, names, basis: expected });
         const prepared = this.vault.prepareDelete(vault, { expected: credentialBasis(existing) });
         if (prepared.kind !== 'ready') {
           throw codecError('invalid_document', 'Request header credential changed within its lane');
@@ -992,6 +1015,17 @@ export class RuntimePolicyCoordinator {
         const cleared = await this.clearCredentialDependentLastTests(root, locator, catalog);
         try {
           await this.vault.commitDelete(root, prepared);
+          const currentConnection = cleared
+            ? findConnection(await this.catalog.read(root), { connectionId })!
+            : connection;
+          return deepFreeze({
+            kind: 'committed' as const,
+            names,
+            basis: {
+              connection: connectionBasis(currentConnection),
+              credential: null,
+            },
+          });
         } catch (error) {
           if (cleared) {
             throw commitOutcomeUnknown(
@@ -1001,12 +1035,11 @@ export class RuntimePolicyCoordinator {
           }
           throw error;
         }
-        return deepFreeze({ kind: 'committed' as const, names });
       }
 
       const secret = serializeRequestHeaders(headers);
       if (existing?.secret === secret) {
-        return deepFreeze({ kind: 'unchanged' as const, names });
+        return deepFreeze({ kind: 'unchanged' as const, names, basis: expected });
       }
       const prepared = this.vault.prepareSet(vault, {
         locator,
@@ -1021,6 +1054,17 @@ export class RuntimePolicyCoordinator {
       const cleared = await this.clearCredentialDependentLastTests(root, locator, catalog);
       try {
         await this.vault.commitSet(root, prepared);
+        const currentConnection = cleared
+          ? findConnection(await this.catalog.read(root), { connectionId })!
+          : connection;
+        return deepFreeze({
+          kind: 'committed' as const,
+          names,
+          basis: {
+            connection: connectionBasis(currentConnection),
+            credential: credentialBasis(prepared.entry),
+          },
+        });
       } catch (error) {
         if (cleared) {
           throw commitOutcomeUnknown(
@@ -1030,7 +1074,6 @@ export class RuntimePolicyCoordinator {
         }
         throw error;
       }
-      return deepFreeze({ kind: 'committed' as const, names });
     });
   }
 

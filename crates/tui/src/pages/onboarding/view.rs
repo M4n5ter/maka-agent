@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::Command;
+use super::{Command, configuration};
 use crate::{
     app::{Action, App},
     ui::{self, Node, On, Role, Sheet, Size, Tone},
@@ -27,7 +27,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 /// The setup form's rows, one per field index.
-const FORM: &str = "form";
+pub(super) const FORM: &str = "form/rows";
 const MODELS: &str = "list/rows";
 const LABELS: [&str; 3] = ["onboard-name", "oauth-configuration", "oauth-slug"];
 
@@ -45,13 +45,27 @@ fn action(command: Command) -> Action {
 }
 
 fn label_width(app: &App) -> u16 {
-    form::label_width(
-        LABELS
-            .iter()
-            .chain(["onboard-provider"].iter())
-            .map(|key| app.i18n.text(key).width()),
-        app.frame_size.map_or(80, |(width, _)| width),
-    )
+    let configuration = app
+        .onboarding
+        .dialog
+        .as_ref()
+        .map(|form| &form.configuration);
+    let mut widths: Vec<_> = LABELS
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1 || configuration.is_some_and(|mode| mode.advanced()))
+        .map(|(_, key)| app.i18n.text(key).width())
+        .collect();
+    widths.push(app.i18n.text("onboard-provider").width());
+    if let Some(fields) = configuration.and_then(|mode| mode.fields()) {
+        widths.extend(
+            fields
+                .fields
+                .iter()
+                .map(|field| configuration::label(app, field).width()),
+        );
+    }
+    form::label_width(widths, app.frame_size.map_or(80, |(width, _)| width))
 }
 
 /// Adding an anonymous connection: choose the provider and fill in the form,
@@ -70,7 +84,18 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         format!("onboard:{}:{step}", f.ticket.generation),
         app.i18n.text("onboard-title"),
     );
-    let error = f.error.or_else(|| f.fields.iter().find_map(|e| e.error));
+    let error = f
+        .error
+        .or_else(|| {
+            f.fields_in_order()
+                .into_iter()
+                .find_map(|field| f.editor(field).and_then(|editor| editor.error))
+        })
+        .or_else(|| {
+            (!f.providers.is_empty())
+                .then(|| f.configuration_value().err())
+                .flatten()
+        });
     if let Some(models) = &f.models {
         let rows = models
             .iter()
@@ -154,7 +179,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         ];
         let field_width = ui::content_width(app.frame_size.map_or(80, |(width, _)| width))
             .saturating_sub(label_width(app));
-        rows.extend((0..LABELS.len()).map(|index| {
+        let slot = |index: usize| {
             let height = if index == 1 {
                 f.fields[index].rows(field_width).clamp(1, 4)
             } else {
@@ -163,8 +188,29 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             Node::slot(index.to_string(), height)
                 .on(On::Activate(action(Command::Field(index))))
                 .enabled(app.onboarding_offered(&Command::Field(index)))
-        }));
-        sheet = sheet.body(Node::column(FORM, rows));
+        };
+        rows.push(slot(0));
+        if f.configuration.advanced() {
+            rows.push(slot(1));
+        } else if let Some(configuration) = configuration::rows(app, label_width(app)) {
+            rows.push(configuration);
+        }
+        let mode = Command::Advanced(!f.configuration.advanced());
+        rows.push(
+            Node::button(
+                "configuration-mode",
+                app.i18n.text(mode.label()),
+                Role::Normal,
+            )
+            .on(On::Activate(action(mode.clone())))
+            .enabled(app.onboarding_offered(&mode)),
+        );
+        rows.push(slot(2));
+        let height = app.frame_size.map_or(24, |(_, height)| height);
+        sheet = sheet.body(
+            Node::scroll("form", Node::column("rows", rows).focus_group())
+                .size(Size::Upto(height.saturating_sub(12).max(3))),
+        );
     }
     let key = if f.providers.is_empty() {
         availability(app)
@@ -254,4 +300,5 @@ pub(crate) fn draw_field(frame: &mut Frame<'_>, app: &mut App) {
         };
         form::draw(frame, rect, width, row, field, colors);
     }
+    configuration::draw(frame, app, width);
 }

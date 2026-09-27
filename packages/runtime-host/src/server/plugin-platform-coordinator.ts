@@ -145,7 +145,7 @@ export class HostPluginPlatformCoordinator {
     input: PluginPackageExportInput,
   ): Promise<OperationOutcome<'plugin.package.export'>> {
     try {
-      await this.platform.exportPackage(input.extensionId, input.targetPath);
+      await this.platform.exportPackage(input.extensionId, input.targetPath, input.expected);
       return { ok: true, result: { targetPath: input.targetPath } };
     } catch (error) {
       return failure(error);
@@ -306,6 +306,7 @@ function failure<K extends keyof PluginPlatformOperationHandlerMap>(
   if (error instanceof HostPluginPlatformError) {
     if (error.code === 'not_ready') return failed('host_not_ready', error.message);
     if (error.code === 'stale_cursor') return failed('stale_cursor', error.message);
+    if (error.code === 'operation_conflict') return failed('operation_conflict', error.message);
     if (error.code === 'closed') return failed('host_draining', error.message);
     if (error.code === 'persistence_failed') return failed('persistence_failed', error.message);
     if (error.code === 'recovery_failed') return failed('persistence_failed', error.message);

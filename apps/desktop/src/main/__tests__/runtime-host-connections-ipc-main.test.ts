@@ -421,7 +421,19 @@ test('reports an existing but unconfigured credential as missing', async () => {
 
 test('keeps saved custom header values out of the renderer and preserves them by name', async () => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const connectionId = '12345678-1234-4234-8234-123456789abc';
+  const identity = { ...connectionIdentity(), connectionId };
+  const basis = {
+    connection: { connectionId, revision: 4 },
+    credential: {
+      locator: { scope: 'connection', connectionId, kind: 'request_headers' },
+      credentialId: '87654321-1234-4234-8234-123456789abc', revision: 2,
+    },
+  };
+  const nextBasis = { ...basis, credential: { ...basis.credential, revision: 3 } };
   let replacedHeaders: unknown;
+  let replacedBasis: unknown;
+  let conflict = false;
   registerRuntimeHostConnectionsIpc({
     ipcMain: {
       handle: (channel, handler) => {
@@ -429,39 +441,58 @@ test('keeps saved custom header values out of the renderer and preserves them by
       },
     },
     client: {
-      loadConnectionCatalog: async () => catalog(),
+      loadConnectionCatalog: async () => ({
+        ...catalog(), connections: [{ ...catalog().connections[0], connectionId }],
+      }),
       getConnectionRequestHeaders: async () => ({
         kind: 'found',
         names: ['HTTP-Referer'],
+        basis,
       }),
-      replaceConnectionRequestHeaders: async (_connectionId: string, headers: unknown) => {
+      replaceConnectionRequestHeaders: async (expected: unknown, headers: unknown) => {
+        replacedBasis = expected;
         replacedHeaders = headers;
-        return { kind: 'committed', names: ['HTTP-Referer', 'X-Title'] };
+        return conflict
+          ? { kind: 'credential_stale', expected: basis.credential, actual: nextBasis.credential }
+          : { kind: 'committed', names: ['HTTP-Referer', 'X-Title'], basis: nextBasis };
       },
     } as never,
     emitConnectionListChanged() {},
   });
 
   assert.deepEqual(
-    await handlers.get('connections:getRequestHeaders')?.({}, connectionIdentity()),
-    { names: ['HTTP-Referer'] },
+    await handlers.get('connections:getRequestHeaders')?.({}, identity),
+    { names: ['HTTP-Referer'], basis },
   );
   assert.equal(
-    JSON.stringify(await handlers.get('connections:getRequestHeaders')?.({}, connectionIdentity())).includes('private.example'),
+    JSON.stringify(await handlers.get('connections:getRequestHeaders')?.({}, identity)).includes('private.example'),
     false,
   );
 
   assert.deepEqual(
-    await handlers.get('connections:setRequestHeaders')?.({}, connectionIdentity(), [
+    await handlers.get('connections:setRequestHeaders')?.({}, identity, basis, [
       { name: 'HTTP-Referer' },
       { name: 'X-Title', value: 'Maka' },
     ]),
-    { names: ['HTTP-Referer', 'X-Title'] },
+    { names: ['HTTP-Referer', 'X-Title'], basis: nextBasis },
   );
+  assert.deepEqual(replacedBasis, basis);
   assert.deepEqual(replacedHeaders, [
     { name: 'HTTP-Referer' },
     { name: 'X-Title', value: 'Maka' },
   ]);
+  conflict = true;
+  await assert.rejects(
+    async () => handlers.get('connections:setRequestHeaders')?.({}, identity, basis, []),
+    /credential_stale/,
+  );
+  await assert.rejects(
+    async () => handlers.get('connections:setRequestHeaders')?.({}, identity, { ...basis,
+      connection: { ...basis.connection, connectionId: basis.credential.credentialId },
+      credential: null,
+    }, []),
+    /connection_stale/,
+  );
 });
 
 test('creates a connection with only the explicitly selected model', async () => {

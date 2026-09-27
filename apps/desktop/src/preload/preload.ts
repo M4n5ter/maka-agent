@@ -2968,10 +2968,11 @@ const makaBridge = {
     },
     setRequestHeaders(
       connection: import('../shared/desktop-connection-snapshot.js').DesktopConnectionIdentity,
+      expected: import('@maka/core/llm-connections').RequestHeadersBasis,
       headers: readonly import('@maka/core/llm-connections').RequestHeaderUpdate[],
       host?: DesktopRuntimeHostRef,
     ): Promise<import('@maka/core/llm-connections').SavedRequestHeaders> {
-      return invokeSelectedRuntimeHost(host, 'connections:setRequestHeaders', connection, headers);
+      return invokeSelectedRuntimeHost(host, 'connections:setRequestHeaders', connection, expected, headers);
     },
     subscribeEvents(handler: (event: ConnectionEvent) => void, host?: DesktopRuntimeHostRef): () => void {
       return host

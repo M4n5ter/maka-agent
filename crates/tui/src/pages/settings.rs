@@ -84,6 +84,8 @@ pub enum Message {
     CustomTheme,
     Connections,
     SandboxDefaults,
+    NetworkProxy,
+    PersonalPreferences,
     HostDetails,
     Connect,
     Refresh,
@@ -564,6 +566,15 @@ fn host(app: &App) -> Vec<Node<Message>> {
         (Message::Connect, "command-connect")
     };
     let mut rows = vec![
+        Node::text("proxy", vec![(i18n.text("proxy-title"), Tone::Normal)])
+            .on(On::Activate(Message::NetworkProxy))
+            .enabled(app.network_proxy_action().is_some()),
+        Node::text(
+            "personal",
+            vec![(i18n.text("controls-preferences"), Tone::Normal)],
+        )
+        .on(On::Activate(Message::PersonalPreferences))
+        .enabled(app.personal_preferences_action().is_some()),
         Node::text("connection-state", vec![(i18n.text(state), tone)]),
         Node::row(
             "connection-actions",
@@ -703,6 +714,16 @@ impl App {
             Message::Connect => return self.apply(Action::Connect),
             Message::Refresh => return self.apply(Action::Refresh),
             Message::Apps => return self.apps_action(crate::apps::Message::Directory),
+            Message::NetworkProxy => {
+                return self
+                    .network_proxy_action()
+                    .and_then(|action| self.apply(action));
+            }
+            Message::PersonalPreferences => {
+                return self
+                    .personal_preferences_action()
+                    .and_then(|action| self.apply(action));
+            }
             Message::SandboxDefaults => {
                 return self
                     .sandbox_defaults_action()

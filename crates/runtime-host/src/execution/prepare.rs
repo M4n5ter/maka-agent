@@ -133,7 +133,7 @@ impl Executions {
         environment: Environment,
     ) -> Result<PreparedRun> {
         let content = &input.content;
-        if !input.input_selections.is_empty() {
+        if !input.input_selections.is_empty() || !input.input_selection_sources.is_empty() {
             return Err(internal("Input selection must be handled by admission"));
         }
         if let MessageOrigin::Client { root_id, .. } = origin {

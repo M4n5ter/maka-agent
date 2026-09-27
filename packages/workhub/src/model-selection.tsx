@@ -20,7 +20,13 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@maka/ui/plugin';
 import type { ClientContext } from '@maka-agent/plugin-sdk/client';
-import type { ExecutionTarget, ModelChoices } from '@maka-agent/plugin-sdk/host';
+import type {
+  ExecutionTarget,
+  ModelChoices,
+  ModelCursor,
+  ModelSearch,
+  ModelSearchResult,
+} from '@maka-agent/plugin-sdk/host';
 
 export type ModelTarget = Extract<ExecutionTarget, { kind: 'model' }>;
 
@@ -39,6 +45,10 @@ export function ModelSelection({
 }) {
   const zh = locale !== 'en';
   const [query, setQuery] = useState('');
+  const [history, setHistory] = useState<(ModelCursor | null)[]>([null]);
+  const cursor = history[history.length - 1];
+  const [revision, setRevision] = useState(0);
+  const t = (en: string, cn: string, tw: string) => (locale === 'zh-TW' ? tw : zh ? cn : en);
   const [choices, setChoices] = useState<ModelChoices>();
   const [selected, setSelected] = useState(() =>
     initialTarget ? JSON.stringify(initialTarget.model) : '',
@@ -59,9 +69,18 @@ export function ModelSelection({
     setError(undefined);
     const timer = setTimeout(() => {
       void context.remote
-        .method<{ query: string }, ModelChoices>('models')({ query })
+        .method<ModelSearch, ModelSearchResult>('models')({ query, cursor })
         .then((page) => {
-          if (active) setChoices(page);
+          if (!active) return;
+          if (page.kind === 'page') setChoices(page.page);
+          else
+            setError(
+              locale === 'en'
+                ? 'Choices changed. Refresh to search again.'
+                : locale === 'zh-TW'
+                  ? '選項已變更，請重新整理後搜尋。'
+                  : '选项已变化，请刷新后搜索。',
+            );
         })
         .catch((error: unknown) => {
           if (active) setError(error instanceof Error ? error.message : String(error));
@@ -71,7 +90,7 @@ export function ModelSelection({
       active = false;
       clearTimeout(timer);
     };
-  }, [context, query]);
+  }, [context, query, cursor, revision, locale]);
   const key = (choice: ModelChoices['models'][number]) => JSON.stringify(choice.model);
   const model =
     choices?.models.find((choice) => key(choice) === selected) ??
@@ -85,7 +104,14 @@ export function ModelSelection({
     <div className="workhub-model-selection">
       <label>
         {zh ? '搜索模型' : 'Search models'}
-        <input value={query} disabled={busy} onChange={(event) => setQuery(event.target.value)} />
+        <input
+          value={query}
+          disabled={busy}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setHistory([null]);
+          }}
+        />
       </label>
       <label>
         {zh ? '模型' : 'Model'}
@@ -122,9 +148,28 @@ export function ModelSelection({
           </select>
         </label>
       ) : null}
-      {choices?.complete === false ? (
-        <p>{zh ? '请缩小搜索范围以查看其他模型。' : 'Refine the search to find more models.'}</p>
+      {history.length > 1 ? (
+        <Button
+          label={t('Previous', '上一页', '上一頁')}
+          isDisabled={busy}
+          onClick={() => setHistory((items) => items.slice(0, -1))}
+        />
       ) : null}
+      {choices?.nextCursor ? (
+        <Button
+          label={t('More models', '更多模型', '更多模型')}
+          isDisabled={busy}
+          onClick={() => setHistory((items) => [...items, choices.nextCursor])}
+        />
+      ) : null}
+      <Button
+        label={t('Refresh', '刷新', '重新整理')}
+        isDisabled={busy}
+        onClick={() => {
+          setHistory([null]);
+          setRevision((value) => value + 1);
+        }}
+      />
       <Button
         label={label}
         isDisabled={busy || !model}

@@ -20,19 +20,22 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import { THINKING_LEVELS } from '@maka/core/model-thinking';
-import type { ExecutionTarget, ExecutorChoices, ExecutorSettings } from '@maka-agent/plugin-sdk/host';
+import type { ExecutionTarget, ExecutorChoices, ExecutorCursor, ExecutorSearch, ExecutorSearchResult, ExecutorSettings } from '@maka-agent/plugin-sdk/host';
 
 type Target = Extract<ExecutionTarget, { kind: 'executor' }>;
 
 export function ExecutorSelection({ locale, label, search, initialValue, onSelect }: {
   locale: string;
   label: string;
-  search(query: { query: string }): Promise<ExecutorChoices>;
+  search(query: ExecutorSearch): Promise<ExecutorSearchResult>;
   initialValue?: Target;
   onSelect(target: Target): Promise<void>;
 }) {
   const zh = locale !== 'en';
   const [query, setQuery] = useState('');
+  const [history, setHistory] = useState<(ExecutorCursor | null)[]>([null]);
+  const cursor = history[history.length - 1];
+  const t = (en: string, cn: string, tw: string) => locale === 'zh-TW' ? tw : zh ? cn : en;
   const [page, setPage] = useState<ExecutorChoices>();
   const [selected, setSelected] = useState(initialValue?.executorId ?? '');
   const [draft, setDraft] = useState<{ id: string; settings: ExecutorSettings } | undefined>(initialValue ? { id: initialValue.executorId, settings: initialValue.settings ?? {} } : undefined);
@@ -44,14 +47,16 @@ export function ExecutorSelection({ locale, label, search, initialValue, onSelec
     setPage(undefined);
     setError(undefined);
     const timer = setTimeout(() => {
-      void search({ query }).then((next) => {
-        if (active) setPage(next);
+      void search({ query, cursor }).then((next) => {
+        if (!active) return;
+        if (next.kind === 'page') setPage(next.page);
+        else setError(locale === 'en' ? 'Choices changed. Refresh to search again.' : locale === 'zh-TW' ? '選項已變更，請重新整理後搜尋。' : '选项已变化，请刷新后搜索。');
       }).catch((error: unknown) => {
         if (active) setError(error instanceof Error ? error.message : String(error));
       });
     }, 150);
     return () => { active = false; clearTimeout(timer); };
-  }, [search, query, revision]);
+  }, [search, query, cursor, revision, locale]);
   const executor = page?.executors.find((choice) => choice.id === selected) ?? page?.executors[0];
   const settings = executor && draft?.id === executor.id ? draft.settings : {};
   const change = (patch: Partial<ExecutorSettings>) => {
@@ -60,7 +65,7 @@ export function ExecutorSelection({ locale, label, search, initialValue, onSelec
   return (
     <div className="maka-executor-selection">
       <label>{zh ? '搜索执行器' : 'Search executors'}
-        <input value={query} disabled={busy} onChange={(event) => setQuery(event.target.value)} />
+        <input value={query} disabled={busy} onChange={(event) => { setQuery(event.target.value); setHistory([null]); }} />
       </label>
       <label>{zh ? '执行器' : 'Executor'}
         <select value={executor?.id ?? ''} disabled={busy || !executor} onChange={(event) => {
@@ -82,8 +87,9 @@ export function ExecutorSelection({ locale, label, search, initialValue, onSelec
           </select>
         </label> : null}
       </> : null}
-      {page?.complete === false ? <p>{zh ? '请缩小搜索范围。' : 'Refine the search.'}</p> : null}
-      <Button label={zh ? '刷新' : 'Refresh'} isDisabled={busy} onClick={() => setRevision((value) => value + 1)} />
+      {history.length > 1 ? <Button label={t('Previous', '上一页', '上一頁')} isDisabled={busy} onClick={() => setHistory((items) => items.slice(0, -1))} /> : null}
+      {page?.nextCursor ? <Button label={t('More executors', '更多执行器', '更多執行器')} isDisabled={busy} onClick={() => setHistory((items) => [...items, page.nextCursor])} /> : null}
+      <Button label={zh ? '刷新' : 'Refresh'} isDisabled={busy} onClick={() => { setHistory([null]); setRevision((value) => value + 1); }} />
       <Button label={label} isDisabled={busy || !executor} onClick={() => {
         if (!executor) return;
         setBusy(true);

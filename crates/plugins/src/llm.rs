@@ -50,12 +50,12 @@ impl Selection {
 }
 
 pub trait Models: Send + Sync {
-    /// Bounded, non-secret chat model choices. Refine the query when incomplete.
+    /// Bounded, non-secret chat model pages. Continue with the returned cursor.
     /// Discovery does not grant execution authority or promise provider readiness.
     fn search(
         &self,
         query: Search,
-    ) -> futures_util::future::BoxFuture<'_, Result<Choices, crate::Error>>;
+    ) -> futures_util::future::BoxFuture<'_, Result<SearchResult, crate::Error>>;
     /// Resolve an enabled model without exposing credentials, endpoints, or overlays.
     /// Admission still validates the selected binding and its current permissions.
     fn resolve(
@@ -75,10 +75,35 @@ pub trait Models: Send + Sync {
 pub struct Search {
     #[serde(default)]
     pub query: String,
+    #[serde(default)]
+    pub cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Cursor {
+    pub query: String,
+    pub generation: uuid::Uuid,
+    pub configuration_revision: u64,
+    pub provider_revision: u64,
+    pub offset: u64,
 }
 impl Search {
     pub fn validate(&self) -> Result<(), crate::Error> {
-        if self.query.len() > 512 || self.query.chars().any(char::is_control) {
+        if self.query.len() > 512
+            || self.query.chars().any(char::is_control)
+            || self.cursor.as_ref().is_some_and(|cursor| {
+                cursor.query.len() > 512
+                    || cursor.query.chars().any(char::is_control)
+                    || [
+                        cursor.configuration_revision,
+                        cursor.provider_revision,
+                        cursor.offset,
+                    ]
+                    .into_iter()
+                    .any(|value| value > (1 << 53) - 1)
+            })
+        {
             return Err(crate::Error::Invalid("invalid model search query".into()));
         }
         Ok(())
@@ -102,6 +127,14 @@ pub struct Choices {
     pub revision: u64,
     pub models: Vec<Choice>,
     pub complete: bool,
+    pub next_cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SearchResult {
+    Page { page: Choices },
+    Stale,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

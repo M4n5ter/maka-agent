@@ -156,13 +156,31 @@ export async function verifyConnectionTest(connection, workspace, reopened, open
   const path = join(workspace, 'connection-test.json');
   if (reopened) {
     assert.equal(JSON.stringify(await catalog()), await readFile(path, 'utf8'));
-    const id = (await catalog()).items.find(
+    const row = (await catalog()).items.find(
       (item) => item.kind === 'connection' && item.slug === 'openai-compatible',
-    ).connectionId;
-    assert.deepEqual(await request('connection.request-headers.query', { connectionId: id }), {
+    );
+    const headers = await request('connection.request-headers.query', {
+      connectionId: row.connectionId,
+    });
+    assert.deepEqual(headers, {
       kind: 'found',
       names: ['X-Maka-Retained'],
+      basis: headers.basis,
     });
+    assert.deepEqual(headers.basis.connection, {
+      connectionId: row.connectionId,
+      revision: row.revision,
+    });
+    assert.deepEqual(headers.basis.credential.locator, {
+      scope: 'connection',
+      connectionId: row.connectionId,
+      kind: 'request_headers',
+    });
+    assert.equal(typeof headers.basis.credential.credentialId, 'string');
+    assert(
+      Number.isSafeInteger(headers.basis.credential.revision) &&
+        headers.basis.credential.revision > 0,
+    );
     console.log('original-client-connection-test-reopened');
     return;
   }

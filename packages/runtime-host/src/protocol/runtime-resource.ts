@@ -18,6 +18,11 @@
  */
 
 import {
+  parseTerminalInputAction,
+  encodedTerminalInputActionsByteLength,
+  type TerminalInputAction,
+} from '@maka/core/terminal-input';
+import {
   SHELL_RUN_SOURCE_TOOL_CALL_ID_MAX_BYTES,
   type ShellRunStateResult,
   type ShellRunUpdate,
@@ -122,6 +127,7 @@ export interface RuntimeResourcePtySnapshot {
 }
 
 export type RuntimeResourcePtyControl =
+  | { readonly kind: 'actions'; readonly actions: readonly TerminalInputAction[] }
   | { readonly kind: 'input'; readonly input: string }
   | { readonly kind: 'resize'; readonly cols: number; readonly rows: number }
   | {
@@ -547,6 +553,23 @@ function decodePtyControl(value: unknown): RuntimeResourcePtyControl {
       'input',
     ]);
     return { kind: 'input', input: controlInput(input.input) };
+  }
+  if (control.kind === 'actions') {
+    const typed = requireExactRecord(control, 'Runtime Resource PTY actions', ['kind', 'actions']);
+    if (!Array.isArray(typed.actions) || typed.actions.length === 0 || typed.actions.length > 64) {
+      throw invalidProtocolFrame('Expected 1..64 Runtime Resource input actions');
+    }
+    try {
+      const actions = typed.actions.map(parseTerminalInputAction);
+      if (
+        encodedTerminalInputActionsByteLength(actions) > RUNTIME_RESOURCE_CONTROL_INPUT_MAX_BYTES
+      ) {
+        throw new Error('Encoded input exceeds 32 KiB');
+      }
+      return { kind: 'actions', actions };
+    } catch {
+      throw invalidProtocolFrame('Invalid Runtime Resource input actions');
+    }
   }
   if (control.kind === 'resize') {
     const resize = requireExactRecord(control, 'Runtime Resource PTY resize control', [

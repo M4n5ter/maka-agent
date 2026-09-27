@@ -779,22 +779,25 @@ test('credential control-plane results never retain or expose secret material', 
     assert.equal(created.kind, 'committed');
     if (created.kind !== 'committed') return;
     const connectionId = created.snapshot.connections[0]!.connectionId;
+    const savedHeaders = await stores.operations.getConnectionRequestHeaders(connectionId);
+    assert.ok(savedHeaders);
     const headerSecret = 'request-header-secret-that-must-not-escape';
     const replaced = await coordinator.handlers['connection.request-headers.replace'](
       {
-        connectionId,
+        expected: savedHeaders.basis,
         headers: [{ name: 'X-Tenant', value: headerSecret }],
       },
       context,
     );
-    assert.deepEqual(replaced, {
-      ok: true,
-      result: { kind: 'committed', names: ['X-Tenant'] },
-    });
+    assert.equal(replaced.ok, true);
+    if (!replaced.ok || replaced.result.kind !== 'committed') {
+      assert.fail('expected request headers commit');
+    }
+    assert.deepEqual(replaced.result.names, ['X-Tenant']);
     assert.equal(JSON.stringify(replaced).includes(headerSecret), false);
     assert.deepEqual(
       await coordinator.handlers['connection.request-headers.query']({ connectionId }, context),
-      { ok: true, result: { kind: 'found', names: ['X-Tenant'] } },
+      { ok: true, result: { kind: 'found', names: ['X-Tenant'], basis: replaced.result.basis } },
     );
   });
 });

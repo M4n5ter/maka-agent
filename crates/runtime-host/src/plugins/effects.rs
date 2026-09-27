@@ -105,7 +105,7 @@ impl maka_plugins::executor::Executors for Effects {
     fn search(
         &self,
         query: maka_plugins::executor::Search,
-    ) -> BoxFuture<'_, Result<maka_plugins::executor::Choices, maka_plugins::Error>> {
+    ) -> BoxFuture<'_, Result<maka_plugins::executor::SearchResult, maka_plugins::Error>> {
         Box::pin(async move {
             let _lease = self.owner.resource_call()?;
             let scope = self.owner.identity()?.scope;
@@ -163,7 +163,7 @@ impl maka_plugins::llm::Models for Effects {
     fn search(
         &self,
         query: maka_plugins::llm::Search,
-    ) -> BoxFuture<'_, Result<maka_plugins::llm::Choices, maka_plugins::Error>> {
+    ) -> BoxFuture<'_, Result<maka_plugins::llm::SearchResult, maka_plugins::Error>> {
         Box::pin(async move {
             query.validate()?;
             let _lease = self.owner.resource_call()?;

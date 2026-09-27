@@ -82,6 +82,7 @@ impl View {
 #[serde(rename_all = "snake_case")]
 pub(super) enum Stage {
     Draft,
+    Bindings,
     Copy,
     Attachments,
     Batch,
@@ -99,9 +100,31 @@ pub struct Checkpoint {
     pub(super) stage: Stage,
     pub(super) batch: Option<TurnBatchStartInput>,
     pub(super) mapped: Option<TurnBatchStartInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) copied: Option<sources::Output>,
     pub(super) view: View,
 }
 impl Checkpoint {
+    pub(crate) fn completion_bytes(&self) -> usize {
+        self.inputs
+            .iter()
+            .map(|input| {
+                input
+                    .bindings
+                    .iter()
+                    .map(|(id, binding)| {
+                        id.len() + crate::pages::completion::bindings::binding_bytes(binding)
+                    })
+                    .sum::<usize>()
+                    + input
+                        .resolved
+                        .iter()
+                        .map(crate::pages::completion::bindings::binding_bytes)
+                        .sum::<usize>()
+            })
+            .sum()
+    }
+
     pub(crate) fn upload_ids(&self) -> impl Iterator<Item = &str> {
         self.inputs
             .iter()
@@ -133,9 +156,39 @@ impl Checkpoint {
             "messages":self.inputs.iter().map(|input| &input.original).collect::<Vec<_>>(),
         }))
         .map_err(|e| e.to_string())?;
+        if self.completion_bytes() > crate::pages::completion::bindings::BUDGET {
+            return Err("Revision context budget exceeded".into());
+        }
         let mut uploads = std::collections::HashSet::new();
         for input in &self.inputs {
             input.validate()?;
+            let live: std::collections::HashSet<_> = input
+                .marks
+                .iter()
+                .chain(&input.display_marks)
+                .map(|mark| &mark.id)
+                .collect();
+            if input.bindings.keys().any(|id| !live.contains(id)) {
+                return Err("Unreferenced revision binding".into());
+            }
+
+            for binding in input.bindings.values().chain(&input.resolved) {
+                let session = match &binding.payload {
+                    crate::pages::completion::Payload::Selection {
+                        source: Some(source),
+                        ..
+                    } => {
+                        if source.session_id != self.copy.source_session_id
+                            && source.session_id != self.copy.target_session_id
+                        {
+                            return Err("Revision binding belongs to another Session".into());
+                        }
+                        source.session_id.as_str()
+                    }
+                    _ => self.copy.source_session_id.as_str(),
+                };
+                crate::pages::completion::bindings::validate(binding, root, session)?;
+            }
             crate::pages::references::validate(&input.directories, root)?;
             if input.files.len() > 8 {
                 return Err("Too many revision attachments".into());
@@ -153,12 +206,34 @@ impl Checkpoint {
             }
         }
         self.view.validate(&self.inputs)?;
+        if self.stage == Stage::Bindings {
+            let copied = self
+                .copied
+                .as_ref()
+                .ok_or("Missing copied revision sources")?;
+            if copied.session_id != self.copy.target_session_id
+                || copied.turn_id != *turn_id
+                || copied.messages.len() != self.inputs.len()
+                || self.batch.is_some()
+                || self.mapped.is_some()
+            {
+                return Err("Invalid revision resource review".into());
+            }
+            sources::decode_output(
+                &serde_json::to_value(copied).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            super::draft::validate_mapping(&self.inputs, copied)?;
+        } else if self.copied.is_some() {
+            return Err("Unexpected copied revision sources".into());
+        }
         if (self.stage == Stage::Batch && self.batch.is_none())
             || (self.stage == Stage::Attachments && self.mapped.is_none())
             || (self.mapped.is_some() && self.batch.is_some())
             || (matches!(self.stage, Stage::Draft | Stage::Copy)
                 && (self.batch.is_some() || self.mapped.is_some()))
-            || serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > 2 * 1024 * 1024
+            || serde_json::to_vec(self).map_err(|e| e.to_string())?.len()
+                > 2 * 1024 * 1024 + crate::pages::completion::bindings::BUDGET
         {
             return Err("Invalid revision checkpoint".into());
         }

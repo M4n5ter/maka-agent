@@ -79,12 +79,13 @@ fn old_window_selection_and_search_resume_across_pages_and_disk_restart() {
     tui.click_text("Reading resume");
     tui.wait_for("Recorded.");
     tui.send(b"\x06Bookmark target");
-    tui.wait_for("0/0"); // Oldest turn is outside the initial tail, not merely offscreen.
+    // Wait for the complete query, not the empty search field's initial count.
+    tui.wait_until(|screen| {
+        screen.contains("Bookmark target") && screen.contains("Loaded") && screen.contains("0/0")
+    });
     tui.send(b"\x1b");
-    tui.wait_until(|screen| !screen.contains("Loaded"));
-    tui.wait_for("↑"); // Viewport prefetch temporarily disables older-page controls.
-    tui.click_text("↑");
-    tui.wait_until(|screen| !screen.contains('↑') && screen.contains("Recorded."));
+    tui.wait_until(|screen| !screen.contains("Loaded") && !screen.contains("Bookmark target"));
+    tui.session_view_action("Load earlier messages");
     tui.send(b"\x06Bookmark target");
     tui.wait_for("1/1");
     tui.send(b"\r"); // A page arriving after typing updates matches without moving the reader.
@@ -151,7 +152,7 @@ fn old_window_selection_and_search_resume_across_pages_and_disk_restart() {
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(saved["version"], 23);
+    assert_eq!(saved["version"], 24);
     let encoded = serde_json::to_string(&saved).unwrap();
     assert!(
         !encoded.contains("History context line"),

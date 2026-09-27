@@ -48,11 +48,25 @@ pub enum TurnOrchestrationSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmittedTurnIntent {
     pub input_selections: crate::input::Selections,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_selection_sources: crate::input::SelectionSources,
     pub turn_orchestration: Option<TurnOrchestration>,
 }
 impl SubmittedTurnIntent {
+    /// Source shape is not admission: Host verifies actual providers before use.
+    pub fn is_exact_turn(&self) -> bool {
+        self.turn_orchestration.is_some()
+            || crate::input::has_unbound_selections(
+                &self.input_selections,
+                &self.input_selection_sources,
+            )
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
-        crate::input::validate_selections(&self.input_selections)?;
+        crate::input::validate_selection_sources(
+            &self.input_selections,
+            &self.input_selection_sources,
+        )?;
         if self.input_selections.is_empty() && self.turn_orchestration.is_none() {
             return Err("invalid submitted Turn intent");
         }
@@ -60,7 +74,8 @@ impl SubmittedTurnIntent {
     }
 }
 
-/// Original admission disposition is retained even when queued messages form a successor.
+/// Current delivery disposition; promotion may change it to Steering while
+/// submitted_placement preserves the original requested placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageDisposition {
@@ -102,7 +117,7 @@ impl RootSourceMessage {
         }
         if let Some(intent) = &self.submitted_intent {
             intent.validate()?;
-            if self.submitted_placement != Placement::CurrentTurn {
+            if intent.is_exact_turn() && self.submitted_placement != Placement::CurrentTurn {
                 return Err("exact Turn intent requires current_turn");
             }
         }
@@ -144,7 +159,10 @@ pub fn validate_sources(
                             != orchestration
                 } else {
                     source.disposition == MessageDisposition::TurnStarted
-                        || source.submitted_intent.is_some()
+                        || source
+                            .submitted_intent
+                            .as_ref()
+                            .is_some_and(SubmittedTurnIntent::is_exact_turn)
                 })
         {
             return Err("conflicting root message sources");
@@ -237,6 +255,7 @@ mod tests {
                             "example".into(),
                             vec![text.into()],
                         )]),
+                        input_selection_sources: Default::default(),
                         turn_orchestration: None,
                     }),
                 }

@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 mod inventory;
+mod registration;
 
 struct Relay(Module);
 impl Bridge for Relay {

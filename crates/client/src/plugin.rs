@@ -53,6 +53,26 @@ impl Client {
         serde_json::from_value(value).map_err(|error| self.invalid_plugin_result(error.to_string()))
     }
 
+    /// Writes reviewed installed bytes to a new file on the Host, never to a
+    /// client-local path. Unknown outcomes must not be replayed automatically.
+    pub async fn plugin_package_export(
+        &self,
+        input: PackageExport,
+    ) -> Result<Exported, RequestFailure> {
+        let value = self
+            .request(
+                Operation::PluginPackageExport,
+                serde_json::to_value(&input).expect("wire input"),
+            )
+            .await?;
+        let output: Exported = serde_json::from_value(value)
+            .map_err(|error| self.invalid_plugin_result(error.to_string()))?;
+        if output.target_path != input.target_path {
+            return Err(self.invalid_plugin_result("Package export destination changed"));
+        }
+        Ok(output)
+    }
+
     /// Restarts stored bytes; this does not read or update the original source.
     pub async fn plugin_package_restart(
         &self,
@@ -131,6 +151,7 @@ impl Client {
             QueryResult::Entries(_) => View::Entries,
             QueryResult::Tools(_) => View::Tools,
             QueryResult::Commands(_) => View::Commands,
+            QueryResult::InputResources(_) => View::InputResources,
             QueryResult::Executors(_) => View::Executors,
             QueryResult::TerminalViews(_) => View::TerminalViews,
             QueryResult::Failures(_) => View::Failures,

@@ -30,31 +30,54 @@ export async function verifyRequestHeaders(
   const call = (op, input) => connection.request(op, input, 3000);
   const query = (id = connectionId) =>
     call('connection.request-headers.query', { connectionId: id });
-  const replace = (headers) =>
-    call('connection.request-headers.replace', { connectionId, headers });
+  const replace = async (headers, writer = connection) => {
+    const { basis: expected } = await query();
+    return writer.request('connection.request-headers.replace', { expected, headers }, 3000);
+  };
+  const expectHeaders = async (result, kind, names) => {
+    const { basis } = result;
+    assert.deepEqual(result, { kind, names, basis });
+    assert.equal(basis.connection.connectionId, connectionId);
+    assert(Number.isSafeInteger(basis.connection.revision) && basis.connection.revision > 0);
+    if (basis.credential !== null) {
+      assert.deepEqual(basis.credential.locator, {
+        scope: 'connection',
+        connectionId,
+        kind: 'request_headers',
+      });
+      assert.equal(typeof basis.credential.credentialId, 'string');
+      assert(Number.isSafeInteger(basis.credential.revision) && basis.credential.revision > 0);
+    }
+    assert.deepEqual(await query(), { kind: 'found', names, basis });
+    return basis;
+  };
   const catalog = () => call('connection.catalog.query', { kind: 'start' });
   const names = ['X-Maka-Retained'];
   const missing = '12345678-1234-4234-8234-123456789abc';
   assert.deepEqual(await query(missing), { kind: 'connection_not_found' });
   assert.deepEqual(
-    await call('connection.request-headers.replace', { connectionId: missing, headers: [] }),
+    await call('connection.request-headers.replace', {
+      expected: { connection: { connectionId: missing, revision: 1 }, credential: null },
+      headers: [],
+    }),
     { kind: 'connection_not_found' },
   );
-  assert.deepEqual(await query(), { kind: 'found', names: [] });
+  await expectHeaders(await query(), 'found', []);
   const notices = [];
   const unsubscribe = connection.subscribeConfigurationChanges((value) => notices.push(value));
   const beforeCount = provider.count;
   try {
-    assert.deepEqual(
+    await expectHeaders(
       await replace([
         { name: '\uFEFF X-Maka-Retained ', value: 'private-header' },
         { name: 'X-Remove', value: 'remove' },
       ]),
-      { kind: 'committed', names: [...names, 'X-Remove'] },
+      'committed',
+      [...names, 'X-Remove'],
     );
-    assert.deepEqual(await query(), { kind: 'found', names: [...names, 'X-Remove'] });
+    await expectHeaders(await query(), 'found', [...names, 'X-Remove']);
     await assert.rejects(replace([{ name: 'X-New' }]), { code: 'invalid_request' });
-    assert.deepEqual(await replace([{ name: names[0] }]), { kind: 'committed', names });
+    await expectHeaders(await replace([{ name: names[0] }]), 'committed', names);
     provider.auth(false);
     provider.expect('openai-compatible', model, overlay);
     provider.headers('private-header');
@@ -62,7 +85,11 @@ export async function verifyRequestHeaders(
     assert.equal((await run()).test.kind, 'verified');
     const before = await catalog(),
       notificationCount = notices.length;
-    assert.deepEqual(await replace([{ name: names[0] }]), { kind: 'unchanged', names });
+    const unchangedBasis = (await query()).basis;
+    assert.deepEqual(
+      await expectHeaders(await replace([{ name: names[0] }]), 'unchanged', names),
+      unchangedBasis,
+    );
     assert.deepEqual(
       await catalog(),
       before,
@@ -74,16 +101,10 @@ export async function verifyRequestHeaders(
       pending = run();
     const release = await arrived;
     try {
-      assert.deepEqual(
-        await peer.request(
-          'connection.request-headers.replace',
-          {
-            connectionId,
-            headers: [{ name: names[0], value: 'changed' }],
-          },
-          3000,
-        ),
-        { kind: 'committed', names },
+      await expectHeaders(
+        await replace([{ name: names[0], value: 'changed' }], peer),
+        'committed',
+        names,
       );
     } finally {
       release();
@@ -95,17 +116,18 @@ export async function verifyRequestHeaders(
         .lastTest,
       undefined,
     );
-    assert.deepEqual(await replace([]), { kind: 'committed', names: [] });
-    assert.deepEqual(await replace([]), { kind: 'unchanged', names: [] });
-    assert.deepEqual(await query(), { kind: 'found', names: [] });
-    assert.deepEqual(await replace([{ name: names[0], value: 'reopened-header' }]), {
-      kind: 'committed',
+    await expectHeaders(await replace([]), 'committed', []);
+    await expectHeaders(await replace([]), 'unchanged', []);
+    await expectHeaders(await query(), 'found', []);
+    await expectHeaders(
+      await replace([{ name: names[0], value: 'reopened-header' }]),
+      'committed',
       names,
-    });
+    );
     provider.headers('reopened-header');
     assert.equal((await run()).test.kind, 'verified');
     assert.equal(provider.count, beforeCount + 3);
-    assert.deepEqual(await query(), { kind: 'found', names });
+    await expectHeaders(await query(), 'found', names);
   } finally {
     unsubscribe();
   }

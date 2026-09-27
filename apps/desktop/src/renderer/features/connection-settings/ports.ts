@@ -24,6 +24,7 @@ import type {
   LlmConnection,
   ModelDiscoveryResult,
   RequestHeaderUpdate,
+  RequestHeadersBasis,
   SavedRequestHeaders,
   UpdateConnectionInput,
 } from '@maka/core/llm-connections';
@@ -100,6 +101,7 @@ export interface ConnectionsBridge {
   getRequestHeaders(connection: DesktopConnectionIdentity): Promise<SavedRequestHeaders>;
   setRequestHeaders(
     connection: DesktopConnectionIdentity,
+    expected: RequestHeadersBasis,
     headers: readonly RequestHeaderUpdate[],
   ): Promise<SavedRequestHeaders>;
   subscribeEvents?(handler: () => void): () => void;

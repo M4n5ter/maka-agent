@@ -64,7 +64,7 @@ pub(super) async fn start(root: &std::path::Path, workspace: &std::path::Path) -
         )
         .await
         .unwrap();
-    let (answered, mut answer) = watch::channel(None::<Value>);
+    let (answered, answer) = watch::channel(None::<Value>);
     let provider = provider(root, answered).await;
     let requests = Arc::new(AtomicUsize::new(0));
     let count = requests.clone();
@@ -97,16 +97,6 @@ pub(super) async fn start(root: &std::path::Path, workspace: &std::path::Path) -
                     json!({"code":"text(await tools.mcp__tui_forms__collect({}));","yield_time_ms":1000}),
                 ),
                 _ => {
-                    let result = answer
-                        .wait_for(Option::is_some)
-                        .await
-                        .unwrap()
-                        .clone()
-                        .unwrap();
-                    assert_eq!(
-                        result,
-                        json!({"action":"accept","values":{"name":"中文🦀","count":2.0,"enabled":false}})
-                    );
                     let output = body["messages"]
                         .as_array()
                         .unwrap()
@@ -116,6 +106,15 @@ pub(super) async fn start(root: &std::path::Path, workspace: &std::path::Path) -
                         .unwrap()["content"]
                         .as_str()
                         .unwrap();
+                    let result = answer.borrow().clone().unwrap_or_else(|| {
+                        panic!(
+                            "model request {index} before form answer; last tool output: {output}"
+                        )
+                    });
+                    assert_eq!(
+                        result,
+                        json!({"action":"accept","values":{"name":"中文🦀","count":2.0,"enabled":false}})
+                    );
                     let last: Value = serde_json::from_str(output.lines().next().unwrap()).unwrap();
                     if last["state"] == "running" {
                         tool(
