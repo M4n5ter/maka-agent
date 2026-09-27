@@ -81,13 +81,22 @@ impl std::fmt::Display for SourceCatalogError {
 }
 impl std::error::Error for SourceCatalogError {}
 
-/// Package-owned metadata has one source of truth shared with the TS generator.
-/// This private workspace crate is not published independently.
-const COMPUTER_USE: &str =
-    include_str!("../../../../packages/runtime/resources/bundled-skills/computer-use/SKILL.md");
+/// The legacy skill remains shared with TS; Maka Cua belongs to the Rust plugin.
+const BUNDLED: &[(&str, &str)] = &[
+    (
+        "computer-use",
+        include_str!("../../../../packages/runtime/resources/bundled-skills/computer-use/SKILL.md"),
+    ),
+    (
+        "maka-cua",
+        include_str!("../../../computer-use/skills/maka-cua/SKILL.md"),
+    ),
+];
 
 pub(super) fn trusted_bundled_hash(id: &str, hash: &str) -> bool {
-    id == "computer-use" && hash == maka_runtime::artifact::content_digest(COMPUTER_USE.as_bytes())
+    BUNDLED.iter().any(|(candidate, content)| {
+        *candidate == id && hash == maka_runtime::artifact::content_digest(content.as_bytes())
+    })
 }
 
 pub async fn source_catalog(
@@ -136,13 +145,18 @@ async fn catalog(
     home: Option<&ReadDirectory>,
     cancellation: &CancellationToken,
 ) -> Result<SourceCatalog, SourceCatalogError> {
-    let bundled = vec![BundledSource {
-        id: "computer-use",
-        content: COMPUTER_USE,
-        document: crate::parse(COMPUTER_USE)
-            .map_err(|_| SourceCatalogError::InvalidBundledMetadata)?,
-        content_sha256: maka_runtime::artifact::content_digest(COMPUTER_USE.as_bytes()),
-    }];
+    let bundled = BUNDLED
+        .iter()
+        .map(|(id, content)| {
+            Ok(BundledSource {
+                id,
+                content,
+                document: crate::parse(content)
+                    .map_err(|_| SourceCatalogError::InvalidBundledMetadata)?,
+                content_sha256: maka_runtime::artifact::content_digest(content.as_bytes()),
+            })
+        })
+        .collect::<Result<Vec<_>, SourceCatalogError>>()?;
     let managed = if let Some(home) = home {
         // The library is its own containment root; aliases may not reach other
         // home content. SKILL.md retains the ordinary nofollow/regular-file gate.

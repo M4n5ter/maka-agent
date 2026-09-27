@@ -23,6 +23,7 @@ mod evaluate;
 mod execution_budget;
 mod module;
 pub mod plugin;
+pub mod repl;
 mod result;
 pub mod trusted;
 

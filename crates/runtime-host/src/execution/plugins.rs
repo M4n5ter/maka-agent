@@ -23,6 +23,7 @@ pub(super) use admission::AgentAdmission;
 mod authority;
 mod children;
 mod client;
+mod computer;
 mod configure;
 mod effects;
 mod filesystem;

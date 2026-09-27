@@ -25,6 +25,7 @@ pub mod call;
 pub mod client;
 pub mod client_capability;
 pub mod composition;
+pub mod computer;
 pub mod contributions;
 pub mod credentials;
 pub mod execution;

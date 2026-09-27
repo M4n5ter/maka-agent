@@ -45,6 +45,7 @@ mod client_shell;
 mod client_tools;
 mod client_write;
 mod compatible_chat;
+mod computer_use;
 mod connection_multiplex;
 mod context_compaction;
 mod execution_boundary;

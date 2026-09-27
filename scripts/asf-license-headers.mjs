@@ -194,9 +194,10 @@ export const exclusionRules = [
   {
     id: 'third-party-license-texts',
     justification:
-      'Third-party license and notice texts redistributed with the product. An ASF header on any of them would assert ASF provenance over content ASF does not own. The upstream texts additionally have to stay byte-identical to what their projects published, and the aggregated notices are generator output that a hand-written header would not survive.',
+      'Third-party license and notice texts redistributed with the product. An ASF header on any of them would assert ASF provenance over content ASF does not own. The upstream texts additionally have to stay byte-identical to what their projects published. Some aggregated notices are generator output that a hand-written header would not survive.',
     matches: isOneOf(
       'crates/cli/DEPENDENCIES.rust.tsv',
+      'crates/computer-use/THIRD_PARTY_NOTICES',
       'apps/desktop/resources/licenses/cargo/THIRD_PARTY_NOTICES.txt',
       'apps/desktop/resources/licenses/npm/THIRD_PARTY_NOTICES.txt',
       'apps/desktop/resources/licenses/renderer/ALLOGO_LICENSE.txt',
@@ -262,8 +263,12 @@ export const exclusionRules = [
   {
     id: 'verbatim-runtime-payloads',
     justification:
-      'Bundled skill payloads are embedded in the generated catalog verbatim, pinned there by content digest, and delivered to the model as instructions. A header would be republished as agent prompt text and would invalidate the recorded digests. Each payload is listed, so a new bundled skill is reviewed rather than inheriting this reason from its directory.',
-    matches: isOneOf('packages/runtime/resources/bundled-skills/computer-use/SKILL.md'),
+      'Bundled skills and runtime API documentation are embedded verbatim and delivered to the model as instructions or tool output. Skill bytes also participate in catalog and installation digests. A header would become agent prompt text and change those digests. Each payload is listed, so new content is reviewed rather than inheriting this reason from its directory.',
+    matches: isOneOf(
+      'packages/runtime/resources/bundled-skills/computer-use/SKILL.md',
+      'crates/computer-use/skills/maka-cua/SKILL.md',
+      'crates/computer-use/src/api.md',
+    ),
   },
   {
     id: 'verbatim-github-templates',

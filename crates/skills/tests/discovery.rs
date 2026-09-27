@@ -258,6 +258,20 @@ async fn snapshot_precedence_preferences_and_capabilities_preserve_selected_iden
     .unwrap();
     assert!(missing_library.managed.discovery.inventory.is_empty());
     assert_eq!(missing_library.bundled[0].id, "computer-use");
+    let cua = missing_library
+        .bundled
+        .iter()
+        .find(|source| source.id == "maka-cua")
+        .unwrap();
+    assert_eq!(cua.document.manifest.name, "maka-cua");
+    assert!(
+        cua.document
+            .manifest
+            .attributes
+            .required_tools
+            .contains(&"cua_repl".into())
+    );
+    assert!(cua.document.issues.is_empty());
     skill(
         &home.join(".maka/skill-sources/source"),
         "Source",

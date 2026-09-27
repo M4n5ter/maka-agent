@@ -69,6 +69,12 @@ impl Executions {
             Err(_) => return Ok(false),
             Ok(result) => result?,
         }
+        // Native session retirement must settle even if it outlives the wait
+        // budget; dropping an in-process FFI future is not a cleanup receipt.
+        self.computer.retire(session).await.map_err(|error| {
+            self.begin_drain();
+            internal(error)
+        })?;
         if self.shutdown.is_cancelled() {
             return Err(failure(
                 Code::HostDraining,

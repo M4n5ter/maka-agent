@@ -115,6 +115,8 @@ pub(super) enum Request {
     SearchExecutors(maka_plugins::executor::Search),
     #[serde(rename = "llm.generate")]
     Generate(ModelRequest),
+    #[serde(rename = "computer.call")]
+    ComputerCall(Authorized<maka_plugins::computer::Call>),
     #[serde(rename = "clients.tools")]
     ClientCatalog(Authority),
     #[serde(rename = "clients.call")]

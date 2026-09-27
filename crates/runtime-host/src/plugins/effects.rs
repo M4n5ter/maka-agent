@@ -373,3 +373,18 @@ impl maka_plugins::session::history::History for Effects {
         })
     }
 }
+
+impl maka_plugins::computer::Computer for Effects {
+    fn call(
+        &self,
+        call: Authority,
+        input: maka_plugins::computer::Call,
+    ) -> BoxFuture<'_, Result<maka_runtime::capability::CallResult, ToolError>> {
+        Box::pin(self.owned(call, move |host, owner, call, cancellation| {
+            Box::pin(async move {
+                host.plugin_computer_call(owner, call, input, cancellation)
+                    .await
+            })
+        }))
+    }
+}

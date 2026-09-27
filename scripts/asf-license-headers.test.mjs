@@ -234,6 +234,9 @@ describe('ASF header classification', () => {
       'scripts/model-metadata/models-dev-api.snapshot.json': 'no-comment-syntax',
       'packages/runtime/resources/bundled-skills/computer-use/SKILL.md':
         'verbatim-runtime-payloads',
+      'crates/computer-use/skills/maka-cua/SKILL.md': 'verbatim-runtime-payloads',
+      'crates/computer-use/src/api.md': 'verbatim-runtime-payloads',
+      'crates/computer-use/THIRD_PARTY_NOTICES': 'third-party-license-texts',
       '.github/pull_request_template.md': 'verbatim-github-templates',
       'packages/storage/test-fixtures/workflow-schema-v8.sql': 'byte-significant-fixtures',
       '.gitattributes': 'no-creative-content',
@@ -278,6 +281,9 @@ describe('ASF header classification', () => {
       'apps/desktop/src/renderer/assets/provider-brands/README.md',
       'packages/runtime/resources/bundled-skills/new-skill/SKILL.md',
       'packages/runtime/resources/bundled-skills/README.md',
+      'crates/computer-use/skills/another-skill/SKILL.md',
+      'crates/computer-use/src/README.md',
+      'crates/computer-use/src/session.rs',
     ]) {
       assert.notEqual(classifyPath(path).status, 'excluded', path);
     }

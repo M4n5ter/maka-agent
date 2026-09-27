@@ -83,10 +83,10 @@ Each rule is a category with a justification. A rule **names the files it exclud
 | Rule | Why the header does not belong |
 | --- | --- |
 | `asf-release-documents` | `LICENSE`, `NOTICE`, and `DISCLAIMER-WIP` are the license and notice themselves. |
-| `third-party-license-texts` | Verbatim upstream license and notice texts. They must stay byte-identical to what upstream published, and the executor preparation scripts verify their digests. |
+| `third-party-license-texts` | Upstream license and notice texts retain their original contents and attribution. Some aggregated notices are generated and have their digests verified by the executor preparation scripts. |
 | `third-party-source` | Third-party work under its own license, including mixed-origin files Maka adapted from upstream. See below. |
 | `generated-files` | Mechanically derived and byte-compared against a fresh generator run, so a hand-written header would be reverted by the next regeneration. The generators carry the header. |
-| `verbatim-runtime-payloads` | Bundled skill payloads are embedded in the generated catalog verbatim, pinned by content digest, and delivered to the model as instructions. Each payload is listed by name. |
+| `verbatim-runtime-payloads` | Bundled skills and runtime API documentation are embedded verbatim and delivered to the model as instructions or tool output. Skill bytes also participate in catalog and installation digests. Each payload is listed by name. |
 | `verbatim-github-templates` | GitHub copies the pull request template into every new pull request description. |
 | `byte-significant-fixtures` | Recorded inputs and captured historical state, asserted on byte-for-byte or parsed by a strict reader. |
 | `no-comment-syntax` | JSON and CSV have no comment syntax; a header could only be added by corrupting the file for its parser. |

@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Services {
+    pub computer: Arc<dyn crate::computer::Computer>,
     pub inputs: crate::filesystem::ReadInputs,
     pub preferences: Arc<dyn crate::preferences::Preferences>,
     pub storage: Arc<dyn Store>,

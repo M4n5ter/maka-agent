@@ -48,6 +48,7 @@ maka-session-import.workspace = true
 maka-event-log.workspace = true
 maka-external-agent.workspace = true
 maka-config.workspace = true
+maka-computer-use.workspace = true
 maka-js-runtime.workspace = true
 maka-tools.workspace = true
 maka-fs-tools.workspace = true

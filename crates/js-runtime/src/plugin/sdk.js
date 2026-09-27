@@ -350,6 +350,9 @@
     }),
     files: files(authority),
     llm: Object.freeze({ generate: (input) => host('llm.generate', { authority, input }) }),
+    computer: Object.freeze({
+      call: (input) => host('computer.call', { authority, input }),
+    }),
     clients: Object.freeze({
       notify: (input) => host('clients.notify', { authority, input }),
       tools: () => host('clients.tools', { authority }),

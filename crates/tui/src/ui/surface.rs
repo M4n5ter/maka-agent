@@ -130,6 +130,16 @@ struct Chooser {
     first: usize,
 }
 
+fn choice_start(previous: Option<usize>, highlighted: usize, rows: usize, len: usize) -> usize {
+    let first = previous.unwrap_or(0).min(len.saturating_sub(rows));
+    // Hover must not move the rows underneath the pointer.
+    if highlighted < first {
+        highlighted
+    } else {
+        first.max((highlighted + 1).saturating_sub(rows))
+    }
+}
+
 struct FocusStart {
     prefix: String,
     reveal: bool,
@@ -360,7 +370,12 @@ impl<M: Clone> Surface<M> {
                 );
             }
         }
-        let popover = self.draw_popover(frame, area, &items, &context);
+        let previous = self
+            .committed
+            .as_ref()
+            .and_then(|frame| frame.popover.as_ref())
+            .map(|popup| popup.first);
+        let popover = self.draw_popover(frame, area, &items, &context, previous);
         self.committed = Some(Committed {
             area,
             items,
@@ -380,11 +395,19 @@ impl<M: Clone> Surface<M> {
         let Some(committed) = self.committed.take() else {
             return;
         };
-        let popover = self.draw_popover(frame, committed.area, &committed.items, context);
+        let previous = committed.popover.as_ref().map(|popup| popup.first);
+        let popover = self.draw_popover(frame, committed.area, &committed.items, context, previous);
         self.committed = Some(Committed {
             popover,
             ..committed
         });
+    }
+
+    fn open_popover(&mut self, popover: Popover<M>) {
+        self.popover = Some(popover);
+        if let Some(frame) = &mut self.committed {
+            frame.popover = None;
+        }
     }
 
     fn draw_popover(
@@ -393,13 +416,14 @@ impl<M: Clone> Surface<M> {
         area: Rect,
         items: &[Item<M>],
         context: &Context,
+        previous: Option<usize>,
     ) -> Option<Chooser> {
         if self
             .popover
             .as_ref()
             .is_some_and(|popover| popover.menu.is_some())
         {
-            return self.draw_menu(frame, items, context);
+            return self.draw_menu(frame, items, context, previous);
         }
         let popover = self.popover.as_mut()?;
         let Some(owner) = items
@@ -453,7 +477,12 @@ impl<M: Clone> Surface<M> {
             rect,
         );
         // Keep the highlighted choice visible when a long list is clipped.
-        let first = (popover.highlighted + 1).saturating_sub(usize::from(rows));
+        let first = choice_start(
+            previous,
+            popover.highlighted,
+            usize::from(rows),
+            choices.len(),
+        );
         let mut rows_out = Vec::new();
         for (row, index) in (first..choices.len()).take(usize::from(rows)).enumerate() {
             let line = Rect::new(rect.x + 1, rect.y + 1 + row as u16, rect.width - 2, 1);
@@ -868,11 +897,11 @@ impl<M: Clone> Surface<M> {
                     On::Scroll | On::Transcript | On::Collection(_) => Outcome::handled(true),
                     On::Activate(message) => Outcome::emit(message.clone()),
                     On::Menu { identity, items } => {
-                        self.popover = Some(menu::open(id.clone(), identity, items));
+                        self.open_popover(menu::open(id.clone(), identity, items));
                         Outcome::handled(true)
                     }
                     On::Choose { current, .. } => {
-                        self.popover = Some(Popover {
+                        self.open_popover(Popover {
                             owner: id.clone(),
                             highlighted: current.unwrap_or(0),
                             menu: None,
@@ -1103,11 +1132,11 @@ impl<M: Clone> Surface<M> {
                 return match &item.on {
                     On::Activate(message) => Outcome::emit(message.clone()),
                     On::Menu { identity, items } => {
-                        self.popover = Some(menu::open(item.id.clone(), identity, items));
+                        self.open_popover(menu::open(item.id.clone(), identity, items));
                         Outcome::handled(true)
                     }
                     On::Choose { current, .. } => {
-                        self.popover = Some(Popover {
+                        self.open_popover(Popover {
                             owner: item.id.clone(),
                             highlighted: current.unwrap_or(0),
                             menu: None,
@@ -1501,16 +1530,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
-                surface.render(
-                    frame,
-                    frame.area(),
-                    root,
-                    Context {
-                        colors: crate::theme::Palette::default(),
-                        ascii: false,
-                        focused: true,
-                    },
-                )
+                let context = Context {
+                    colors: crate::theme::Palette::default(),
+                    ascii: false,
+                    focused: true,
+                };
+                surface.render(frame, frame.area(), root, context);
+                surface.repaint_popover(frame, &context);
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -1681,6 +1707,36 @@ mod tests {
         assert!(
             !back.consumed,
             "Alt+Left is history navigation, not a focus move"
+        );
+        let mut surface = Surface::default();
+        let long = || {
+            Node::text("long", vec![("Choose".into(), Tone::Normal)]).on(On::Choose {
+                choices: (0..12)
+                    .map(|index| Choice {
+                        label: format!("Choice {index}"),
+                        action: Message::Pick(index),
+                    })
+                    .collect(),
+                current: Some(11),
+            })
+        };
+        draw(&mut surface, 24, 8, long());
+        surface.input(&key(KeyCode::Enter));
+        draw(&mut surface, 24, 8, long());
+        let popup = surface
+            .committed
+            .as_ref()
+            .unwrap()
+            .popover
+            .as_ref()
+            .unwrap();
+        let penultimate = popup.rows[popup.rows.len() - 2];
+        surface.input(&mouse(MouseEventKind::Moved, penultimate.x, penultimate.y));
+        draw(&mut surface, 24, 8, long());
+        assert_eq!(
+            surface.input(&click(penultimate.x, penultimate.y)).message,
+            Some(Message::Pick(10)),
+            "hover and repaint must keep the choice beneath the pointer"
         );
     }
 

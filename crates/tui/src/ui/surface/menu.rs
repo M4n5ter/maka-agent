@@ -78,7 +78,7 @@ impl<M: Clone> Surface<M> {
         let On::Menu { identity, items } = &item.on else {
             return false;
         };
-        self.popover = Some(open(owner.into(), identity, items));
+        self.open_popover(open(owner.into(), identity, items));
         self.set_focus(owner.into());
         true
     }
@@ -88,6 +88,7 @@ impl<M: Clone> Surface<M> {
         frame: &mut Frame<'_>,
         items: &[Item<M>],
         context: &Context,
+        previous: Option<usize>,
     ) -> Option<Chooser> {
         let popover = self.popover.as_mut()?;
         let frozen = popover.menu.as_mut()?;
@@ -156,7 +157,12 @@ impl<M: Clone> Surface<M> {
             rect,
         );
         popover.highlighted = popover.highlighted.min(frozen.items.len() - 1);
-        let first = (popover.highlighted + 1).saturating_sub(usize::from(rows));
+        let first = choice_start(
+            previous,
+            popover.highlighted,
+            usize::from(rows),
+            frozen.items.len(),
+        );
         let mut rows_out = Vec::new();
         for (row, index) in (first..frozen.items.len())
             .take(usize::from(rows))

@@ -54,6 +54,7 @@ struct State {
     models: Arc<dyn maka_plugins::llm::Models>,
     executors: Arc<dyn maka_plugins::executor::Executors>,
     clients: Arc<dyn maka_plugins::client_capability::Clients>,
+    computer: Arc<dyn maka_plugins::computer::Computer>,
     terminals: Arc<dyn maka_plugins::terminal::Terminals>,
     calls: Arc<super::invocation::Calls>,
     outputs: Arc<super::executor::Outputs>,
@@ -100,6 +101,7 @@ impl HostBridge {
             models: host.models,
             executors: host.executors,
             clients: host.clients,
+            computer: host.computer,
             processes: host.processes,
             terminals: host.terminals,
             calls: Arc::new(super::invocation::Calls::new(issuer)),
@@ -519,6 +521,15 @@ impl State {
                 encode(
                     self.models
                         .generate(authority, input.input)
+                        .await
+                        .map_err(Error::tool)?,
+                )
+            }
+            Request::ComputerCall(request) => {
+                let authority = self.calls.get(&request.authority)?;
+                encode(
+                    self.computer
+                        .call(authority, request.input)
                         .await
                         .map_err(Error::tool)?,
                 )

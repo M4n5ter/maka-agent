@@ -50,6 +50,11 @@ fn draw(
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
         .draw(|frame| {
+            let context = Context {
+                colors: Palette::default(),
+                ascii: false,
+                focused: true,
+            };
             surface.render(
                 frame,
                 Rect::new(0, 0, width, 1),
@@ -59,12 +64,9 @@ fn draw(
                         items: items.clone(),
                     },
                 ),
-                Context {
-                    colors: Palette::default(),
-                    ascii: false,
-                    focused: true,
-                },
+                context,
             );
+            surface.repaint_popover(frame, &context);
         })
         .unwrap();
     terminal
@@ -181,6 +183,30 @@ fn narrow_one_line_owner_opens_full_frame_menu_with_keyboard_wheel_and_pointer()
         .unwrap();
     let last = *popup.rows.last().unwrap();
     assert_eq!(surface.input(&click(last.x, last.y)).message, Some(11));
+    surface.input(&key(KeyCode::Enter));
+    draw(&mut surface, "object", items.clone(), 24, 8);
+    surface.input(&key(KeyCode::End));
+    draw(&mut surface, "object", items.clone(), 24, 8);
+    let popup = surface
+        .committed
+        .as_ref()
+        .unwrap()
+        .popover
+        .as_ref()
+        .unwrap();
+    let penultimate = popup.rows[popup.rows.len() - 2];
+    surface.input(&Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: penultimate.x,
+        row: penultimate.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    draw(&mut surface, "object", items.clone(), 24, 8);
+    assert_eq!(
+        surface.input(&click(penultimate.x, penultimate.y)).message,
+        Some(10),
+        "hover and repaint must keep the operation beneath the pointer"
+    );
     surface.input(&key(KeyCode::Enter));
     draw(&mut surface, "object", items.clone(), 24, 8);
     let wheel = Event::Mouse(MouseEvent {

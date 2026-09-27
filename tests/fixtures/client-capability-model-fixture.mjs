@@ -184,7 +184,10 @@ export async function capabilityModelFixture(checkpoint, checkFailure, onFailure
         const loaded = JSON.parse(
           typeof result.output === 'string' ? result.output : result.output[0].text,
         );
-        assert.deepEqual(loaded.activated.sort(), ['none', 'cwd'].map(name).sort());
+        assert.deepEqual(
+          loaded.activated.filter((tool) => tool.startsWith('mcp__host-')).sort(),
+          ['none', 'cwd'].map(name).sort(),
+        );
       }
       if (action.settled) {
         checkFailure();

@@ -21,6 +21,7 @@
 mod admission;
 mod archive;
 mod compact;
+mod computer;
 mod control;
 mod handoff;
 pub(crate) use handoff::CooperativeRun;
@@ -80,6 +81,7 @@ pub(crate) struct Executions {
     // never the model, effect, or human approval lifetime.
     interactions: Arc<crate::server::interactions::Interactions>,
     active: Mutex<HashMap<String, ActiveRun>>,
+    computer: computer::Computers,
     submissions: message::Submissions,
     plugin_processes: processes::Registry,
     workers: TaskTracker,
@@ -148,6 +150,7 @@ impl Executions {
             interactions,
             writes: Arc::new(maka_fs_tools::WriteCoordinator::default()),
             active: Mutex::new(HashMap::new()),
+            computer: Default::default(),
             plugin_processes: Default::default(),
             workers,
             handoff_wake: tokio::sync::Notify::new(),
@@ -220,6 +223,9 @@ impl Executions {
         self.workers.close();
         self.workers.wait().await;
         self.engine.drain().await;
+        if let Err(error) = self.computer.shutdown().await {
+            eprintln!("Computer Use cleanup failed: {error}");
+        }
     }
 
     pub(crate) fn begin_drain(&self) {
