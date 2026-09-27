@@ -122,9 +122,8 @@ fn a_javascript_plugin_installed_at_runtime_brings_its_own_app_into_the_running_
     tui.send(b"\x1b[200~Write the tests\x1b[201~");
     tui.wait_for("Write the tests");
     tui.click_page_text("Add");
-    // The parent's new card and the child's reset editor may paint before the
-    // creation form finishes its readback. Begin local-RPC measurement only
-    // after both the acknowledged action and its settled form are visible.
+    // Wait for the created card and acknowledged, reset form before dragging.
+    // A newly opened changes watch may still refresh the form after this frame.
     tui.wait_until(|screen| {
         screen.contains("To do  1")
             && screen.contains("Write the tests")
@@ -142,6 +141,7 @@ fn a_javascript_plugin_installed_at_runtime_brings_its_own_app_into_the_running_
     let screen = tui.screen.snapshot().unwrap().screen;
     let (card_row, card_col) = position(&screen, "Write the tests");
     let (lane_row, lane_col) = position(&screen, "Doing  0");
+    let cards = runtime.block_on(remote(&client, "cards", Value::Null));
     let stats = runtime.block_on(remote(&client, "activity-stats", Value::Null));
     let preview = format!(
         "\x1b[<0;{};{}M\x1b[<32;{};{}M",
@@ -153,15 +153,26 @@ fn a_javascript_plugin_installed_at_runtime_brings_its_own_app_into_the_running_
     tui.send(preview.as_bytes());
     tui.wait_until(|screen| position(screen, "Write the tests").1 >= lane_col);
     assert_eq!(
-        runtime.block_on(remote(&client, "activity-stats", Value::Null)),
-        stats,
-        "card preview makes no Host read or write"
+        runtime.block_on(remote(&client, "cards", Value::Null)),
+        cards,
+        "card preview preserves durable card data"
+    );
+    assert_eq!(
+        runtime.block_on(remote(&client, "activity-stats", Value::Null))["viewWrites"],
+        stats["viewWrites"],
+        "card preview makes no Host write"
     );
     tui.send(b"\x1b");
     tui.wait_until(|screen| position(screen, "Write the tests").1 < lane_col);
     assert_eq!(
-        runtime.block_on(remote(&client, "activity-stats", Value::Null)),
-        stats
+        runtime.block_on(remote(&client, "cards", Value::Null)),
+        cards,
+        "cancelling a preview preserves durable card data"
+    );
+    assert_eq!(
+        runtime.block_on(remote(&client, "activity-stats", Value::Null))["viewWrites"],
+        stats["viewWrites"],
+        "cancelling a preview makes no Host write"
     );
     tui.send(preview.as_bytes());
     tui.send(format!("\x1b[<0;{};{}m", lane_col + 1, lane_row + 1).as_bytes());

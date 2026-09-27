@@ -1,6 +1,9 @@
 Cua Driver Rust SDK and its workspace crates
 Source: https://github.com/trycua/cua
-Revision: 5b3d48dfda23bde15ae1f2c150940defbdc64c21
+Fork: https://github.com/M4n5ter/cua
+Revision: cf1e2ceafd8e8bbf23fad10b713159123ffba018
+Based on upstream 5b3d48dfda23bde15ae1f2c150940defbdc64c21 with an X11 cursor
+badge viewport and clipped-glyph fix.
 Linked as pinned Cargo Git dependencies. No Cua perception extension or model
 artifacts are included. Transitive dependencies retain their own licenses.
 
