@@ -118,8 +118,9 @@ mean that every asynchronous application task has completed; verify the visible 
 
 ## Session cursors
 
-Each Session has a synthetic pointer with an original Maka M/star design and one of
-six colors. Inputs provide automatic feedback; explicit `app.moveCursor(indexOrPoint)`
+Each Session has a synthetic pointer carrying Maka's app mark (the A-shaped
+outline, diamond opening and top bar) in one of six colors. Its pointed corner
+remains the exact indicated position. Inputs provide automatic feedback; explicit `app.moveCursor(indexOrPoint)`
 and `tab.moveCursor(indexOrPoint)` only indicate a validated target. Their coordinates
 use the current screenshot without consuming its mapping.
 

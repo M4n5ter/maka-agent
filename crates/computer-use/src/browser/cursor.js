@@ -51,7 +51,7 @@ function drawCursor(input) {
     const pulse = document.createElement('div');
     picture.style.cssText = 'width:42px;height:42px;pointer-events:none;';
     badge.style.cssText =
-      'position:absolute;left:19px;top:37px;max-width:150px;padding:2px 7px;border:1px solid #ffffffcc;border-radius:8px;background:#17223bcc;color:white;font:600 10px/15px system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;';
+      'position:absolute;left:19px;top:45px;max-width:150px;padding:2px 7px;border:1px solid #ffffffcc;border-radius:8px;background:#17223bcc;color:white;font:600 10px/15px system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;';
     pulse.style.cssText =
       'position:absolute;left:9.69px;top:9.69px;width:16px;height:16px;margin:-8px;border:2px solid white;border-radius:50%;box-sizing:border-box;opacity:0;pointer-events:none;';
     root.append(picture, pulse, badge);

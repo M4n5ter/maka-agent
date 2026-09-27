@@ -29,23 +29,37 @@ use std::{collections::BTreeMap, path::Path};
 const TIP: f32 = 29.519;
 const BODY: &[[f32; 2]] = &[
     [TIP, TIP],
-    [94.0, 54.0],
-    [72.0, 66.0],
-    [83.0, 92.0],
-    [68.0, 99.0],
-    [55.0, 75.0],
-    [39.0, 91.0],
+    [108.0, 42.0],
+    [120.0, 54.0],
+    [120.0, 108.0],
+    [108.0, 120.0],
+    [54.0, 120.0],
+    [42.0, 108.0],
 ];
-const MARK: &[[f32; 2]] = &[[48.0, 59.0], [56.0, 48.0], [60.0, 64.0], [71.0, 55.0]];
-const STAR: &[[f32; 2]] = &[
-    [98.0, 20.0],
-    [101.0, 28.0],
-    [109.0, 31.0],
-    [101.0, 34.0],
-    [98.0, 42.0],
-    [95.0, 34.0],
-    [87.0, 31.0],
-    [95.0, 28.0],
+
+// The product mark from scripts/generate-app-icons.py: apex, feet, inner
+// valley and detached top bar. Keep it upright and separate from the pointer
+// tip, so the bar cannot obscure the position being indicated.
+const BRAND_SCALE: f32 = 0.085;
+const BRAND_STROKE: f32 = 70.0 * BRAND_SCALE;
+const fn brand(x: f32, y: f32) -> [f32; 2] {
+    [
+        83.0 + (x - 512.0) * BRAND_SCALE,
+        52.0 + (y - 162.0) * BRAND_SCALE,
+    ]
+}
+const MARK: &[&[[f32; 2]]] = &[
+    &[
+        brand(180.0, 845.0),
+        brand(512.0, 274.0),
+        brand(844.0, 845.0),
+    ],
+    &[
+        brand(359.1, 537.0),
+        brand(512.0, 800.0),
+        brand(664.9, 537.0),
+    ],
+    &[brand(405.0, 162.0), brand(619.0, 162.0)],
 ];
 fn path(points: &[[f32; 2]], closed: bool) -> CompiledGeometry {
     CompiledGeometry::Path {
@@ -77,14 +91,7 @@ pub fn compiled(color: Color) -> CompiledTheme {
     let fill = color.rgba();
     let mut actions = BTreeMap::new();
     for action in CursorAction::ALL {
-        let frames = if matches!(
-            action,
-            CursorAction::Click
-                | CursorAction::Key
-                | CursorAction::Observe
-                | CursorAction::Text
-                | CursorAction::Scroll
-        ) {
+        let frames = if matches!(action, CursorAction::Click | CursorAction::Key) {
             24
         } else {
             1
@@ -106,28 +113,25 @@ pub fn compiled(color: Color) -> CompiledTheme {
                     Some((ring, 3.0)),
                 ));
             }
-            let mut halo = fill;
-            halo[3] = 34;
-            commands.push(command(path(BODY, true), None, Some((halo, 13.0))));
+            // A dark outer edge and light inner edge remain legible on either
+            // background, without filling the pointed area with extra detail.
+            commands.push(command(
+                path(BODY, true),
+                None,
+                Some(([23, 34, 59, 170], 7.0)),
+            ));
             commands.push(command(
                 path(BODY, true),
                 Some(fill),
                 Some(([255, 255, 255, 255], 4.0)),
             ));
-            commands.push(command(
-                path(MARK, false),
-                None,
-                Some(([255, 255, 255, 255], 5.0)),
-            ));
-            let mut star = fill;
-            if frames > 1 {
-                star[3] = (165.0 + 90.0 * (progress * std::f32::consts::TAU).cos().abs()) as u8;
+            for points in MARK {
+                commands.push(command(
+                    path(points, false),
+                    None,
+                    Some(([255, 255, 255, 255], BRAND_STROKE)),
+                ));
             }
-            commands.push(command(
-                path(STAR, true),
-                Some(star),
-                Some(([255, 255, 255, 255], 2.0)),
-            ));
             animation.push(CompiledFrame { commands });
         }
         actions.insert(
@@ -141,7 +145,7 @@ pub fn compiled(color: Color) -> CompiledTheme {
     CompiledTheme {
         id: format!("org.apache.maka.cursor.{}", color.name()),
         name: format!("Maka {}", color.name()),
-        version: "1.0.0".into(),
+        version: "1.1.0".into(),
         author: "Apache Maka".into(),
         license: "Apache-2.0".into(),
         profile: cursor_overlay::THEME_PROFILE.into(),
@@ -173,9 +177,11 @@ fn svg_path(points: &[[f32; 2]], closed: bool) -> String {
 pub(crate) fn svg(color: Color) -> String {
     let [r, g, b, _] = color.rgba();
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none"><g stroke-linecap="round" stroke-linejoin="round"><path d="{body}" stroke="rgb({r},{g},{b})" stroke-width="13" opacity=".15"/><path d="{body}" fill="rgb({r},{g},{b})" stroke="white" stroke-width="4"/><path d="{mark}" stroke="white" stroke-width="5"/><path d="{star}" fill="rgb({r},{g},{b})" stroke="white" stroke-width="2"/></g></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none"><g stroke-linecap="round" stroke-linejoin="round"><path d="{body}" stroke="#17223b" stroke-width="7" opacity=".666667"/><path d="{body}" fill="rgb({r},{g},{b})" stroke="white" stroke-width="4"/><path d="{mark}" stroke="white" stroke-width="{BRAND_STROKE}"/></g></svg>"##,
         body = svg_path(BODY, true),
-        mark = svg_path(MARK, false),
-        star = svg_path(STAR, true)
+        mark = MARK
+            .iter()
+            .map(|points| svg_path(points, false))
+            .collect::<String>(),
     )
 }
