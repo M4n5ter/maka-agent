@@ -74,8 +74,8 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-cua-driver-sdk = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
-cua-driver-contract = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
+cua-driver-sdk = { git = "https://github.com/M4n5ter/cua", rev = "fdf0267a47f493085accae2a0086739fe4505f17" }
+cua-driver-contract = { git = "https://github.com/M4n5ter/cua", rev = "fdf0267a47f493085accae2a0086739fe4505f17" }
 agent-client-protocol = { version = "2.2.0", default-features = false, features = ["unstable_protocol_v2"] }
 apply-patch = { path = "crates/apply-patch" }
 cap-fs-ext = "4.0.3"

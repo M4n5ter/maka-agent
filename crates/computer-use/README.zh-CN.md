@@ -64,8 +64,9 @@ macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参
 
 Linux 构建需要 X11、Xi、Xtst 开发库；Windows MSVC 构建还需要对应的 Spectre CRT 库。
 当前固定 [M4n5ter 的 Cua fork](https://github.com/M4n5ter/cua) 提交
-`cf1e2ceafd8e8bbf23fad10b713159123ffba018`，修复 X11 跨分块重复标签和字形接缝
+`fdf0267a47f493085accae2a0086739fe4505f17`，修复 X11 跨分块重复标签和字形接缝
 （[上游 PR](https://github.com/trycua/cua/pull/4260)）。
+同时包含上游 [#4238](https://github.com/trycua/cua/pull/4238) 的 macOS 录像写入完成修复。
 回归覆盖标签重叠与屏幕边缘；有／无 compositor 的原生 Xvfb 验证两个标签和独立清理。
 这些定向检查不替代 Cua 的完整桌面认证矩阵。
 
