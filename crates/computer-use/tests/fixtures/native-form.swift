@@ -1,0 +1,79 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import AppKit
+
+final class Fixture: NSObject, NSApplicationDelegate {
+    var window: NSWindow!
+    let name = NSTextField(string: "hello hello")
+    let message = NSTextView()
+    let output = NSTextField(labelWithString: "Not submitted")
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let menu = NSMenu()
+        let application = NSMenuItem()
+        application.submenu = NSMenu()
+        menu.addItem(application)
+        let editRoot = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editRoot.submenu = edit
+        menu.addItem(editRoot)
+        NSApp.mainMenu = menu
+
+        window = NSWindow(contentRect: NSRect(x: 220, y: 220, width: 420, height: 250), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Maka Cua Form Fixture"
+        name.frame = NSRect(x: 24, y: 190, width: 360, height: 28)
+        name.setAccessibilityLabel("Name")
+        message.frame = NSRect(x: 24, y: 140, width: 360, height: 28)
+        message.setAccessibilityLabel("Message")
+        let button = NSButton(title: "Submit fixture", target: self, action: #selector(submit(_:)))
+        button.frame = NSRect(x: 24, y: 85, width: 160, height: 32)
+        output.frame = NSRect(x: 24, y: 25, width: 370, height: 40)
+        for view in [name, message, button, output] { window.contentView!.addSubview(view) }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        FileHandle.standardOutput.write(Data("ready \(window.windowNumber)\n".utf8))
+        DispatchQueue.global().async { [self] in
+            while let command = readLine() {
+                if command == "move" {
+                    DispatchQueue.main.async { [self] in
+                        let before = window.frame.origin
+                        window.setFrameOrigin(NSPoint(x: before.x + 80, y: before.y + 70))
+                        window.displayIfNeeded()
+                        FileHandle.standardOutput.write(Data("moved\n".utf8))
+                    }
+                }
+            }
+        }
+    }
+
+    @objc func submit(_ sender: Any?) {
+        output.stringValue = name.stringValue + " / " + message.string
+        let font = message.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        let bold = font.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) } ?? false
+        let result = try! JSONSerialization.data(withJSONObject: ["submitted": output.stringValue, "bold": bold, "rich": message.isRichText, "font": font?.fontName ?? "none"])
+        FileHandle.standardOutput.write(result + Data([10]))
+    }
+}
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let fixture = Fixture()
+app.delegate = fixture
+app.run()

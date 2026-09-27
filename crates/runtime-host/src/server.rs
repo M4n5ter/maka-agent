@@ -272,6 +272,7 @@ impl Host {
         crate::plugins::session_recap::install(&mut setup)?;
         crate::plugins::goal::install(&mut setup)?;
         crate::plugins::background_health::install(&mut setup)?;
+        crate::plugins::computer::install(&mut setup)?;
         crate::plugins::web::install(&mut setup)?;
         crate::plugins::insights::install(&mut setup)?;
         crate::plugins::session_import::install(&mut setup)?;

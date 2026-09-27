@@ -90,6 +90,7 @@ impl Provider for Issuer {
                 executions: executions.clone(),
                 authorizations: executions,
                 permissions: effects.clone(),
+                computer: effects.clone(),
                 files: effects.clone(),
                 models: effects.clone(),
                 executors: effects.clone(),

@@ -33,6 +33,7 @@ members = [
     "crates/client",
     "crates/client-capability",
     "crates/config",
+    "crates/computer-use",
     "crates/event-log",
     "crates/external-agent",
     "crates/fs-tools",
@@ -73,6 +74,8 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+cua-driver-sdk = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
+cua-driver-contract = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
 agent-client-protocol = { version = "2.2.0", default-features = false, features = ["unstable_protocol_v2"] }
 apply-patch = { path = "crates/apply-patch" }
 cap-fs-ext = "4.0.3"
@@ -96,6 +99,7 @@ maka-background-health = { path = "crates/background-health" }
 maka-client = { path = "crates/client" }
 maka-client-capability = { path = "crates/client-capability" }
 maka-config = { path = "crates/config" }
+maka-computer-use = { path = "crates/computer-use" }
 maka-event-log = { path = "crates/event-log" }
 maka-external-agent = { path = "crates/external-agent" }
 maka-fs-tools = { path = "crates/fs-tools" }

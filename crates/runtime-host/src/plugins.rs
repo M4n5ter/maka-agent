@@ -22,6 +22,7 @@ mod authority;
 pub(crate) mod background_health;
 mod changes;
 mod client;
+pub(crate) mod computer;
 mod effects;
 mod entrypoint;
 pub(crate) mod external_agent;
