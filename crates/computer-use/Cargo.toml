@@ -38,7 +38,7 @@ reqwest.workspace = true
 tokio-tungstenite.workspace = true
 base64 = "0.22.1"
 futures-util.workspace = true
-cursor-overlay = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21", features = ["theme-authoring"] }
+cursor-overlay = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018", features = ["theme-authoring"] }
 sha2.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
@@ -49,15 +49,15 @@ tokio-util.workspace = true
 tiny-skia = { version = "0.11", features = ["png-format"] }
 
 [target.'cfg(windows)'.dependencies]
-platform-windows = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
+platform-windows = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-platform-linux = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
+platform-linux = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-platform-macos = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
-cua-driver-core = { git = "https://github.com/trycua/cua", rev = "5b3d48dfda23bde15ae1f2c150940defbdc64c21" }
+platform-macos = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
+cua-driver-core = { git = "https://github.com/M4n5ter/cua", rev = "cf1e2ceafd8e8bbf23fad10b713159123ffba018" }
 core-foundation = "0.10.1"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }

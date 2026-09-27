@@ -20,7 +20,9 @@
 # Computer Use
 
 Maka owns the Computer Use object API and an isolated, persistent JavaScript REPL.
-Cua supplies native platform code, pinned to `5b3d48dfda23bde15ae1f2c150940defbdc64c21`.
+Cua supplies native platform code, pinned to the [M4n5ter fork](https://github.com/M4n5ter/cua)
+at `cf1e2ceafd8e8bbf23fad10b713159123ffba018` for the X11 cursor badge fix
+([upstream PR](https://github.com/trycua/cua/pull/4260)).
 See [中文说明](README.zh-CN.md) and [API reference](src/api.md).
 
 The built-in plugin publishes two direct tools, `cua_repl` and `cua_reset`.
@@ -123,9 +125,11 @@ validated in an interactive desktop Session; Linux X11 checks use a dedicated Xv
 display. Multiple visual pointers do not create separate OS keyboard or focus seats.
 
 Linux builds need the X11, Xi and Xtst development libraries. Windows MSVC builds
-also need the matching Spectre-mitigated CRT libraries. X11 validation currently
-finds duplicated Session labels when multiple cursors occupy separate render tiles;
-pointer placement and lifecycle pass, but X11 visual parity remains incomplete.
+also need the matching Spectre-mitigated CRT libraries. The pinned fork fixes X11
+Session labels duplicating across render tiles and glyph seams at tile boundaries.
+The regression covers overlapping labels and screen edges; native Xvfb checks with
+and without a compositor verify two labels and independent cursor cleanup. These
+focused checks do not replace Cua's complete desktop certification matrix.
 
 ## Platform boundaries
 

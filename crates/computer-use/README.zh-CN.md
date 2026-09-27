@@ -63,8 +63,11 @@ macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参
 显示器中验证，未启用 Wayland 覆盖层。多个图案不会隔离操作系统键盘、焦点或输入法。
 
 Linux 构建需要 X11、Xi、Xtst 开发库；Windows MSVC 构建还需要对应的 Spectre CRT 库。
-X11 实测发现多个光标位于不同渲染分块时标签会重复；位置与生命周期检查通过，
-但 X11 视觉一致性尚未完成。
+当前固定 [M4n5ter 的 Cua fork](https://github.com/M4n5ter/cua) 提交
+`cf1e2ceafd8e8bbf23fad10b713159123ffba018`，修复 X11 跨分块重复标签和字形接缝
+（[上游 PR](https://github.com/trycua/cua/pull/4260)）。
+回归覆盖标签重叠与屏幕边缘；有／无 compositor 的原生 Xvfb 验证两个标签和独立清理。
+这些定向检查不替代 Cua 的完整桌面认证矩阵。
 
 测试包括独立 REPL/权限/取消/资源边界，以及需主动运行的真实 Chrome、AppKit 表单
 验收。验证成功的范围与完整 cua_repl 等价、性能更优是不同结论，后两者尚未宣称。
