@@ -44,6 +44,8 @@ pub struct Builtin;
 struct Settings {
     #[serde(default)]
     browsers: Vec<maka_plugins::computer::BrowserConnection>,
+    #[serde(default)]
+    desktop: maka_plugins::computer::Desktop,
 }
 
 impl Plugin for Builtin {
@@ -74,7 +76,7 @@ impl Plugin for Builtin {
             } else {
                 serde_json::from_value(config).map_err(|e| e.to_string())?
             };
-            let handler = Arc::new(Tools(host.computer, settings.browsers));
+            let handler = Arc::new(Tools(host.computer, settings.browsers, settings.desktop));
             let mut staged = Staged::default();
             for definition in definitions() {
                 let name = definition.name.clone();
@@ -97,6 +99,7 @@ impl Plugin for Builtin {
 struct Tools(
     Arc<dyn maka_plugins::computer::Computer>,
     Vec<maka_plugins::computer::BrowserConnection>,
+    maka_plugins::computer::Desktop,
 );
 impl ToolPreparer for Tools {
     fn names(&self) -> Vec<String> {
@@ -111,6 +114,7 @@ impl ToolPreparer for Tools {
     ) -> PreparationFuture {
         let computer = self.0.clone();
         let browsers = self.1.clone();
+        let desktop = self.2;
         Box::pin(async move {
             if cancellation.is_cancelled() {
                 return Err(ToolRejection::Cancelled);
@@ -131,6 +135,7 @@ impl ToolPreparer for Tools {
                                 name,
                                 input,
                                 browsers,
+                                desktop,
                             },
                         )
                         .await?;

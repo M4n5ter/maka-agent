@@ -25,6 +25,7 @@
 mod browser;
 mod catalog;
 pub mod cursor;
+pub mod desktop;
 mod driver;
 mod identity;
 #[cfg(target_os = "macos")]
@@ -34,20 +35,17 @@ pub mod protocol;
 mod session;
 
 pub use catalog::{Evaluate, definitions, validate};
+pub use desktop::Session;
 pub use driver::Driver;
-pub use session::Session;
-pub fn facade() -> &'static str {
-    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SOURCE.get_or_init(|| {
-        let platform = match std::env::consts::OS {
-            "macos" => "mac",
-            other => other,
-        };
-        format!(
-            "const nativePlatform = {platform:?};\n{}",
-            include_str!("facade.js")
-        )
-    })
+pub fn facade() -> String {
+    facade_for(desktop::local_platform())
+}
+
+pub fn facade_for(platform: &str) -> String {
+    format!(
+        "const nativePlatform = {platform:?};\n{}",
+        include_str!("facade.js")
+    )
 }
 
 pub const ID: &str = "maka.computer-use";

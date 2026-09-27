@@ -41,6 +41,7 @@ pub struct Driver {
     state: State,
     sessions: std::collections::HashSet<String>,
     pub(crate) cursors: crate::cursor::Host,
+    pub(crate) windows: crate::desktop::worker::Worker,
 }
 
 impl Driver {
@@ -107,7 +108,9 @@ impl Driver {
                         max_idle_ttl_seconds: 86400,
                     },
                 })
-                .map_err(error)?,
+                // No operation has been dispatched during construction. In
+                // particular, a non-interactive desktop is a known refusal.
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
             );
         }
         let State::Active(driver) = &self.state else {
@@ -155,6 +158,7 @@ impl Driver {
 
     /// Host calls this after all Session resources retire.
     pub async fn close(&mut self) -> Result<(), ToolError> {
+        let failure = self.windows.close().await.err();
         self.cursors.stop().await;
         let previous = std::mem::replace(&mut self.state, State::Closed);
         self.sessions.clear();
@@ -164,7 +168,7 @@ impl Driver {
                 .await
                 .map_err(|error| ToolError::CleanupUnconfirmed(error.to_string()))?;
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 }
 

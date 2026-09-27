@@ -31,7 +31,7 @@ pub enum Handle {
     Tab(String),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Command {
     Documentation,
@@ -82,27 +82,27 @@ pub enum Command {
         options: CreateTabOptions,
     },
 }
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InventoryOptions {
     pub emit: Option<bool>,
     pub browser: Option<String>,
 }
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObservationOptions {
     pub emit: Option<bool>,
     #[serde(default)]
     pub disable_diffing: bool,
 }
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationKind {
     Ax,
     Screenshot,
     Both,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AppReference {
     Name(String),
@@ -111,39 +111,39 @@ pub enum AppReference {
         window_id: u64,
     },
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TabReference {
     Id(String),
     Url { url: String },
     Mention { mention: String },
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BrowserOptions {
     pub id: Option<String>,
     pub url: Option<String>,
     pub extension_instance_id: Option<String>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateTabOptions {
     pub visible: Option<bool>,
     pub session_name: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Position {
     Element(u64),
     Point([f64; 2]),
 }
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClickOptions {
     pub mouse_button: Option<MouseButton>,
     pub click_count: Option<u32>,
 }
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseButton {
     #[serde(alias = "l")]
@@ -162,7 +162,7 @@ impl MouseButton {
         }
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
     #[serde(alias = "u")]
@@ -184,39 +184,39 @@ impl Direction {
         }
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Distance {
     Pages(u64),
     Pixels { pixels: u64 },
 }
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteOptions {
     pub format: Option<PasteFormat>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PasteFormat {
     Text,
     Md,
     Html,
 }
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SelectOptions {
     pub prefix: Option<String>,
     pub suffix: Option<String>,
     pub selection_type: Option<SelectionType>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionType {
     Text,
     CursorBefore,
     CursorAfter,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
     MoveCursor {

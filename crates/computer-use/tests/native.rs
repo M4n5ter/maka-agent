@@ -23,12 +23,175 @@ use maka_computer_use::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires WSL, a matching Windows helper, and a disposable Windows form with MAKA_CUA_TEST_WINDOW"]
+async fn wsl_uses_windows_targets_input_cursors_and_session_cleanup() {
+    use maka_plugins::computer::Desktop;
+    use serde_json::{Value, json};
+    async fn call(session: &mut Session, id: &str, command: Value) -> Value {
+        session
+            .invoke(
+                serde_json::from_value(command).unwrap(),
+                id,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+    }
+    assert!(
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("microsoft")
+    );
+    let window: u64 = std::env::var("MAKA_CUA_TEST_WINDOW")
+        .expect("disposable form window ID")
+        .parse()
+        .unwrap();
+    let driver = std::sync::Arc::new(tokio::sync::Mutex::new(maka_computer_use::Driver::default()));
+    let mut a = Session::new(driver.clone());
+    let mut b = Session::new(driver.clone());
+    a.configure(Desktop::Auto, vec![]).unwrap();
+    b.configure(Desktop::Windows, vec![]).unwrap();
+    assert_eq!(a.platform(), "windows");
+    assert!(
+        matches!(a.configure(Desktop::Local, vec![]), Err(maka_runtime::tools::ToolError::Failed(message)) if message.contains("reset Cua"))
+    );
+    let mut local = Session::new(driver.clone());
+    local.configure(Desktop::Local, vec![]).unwrap();
+    assert_eq!(local.platform(), "linux");
+    local.close().await.unwrap();
+
+    let app = call(
+        &mut a,
+        "wsl-a",
+        json!({"method":"getApp","target":{"windowId":window}}),
+    )
+    .await;
+    let state = app["state"].as_str().unwrap();
+    let line = state
+        .lines()
+        .find(|line| line.contains("WSL input"))
+        .unwrap_or_else(|| panic!("fixture field missing: {state}"));
+    let index: u64 = line
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    call(&mut a, "wsl-a", json!({"method":"action","handle":app["handle"],"action":{"kind":"setValue","index":index,"value":"Maka WSL verified"}})).await;
+    let observed = call(
+        &mut a,
+        "wsl-a",
+        json!({"method":"observe","handle":app["handle"],"kind":"both","options":{}}),
+    )
+    .await;
+    assert!(
+        observed["state"]
+            .as_str()
+            .unwrap()
+            .contains("Maka WSL verified")
+    );
+    assert!(observed["image"]["data"].as_str().unwrap().len() > 100);
+    let foreign = b
+        .invoke(
+            serde_json::from_value(
+                json!({"method":"observe","handle":app["handle"],"kind":"ax","options":{}}),
+            )
+            .unwrap(),
+            "wsl-b",
+            &CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(foreign, Err(maka_runtime::tools::ToolError::Failed(message)) if message.contains("stale_target"))
+    );
+    let other = call(
+        &mut b,
+        "wsl-b",
+        json!({"method":"getApp","target":{"windowId":window}}),
+    )
+    .await;
+    for (session, id, handle, label, color, point) in [
+        (&mut a, "wsl-a", &app["handle"], "WSL A", "blue", [20, 20]),
+        (
+            &mut b,
+            "wsl-b",
+            &other["handle"],
+            "WSL B",
+            "mint",
+            [120, 20],
+        ),
+    ] {
+        call(session, id, json!({"method":"configureCursor","options":{"label":label,"color":color,"reducedMotion":true}})).await;
+        call(
+            session,
+            id,
+            json!({"method":"observe","handle":handle,"kind":"screenshot","options":{}}),
+        )
+        .await;
+        call(session, id, json!({"method":"action","handle":handle,"action":{"kind":"moveCursor","target":point}})).await;
+    }
+    let cursor_a = call(
+        &mut a,
+        "wsl-a",
+        json!({"method":"cursorState","options":{}}),
+    )
+    .await;
+    let cursor_b = call(
+        &mut b,
+        "wsl-b",
+        json!({"method":"cursorState","options":{}}),
+    )
+    .await;
+    assert_eq!(cursor_a["native"]["status"], "ready");
+    assert_eq!(cursor_b["native"]["status"], "ready");
+    assert_eq!(
+        cursor_a["native"]["rendererPid"],
+        cursor_b["native"]["rendererPid"]
+    );
+    assert_ne!(cursor_a["settings"]["id"], cursor_b["settings"]["id"]);
+    a.close().await.unwrap();
+    assert_eq!(
+        call(
+            &mut b,
+            "wsl-b",
+            json!({"method":"cursorState","options":{}})
+        )
+        .await["native"]["visible"],
+        true
+    );
+    let result = call(
+        &mut b,
+        "wsl-b",
+        json!({"method":"observe","handle":other["handle"],"kind":"ax","options":{}}),
+    )
+    .await;
+    assert!(
+        result["state"]
+            .as_str()
+            .unwrap()
+            .contains("Maka WSL verified")
+    );
+    b.close().await.unwrap();
+    driver.lock().await.close().await.unwrap();
+    println!(
+        "WSL_WINDOWS_VERIFIED renderer_pid={}",
+        cursor_b["native"]["rendererPid"]
+    );
+}
+
 #[tokio::test]
 async fn closed_or_cancelled_session_cannot_start_native_work() {
     let driver = std::sync::Arc::new(tokio::sync::Mutex::new(maka_computer_use::Driver::default()));
     let mut run = Session::new(driver.clone());
     let stop = CancellationToken::new();
     stop.cancel();
+    assert!(
+        matches!(run.prepare(&stop).await, Err(maka_runtime::tools::ToolError::Failed(message)) if message == "Computer Use preparation cancelled")
+    );
     assert!(
         run.invoke(
             Command::ListApps {
@@ -43,6 +206,9 @@ async fn closed_or_cancelled_session_cannot_start_native_work() {
         .contains("cancelled before dispatch")
     );
     run.close().await.unwrap();
+    assert!(
+        matches!(run.prepare(&CancellationToken::new()).await, Err(maka_runtime::tools::ToolError::Failed(message)) if message == "Computer Use Session is closed")
+    );
     assert!(
         run.invoke(
             Command::ListApps {

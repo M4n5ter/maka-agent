@@ -40,6 +40,10 @@ fn main() -> std::process::ExitCode {
     if let Some(exit) = maka_computer_use::cursor::bootstrap() {
         return exit;
     }
+    if let Some(exit) = maka_computer_use::desktop::bootstrap() {
+        return exit;
+    }
+    maka_computer_use::desktop::register_windows_helper(distribution::windows_helper);
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new(

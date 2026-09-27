@@ -399,8 +399,12 @@ pub(crate) async fn preview_version() -> Result<Version, HostError> {
 }
 
 pub(crate) async fn fetch(version: Version) -> Result<Artifact, HostError> {
+    fetch_target(Target::current()?, version).await
+}
+
+async fn fetch_target(target: Target, version: Version) -> Result<Artifact, HostError> {
     let fetch = Fetch {
-        target: Target::current()?,
+        target,
         version,
         cache: None,
         archive: None,
@@ -415,6 +419,28 @@ pub(crate) async fn fetch(version: Version) -> Result<Artifact, HostError> {
     )
     .await
     .map_err(|_| "native package download timed out")?
+}
+
+/// Resolve the Windows component of this exact native release. Never follow
+/// a moving dist-tag or run a separately installed, potentially stale CLI.
+pub(crate) fn windows_helper() -> maka_runtime::tools::ToolFuture<PathBuf> {
+    Box::pin(async {
+        let version = option_env!("MAKA_NATIVE_PACKAGE_VERSION")
+            .ok_or_else(|| maka_runtime::tools::ToolError::Failed("this source build has no native release identity; development hosts must provide MAKA_CUA_WINDOWS_EXECUTABLE".into()))?;
+        let version = Version::parse(version)
+            .map_err(|error| maka_runtime::tools::ToolError::Failed(error.to_string()))?;
+        crate::operation::without_progress(async {
+            fetch_target(Target::Win32X64, version)
+                .await
+                .map(|artifact| artifact.executable)
+                .map_err(|error| {
+                    maka_runtime::tools::ToolError::Failed(format!(
+                        "Windows desktop component could not be prepared: {error}"
+                    ))
+                })
+        })
+        .await
+    })
 }
 
 fn receipt_digest(value: &str) -> Result<String, &'static str> {
@@ -566,13 +592,20 @@ mod tests {
                 "dist": { "tarball": tarball, "integrity": integrity },
             }))
             .unwrap();
-            for body in [metadata, bytes] {
+            for (path, body) in [
+                (format!("/{}/1.2.3", target.package_name()), metadata),
+                ("/native.tgz".into(), bytes),
+            ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 while !request.ends_with(b"\r\n\r\n") {
                     request.push(socket.read_u8().await.unwrap());
                     assert!(request.len() < 8192);
                 }
+                assert!(
+                    request.starts_with(format!("GET {path} HTTP/1.1\r\n").as_bytes()),
+                    "native downloads must request the exact release, never a moving tag"
+                );
                 socket
                     .write_all(
                         format!(

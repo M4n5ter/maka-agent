@@ -17,10 +17,10 @@
  * under the License.
  */
 
-//! Agent-only access to the Host's interactive desktop.
+//! Agent-only access to the Host's selected interactive desktop.
 //!
 //! The Host binds interaction state to the Session, owns approval and journals each
-//! operation. A call never selects a client desktop, native session, or driver.
+//! operation. A call cannot supply a client desktop, native session, executable or endpoint.
 
 use crate::call::Scope;
 use futures_util::future::BoxFuture;
@@ -35,6 +35,19 @@ pub struct Call {
     pub input: Value,
     #[serde(default)]
     pub browsers: Vec<BrowserConnection>,
+    #[serde(default)]
+    pub desktop: Desktop,
+}
+
+/// Selects the Host's local desktop or its Windows host when running in WSL.
+/// Executables and transport addresses are exclusively Host configuration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Desktop {
+    #[default]
+    Auto,
+    Local,
+    Windows,
 }
 
 /// An explicitly configured browser provider. The REPL cannot supply endpoints,

@@ -16,20 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-fn main() {
-    println!("cargo:rerun-if-env-changed=MAKA_NATIVE_PACKAGE_VERSION");
-    if let Ok(version) = std::env::var("MAKA_NATIVE_PACKAGE_VERSION") {
-        assert!(
-            !version.is_empty()
-                && version.len() <= 256
-                && version
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')),
-            "invalid native package version"
-        );
-        println!("cargo:rustc-env=MAKA_NATIVE_PACKAGE_VERSION={version}");
+
+//! Minimal embedding executable for the private desktop and cursor helpers.
+fn main() -> std::process::ExitCode {
+    if let Some(exit) = maka_computer_use::cursor::bootstrap() {
+        return exit;
     }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    if let Some(exit) = maka_computer_use::desktop::bootstrap() {
+        return exit;
     }
+    eprintln!("This executable supplies Maka's private desktop helper entry points.");
+    std::process::ExitCode::SUCCESS
 }

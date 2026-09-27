@@ -38,12 +38,16 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
         let server=tokio::spawn(LocalListener::bind(&endpoint).unwrap().serve(host.clone(),stop));
         let mut peer=Peer::new(host,"cua-client").await;
         peer.wait_for_plugins().await;
+        // Keep this lifecycle test hermetic even when the Host runs in WSL.
+        assert_eq!(peer.rpc("plugin.composition.apply",json!({"operations":[{"type":"update","entryId":"maka.computer-use","patch":{"config":{"desktop":"local"}}}]})).await["ok"],true);
+        peer.wait_for_plugins().await;
         for session in ["a","b","approved"] {
             let mode=if session=="approved" {"workspace-write"} else {"danger-full-access"};
             let policy=if session=="approved" {"on-request"} else {"never"};
             assert_eq!(peer.rpc("session.create",json!({"sessionId":session,"sandboxMode":mode,"approvalPolicy":{"kind":policy},"workspace":{"kind":"host_path","path":fixture.workspace},"modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model}})).await["ok"],true);
         }
         for (session,turn,tool,input,expected) in [
+            ("a","platform","cua_repl",json!({"code":"nodeRepl.write(cua.computer.target);"}),if cfg!(target_os="macos") {"mac"} else {std::env::consts::OS}),
             ("a","first","cua_repl",json!({"code":"await cua.cursor.configure({label:'A cursor',color:'blue',enabled:false}); const retained={value:41}; nodeRepl.write(retained.value);"}),"41"),
             ("b","isolated","cua_repl",json!({"code":"nodeRepl.write(typeof retained + ':' + (await cua.cursor.getState()).settings.label);"}),"undefined:Maka"),
             ("a","next","cua_repl",json!({"code":"retained.value++; nodeRepl.write(retained.value + ':' + (await cua.cursor.getState()).settings.label);"}),"42:A cursor"),

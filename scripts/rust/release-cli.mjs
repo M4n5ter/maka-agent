@@ -86,8 +86,8 @@ export async function releaseNativeCli({
     const repositoryRoot = join(extraction, candidate.rootDirectory);
     // JS must come from this install, not an ambient MAKA_JS_DEPS checkout.
     const env = controlledProcessEnvironment({
-      excludedNames: ['MAKA_JS_DEPS', 'CARGO_BUILD_TARGET'],
-      overrides: { MAKA_JS_DEPS: repositoryRoot },
+      excludedNames: ['MAKA_JS_DEPS', 'CARGO_BUILD_TARGET', 'MAKA_NATIVE_PACKAGE_VERSION'],
+      overrides: { MAKA_JS_DEPS: repositoryRoot, MAKA_NATIVE_PACKAGE_VERSION: version },
     });
     const metadata = JSON.parse(
       (

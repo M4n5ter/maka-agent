@@ -26,7 +26,8 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { compareProductReleaseVersions, parseProductReleaseVersion } from '../release-version.mjs';
 
-export const previewTargets = ['darwin-arm64', 'linux-x64-gnu', 'win32-x64'];
+// Publish the Windows component before Linux can expose it to WSL users.
+export const previewTargets = ['win32-x64', 'darwin-arm64', 'linux-x64-gnu'];
 
 /** Validate the complete set before the first external write; npm has no multi-package transaction. */
 export async function readPreviewRelease(directory) {

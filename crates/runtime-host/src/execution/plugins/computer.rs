@@ -129,11 +129,12 @@ impl Executions {
                 structured_content: None,
             });
         }
-        interaction
-            .native
-            .lock()
-            .await
-            .configure_browsers(input.browsers)?;
+        let platform = {
+            let mut native = interaction.native.lock().await;
+            native.configure(input.desktop, input.browsers)?;
+            native.prepare(&cancellation).await?;
+            native.platform()
+        };
         let input: maka_computer_use::Evaluate =
             serde_json::from_value(input.input).map_err(failed)?;
         let limits = maka_js_runtime::CellLimits {
@@ -144,7 +145,7 @@ impl Executions {
         let context =
             maka_js_runtime::CellContext::new(Default::default(), limits.max_value_bytes, vec![]);
         let runtime = repl.get_or_insert_with(|| {
-            maka_js_runtime::repl::Repl::new(maka_computer_use::facade(), limits)
+            maka_js_runtime::repl::Repl::new(maka_computer_use::facade_for(platform), limits)
         });
         let bridge = Arc::new(Bridge {
             host: self.clone(),

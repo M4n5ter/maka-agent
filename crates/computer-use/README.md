@@ -47,7 +47,7 @@ available from the native Skill library without automatic installation.
 
 ## Ownership and lifecycle
 
-The Host owns one Cua driver (Cua permits one embedded driver per process).
+The Host owns one Cua driver per desktop process (Cua permits one embedded driver per process).
 Each Maka Session owns its REPL, native Cua session, opaque target bindings and
 observations. Every operation uses fresh Run authority, canonical approval and
 its own journal settlement. Explore refuses access; Ask requests a Computer Use
@@ -67,6 +67,36 @@ Cancellation/timeout terminates the REPL and requires reset; already-dispatched
 native work still settles before the call returns. Actions are never automatically
 replayed. Source, heap, calls, output, targets and live Session counts are bounded.
 V8's heap guard is not an OS process memory sandbox.
+
+## WSL and desktop selection
+
+The plugin's `desktop` setting defaults to `auto`: Windows in WSL, the local OS
+elsewhere. Use `{"desktop":"local"}` to target a Linux desktop inside WSL, or
+`{"desktop":"windows"}` to require Windows. Changing the selected desktop requires
+`cua_reset`; an unavailable Windows connection never falls back to Linux.
+
+Native releases automatically prepare their Windows component on first use;
+no separate Windows installation or PATH setup is needed. Maka downloads its
+exact release version through the existing verified native-package cache, then
+reuses it offline. Updating Maka selects the matching component automatically.
+The first download requires network access and happens before the REPL deadline.
+WSL Windows interoperability and an interactive Windows user desktop are required;
+a service/SSH Session 0 cannot control another user's desktop.
+
+Maka starts a private Windows helper over inherited stdin/stdout, without a
+network port or persistent service. Native targets, process identity, browser
+CDP connections and synthetic cursors live in Windows. The Agent, REPL, approvals
+and operation journal remain in WSL. `cua.computer.target` reports `windows`.
+Browser loopback URLs refer to Windows in this mode.
+
+Sessions share one helper; reset removes only the current Session's bindings and
+cursors. EOF stops new work and releases desktop resources after accepted work
+settles. A lost acknowledgment is reported as uncertain and never retried; restart
+the Host if its desktop connection is lost. Library executables supporting the
+helper call `cursor::bootstrap()` and then `desktop::bootstrap()` at process entry;
+their Host registers a trusted resolver with `desktop::register_windows_helper`.
+Unreleased source builds can use the development override
+`MAKA_CUA_WINDOWS_EXECUTABLE`, an absolute WSL path to their own Windows build.
 
 ## Browser connection
 
@@ -155,9 +185,10 @@ The CDP adapter does not implement client tab mentions, extension/IAB providers,
 visibility/session-name options, deliverable/handoff UI markers or secondary AX
 actions. Its accessibility coverage is the main target; cross-process iframes are
 not advertised as complete. Native opaque surfaces without AX have weaker window
-lifecycle evidence than retained macOS AX targets. Linux and Windows have not been
-accepted on physical desktops in this change. Full cua_repl equivalence or superior
-latency/token usage is not claimed.
+lifecycle evidence than retained macOS AX targets. Windows observation, semantic
+text edits, screenshots and cursor lifecycle have been verified from WSL against
+a disposable native form. Linux native interaction coverage remains incomplete.
+Full cua_repl equivalence or superior latency/token usage is not claimed.
 
 Perception (`cua-perception`, `cua-som`, `parse_visual_regions`) and model downloads
 are absent. This does not require Desktop UI integration, Python or a cloud service.

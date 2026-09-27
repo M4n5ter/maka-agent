@@ -42,7 +42,7 @@ cursor-overlay = { git = "https://github.com/M4n5ter/cua", rev = "fdf0267a47f493
 sha2.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std", "process"] }
 tokio-util.workspace = true
 
 [dev-dependencies]

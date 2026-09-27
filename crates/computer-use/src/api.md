@@ -1,6 +1,7 @@
 Computer Use is an independent persistent JavaScript REPL. Use cua_repl directly;
 Code Mode is not required. Variables and bound objects survive calls and Turns.
-`cua.computer.target` identifies the native Host platform (`mac`, `linux`, `windows`).
+`cua.computer.target` identifies the selected desktop platform (`mac`, `linux`, `windows`).
+In WSL it defaults to the Windows host; shell commands may still run in Linux.
 
 Entry points (selection emits initial state):
 - `await cua.getState({emit?})`: app and configured browser inventory, including inventory errors.

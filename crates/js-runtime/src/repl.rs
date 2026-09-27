@@ -58,7 +58,8 @@ impl Repl {
     /// `bootstrap` is trusted facade source, evaluated once. It can capture the
     /// two bridge functions `call(name, input)` and `emit(CellOutput)`; these
     /// are not globals and contain no persistent invocation authority.
-    pub fn new(bootstrap: &'static str, limits: CellLimits) -> Self {
+    pub fn new(bootstrap: impl Into<String>, limits: CellLimits) -> Self {
+        let bootstrap = bootstrap.into();
         crate::initialize_platform();
         let (sender, receiver) = mpsc::channel(1);
         let stopped = CancellationToken::new();
@@ -113,7 +114,7 @@ fn closed() -> CellAbort {
 }
 
 async fn serve(
-    bootstrap: &'static str,
+    bootstrap: String,
     limits: CellLimits,
     mut receiver: mpsc::Receiver<Evaluation>,
     stopped: CancellationToken,

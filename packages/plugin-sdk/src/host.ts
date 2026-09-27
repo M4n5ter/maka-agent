@@ -160,13 +160,14 @@ export interface ResourceContext {
   readonly pricing: import('./pricing.js').Prices;
   readonly files: Files;
   readonly llm: import('./llm.js').Llm;
-  /** Operates the Rust Host's interactive desktop through current Agent authority.
+  /** Operates the Host's selected interactive desktop through current Agent authority.
    * Interaction state is Session-owned; every call uses current Run authority. */
   readonly computer: {
     call(input: {
       name: string;
       input: Json;
       browsers?: { id: string; endpoint: string }[];
+      desktop?: 'auto' | 'local' | 'windows';
     }): Promise<Json>;
   };
   readonly clients: import('./clients.js').ClientCapabilities;
