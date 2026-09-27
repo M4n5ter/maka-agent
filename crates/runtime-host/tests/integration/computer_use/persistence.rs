@@ -44,12 +44,12 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
             assert_eq!(peer.rpc("session.create",json!({"sessionId":session,"sandboxMode":mode,"approvalPolicy":{"kind":policy},"workspace":{"kind":"host_path","path":fixture.workspace},"modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model}})).await["ok"],true);
         }
         for (session,turn,tool,input,expected) in [
-            ("a","first","cua_repl",json!({"code":"const retained={value:41}; nodeRepl.write(retained.value);"}),"41"),
-            ("b","isolated","cua_repl",json!({"code":"nodeRepl.write(typeof retained);"}),"undefined"),
-            ("a","next","cua_repl",json!({"code":"retained.value++; nodeRepl.write(retained.value);"}),"42"),
+            ("a","first","cua_repl",json!({"code":"await cua.cursor.configure({label:'A cursor',color:'blue',enabled:false}); const retained={value:41}; nodeRepl.write(retained.value);"}),"41"),
+            ("b","isolated","cua_repl",json!({"code":"nodeRepl.write(typeof retained + ':' + (await cua.cursor.getState()).settings.label);"}),"undefined:Maka"),
+            ("a","next","cua_repl",json!({"code":"retained.value++; nodeRepl.write(retained.value + ':' + (await cua.cursor.getState()).settings.label);"}),"42:A cursor"),
             ("a","reset","cua_reset",json!({}),"reset"),
-            ("a","fresh","cua_repl",json!({"code":"nodeRepl.write(typeof retained);"}),"undefined"),
-            ("approved","delayed","cua_repl",json!({"code":"await cua.rewriteDocumentation(); nodeRepl.write(43);","timeout_ms":1000}),"43"),
+            ("a","fresh","cua_repl",json!({"code":"nodeRepl.write(typeof retained + ':' + (await cua.cursor.getState()).settings.label);"}),"undefined:Maka"),
+            ("approved","delayed","cua_repl",json!({"code":"await cua.cursor.configure({label:'approved',enabled:false}); await cua.rewriteDocumentation(); nodeRepl.write(43);","timeout_ms":1000}),"43"),
         ] {
             assert_eq!(peer.rpc("turn.start",json!({"sessionId":session,"turnId":turn,"content":{"text":"Exercise only the Computer Use JavaScript environment"}})).await["ok"],true);
             requests.recv().await.unwrap().reply.send(call("search","tool_search",json!({"query":tool}))).unwrap();

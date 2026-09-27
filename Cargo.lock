@@ -5169,7 +5169,7 @@ dependencies = [
  "byteorder-lite",
  "moxcms",
  "num-traits",
- "png",
+ "png 0.18.1",
  "tiff",
  "zune-core",
  "zune-jpeg",
@@ -5836,6 +5836,7 @@ dependencies = [
  "libc",
  "maka-acp",
  "maka-client",
+ "maka-computer-use",
  "maka-config",
  "maka-event-log",
  "maka-fs-tools",
@@ -5913,6 +5914,7 @@ dependencies = [
  "cua-driver-contract",
  "cua-driver-core",
  "cua-driver-sdk",
+ "cursor-overlay",
  "futures-util",
  "libc",
  "maka-js-runtime",
@@ -5922,12 +5924,16 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "platform-linux",
  "platform-macos",
+ "platform-windows",
  "reqwest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
+ "tiny-skia",
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tokio-util",
@@ -7865,6 +7871,19 @@ dependencies = [
  "tracing",
  "windows 0.58.0",
  "zeroize",
+]
+
+[[package]]
+name = "png"
+version = "0.17.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
+dependencies = [
+ "bitflags 1.3.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -10193,6 +10212,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "log",
+ "png 0.17.16",
  "tiny-skia-path",
 ]
 

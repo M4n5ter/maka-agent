@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
+mod cursor;
 
 pub(crate) fn validate_connections(connections: &[BrowserConnection]) -> Result<(), ToolError> {
     let mut ids = std::collections::HashSet::new();
@@ -86,6 +87,7 @@ struct Tab {
     previous: Option<String>,
     capture: Option<Capture>,
     navigation: Option<Navigation>,
+    cursor_world: Option<(String, u64)>,
 }
 enum Navigation {
     Loader(String),
@@ -241,7 +243,11 @@ impl Browsers {
         }
         (browsers, errors)
     }
-    pub(crate) async fn invoke(&mut self, command: Command) -> Result<Value, ToolError> {
+    pub(crate) async fn invoke(
+        &mut self,
+        command: Command,
+        cursor: &crate::cursor::Spec,
+    ) -> Result<Value, ToolError> {
         match command {
             Command::ListBrowsers { .. } => {
                 let (mut browsers, errors) = self.state().await;
@@ -349,7 +355,7 @@ impl Browsers {
             Command::Action {
                 handle: Handle::Tab(handle),
                 action,
-            } => self.action(&handle, action).await,
+            } => self.action(&handle, action, cursor).await,
             _ => Err(failed("invalid browser operation")),
         }
     }
@@ -389,6 +395,7 @@ impl Browsers {
                 previous: None,
                 capture: None,
                 navigation: None,
+                cursor_world: None,
             },
         );
         match self.observe(&handle, ObservationKind::Ax, false).await {
@@ -424,15 +431,23 @@ impl Browsers {
         }
         result
     }
-    async fn action(&mut self, handle: &str, action: Action) -> Result<Value, ToolError> {
+    async fn action(
+        &mut self,
+        handle: &str,
+        action: Action,
+        cursor: &crate::cursor::Spec,
+    ) -> Result<Value, ToolError> {
         let closing = matches!(&action, Action::Close);
+        let moving_cursor = matches!(&action, Action::MoveCursor { .. });
         let tab = self
             .targets
             .get_mut(handle)
             .ok_or_else(|| failed("stale_tab: bind it again"))?;
         tab.verify().await?;
-        let result = tab.action(action).await;
-        tab.capture = None;
+        let result = tab.action(action, cursor).await;
+        if !moving_cursor {
+            tab.capture = None;
+        }
         if result.is_err() {
             tab.socket = None;
             tab.refs.clear();
@@ -697,7 +712,11 @@ impl Tab {
             point[1] * capture.height / capture.image_height,
         ])
     }
-    async fn action(&mut self, action: Action) -> Result<Value, ToolError> {
+    async fn action(
+        &mut self,
+        action: Action,
+        cursor: &crate::cursor::Spec,
+    ) -> Result<Value, ToolError> {
         if !matches!(
             &action,
             Action::Navigate { .. }
@@ -715,7 +734,31 @@ impl Tab {
                 ));
             }
         }
+        if let Action::MoveCursor { target } = &action {
+            let point = self.cursor_point(target).await?;
+            return self
+                .draw_cursor(cursor, Some(point), "idle", "update")
+                .await;
+        }
+        if cursor.enabled
+            && !matches!(
+                action,
+                Action::Click { .. } | Action::Scroll { .. } | Action::Drag { .. }
+            )
+            && let Some(target) = action.cursor_target()
+            && let Ok(point) = self.cursor_point(&target).await
+        {
+            let _ = self
+                .draw_cursor(
+                    cursor,
+                    Some(point),
+                    action.cursor_action().as_str(),
+                    "update",
+                )
+                .await;
+        }
         match action {
+            Action::MoveCursor { .. } => unreachable!("handled before input dispatch"),
             Action::Navigate { url } => {
                 validate_url(&url)?;
                 self.refs.clear();
@@ -828,6 +871,11 @@ impl Tab {
                         serde_json::from_value(point).map_err(failed)?
                     }
                 };
+                if cursor.enabled {
+                    let _ = self
+                        .draw_cursor(cursor, Some(point), "click", "update")
+                        .await;
+                }
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":point[0],"y":point[1],"button":button,"clickCount":count})).await;
                 self.request("Input.dispatchMouseEvent",json!({"type":"mouseReleased","x":point[0],"y":point[1],"button":button,"clickCount":count})).await.map_err(|error|ToolError::CleanupUnconfirmed(format!("mouse release was not acknowledged: {error}")))?;
                 pressed?;
@@ -877,6 +925,11 @@ impl Tab {
                     Direction::Right => (pixels, 0.0),
                 };
                 let point=match target {Position::Point(point)=>self.point(point).await?,Position::Element(index)=>serde_json::from_value(self.call_element(index,"function(){const r=this.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];}",vec![]).await?).map_err(failed)?};
+                if cursor.enabled {
+                    let _ = self
+                        .draw_cursor(cursor, Some(point), "scroll", "update")
+                        .await;
+                }
                 self.request(
                     "Input.dispatchMouseEvent",
                     json!({"type":"mouseWheel","x":point[0],"y":point[1],"deltaX":dx,"deltaY":dy}),
@@ -886,6 +939,9 @@ impl Tab {
             Action::Drag { from, to } => {
                 let from = self.point(from).await?;
                 let to = self.point(to).await?;
+                if cursor.enabled {
+                    let _ = self.draw_cursor(cursor, Some(from), "drag", "update").await;
+                }
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":from[0],"y":from[1],"button":"left","clickCount":1})).await;
                 let moved = if pressed.is_ok() {
                     self.request("Input.dispatchMouseEvent",json!({"type":"mouseMoved","x":to[0],"y":to[1],"button":"left","buttons":1})).await
@@ -899,6 +955,9 @@ impl Tab {
                     ))
                 })?;
                 moved?;
+                if cursor.enabled {
+                    let _ = self.draw_cursor(cursor, Some(to), "drag", "update").await;
+                }
             }
             Action::Secondary { .. } => {
                 return Err(failed(

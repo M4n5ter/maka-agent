@@ -24,6 +24,9 @@ If a native AX observation fails while an app is busy, refresh the same bound ob
 when the app responds again. Failed observations invalidate old indices and coordinates.
 
 App and Tab actions:
+- `moveCursor(index | [x,y])` indicates an observed location using a synthetic cursor.
+  Coordinates use the same current screenshot as `click`; this does not consume it.
+  The returned visibility is display feedback, not evidence of an input effect.
 - `click(index | [x,y], {mouseButton?, clickCount?})`, `drag([x,y], [x,y])`.
 - `scroll(index | [x,y], "up" | "down" | "left" | "right", pages?)`.
 - `setValue(index, string)`.
@@ -67,6 +70,15 @@ Every operation uses current Host permissions; JS objects retain no grants.
 In Ask mode, Computer Use approval happens before the REPL execution timeout starts.
 Native macOS operations report `desktop_locked` while the screen is locked; connected
 CDP providers and pure REPL computations remain independently available.
+Each Session has its own Maka cursor. Input actions show it automatically; call
+`moveCursor` only to point without acting. `cua.cursor.configure({label?, color?,
+enabled?, reducedMotion?})` changes this Session's display. Colors are `blue`, `mint`,
+`violet`, `amber`, `rose`, `cyan`; labels allow up to 48 characters. `cua.cursor.getState()`
+reports settings and native/browser visibility. A native renderer in `idle` state starts
+on the first native indication; `unavailable` reports a missing/failed display host.
+Configure again to retry a failed renderer. Idle cursors disappear after a few seconds.
+Cursors share no input authority and do not move the system pointer. Multiple cursors
+do not isolate the physical keyboard, application focus or input method.
 Cancelled, timed-out or heap-exhausted REPLs require `cua_reset`, then target rebinding. Admitted
 native work settles before returning. Never automatically replay an uncertain action.
 Reset clears only this Session's REPL and bindings, leaving user apps and tabs open.

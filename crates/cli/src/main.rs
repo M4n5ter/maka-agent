@@ -37,6 +37,9 @@ mod stdio;
 mod windows;
 
 fn main() -> std::process::ExitCode {
+    if let Some(exit) = maka_computer_use::cursor::bootstrap() {
+        return exit;
+    }
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new(

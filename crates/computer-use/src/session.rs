@@ -36,6 +36,7 @@ pub struct Session {
     id: Option<String>,
     closed: bool,
     browsers: crate::browser::Browsers,
+    cursor: crate::cursor::Spec,
 }
 struct Target {
     #[cfg(target_os = "macos")]
@@ -54,6 +55,7 @@ impl Session {
             id: None,
             closed: false,
             browsers: Default::default(),
+            cursor: Default::default(),
         }
     }
     pub fn configure_browsers(
@@ -80,6 +82,24 @@ impl Session {
         self.id.get_or_insert_with(|| session.into());
         match command {
             Command::Documentation => Ok(json!(include_str!("api.md"))),
+            Command::ConfigureCursor { options } => {
+                self.cursor.configure(options)?;
+                self.browsers.configure_cursor(&self.cursor).await;
+                let native = self
+                    .native
+                    .lock()
+                    .await
+                    .cursors
+                    .configure(&self.cursor)
+                    .await;
+                Ok(json!({"settings":self.cursor,"native":native}))
+            }
+            Command::CursorState { .. } => {
+                let native = self.native.lock().await.cursors.state(&self.cursor).await;
+                Ok(
+                    json!({"settings":self.cursor,"native":native,"browsers":self.browsers.cursor_state(&self.cursor).await}),
+                )
+            }
             Command::ListApps { .. } => self.apps(session, cancellation).await,
             Command::ListWindows { .. } => Ok(json!(
                 self.windows(session, cancellation)
@@ -248,7 +268,7 @@ impl Session {
                 handle: Handle::App(handle),
                 action,
             } => self.action(&handle, action, session, cancellation).await,
-            command => self.browsers.invoke(command).await,
+            command => self.browsers.invoke(command, &self.cursor).await,
         }
     }
     async fn windows(
@@ -449,6 +469,43 @@ impl Session {
         cancellation: &CancellationToken,
     ) -> Result<Value, ToolError> {
         let window = self.verify(handle, session, cancellation).await?;
+        let cursor_requested = matches!(action, Action::MoveCursor { .. });
+        let point = if cursor_requested
+            || (self.cursor.enabled && self.native.lock().await.cursors.registered())
+        {
+            self.cursor_point(handle, action.cursor_target(), &window)
+                .await
+        } else {
+            Err(failed("automatic native cursor disabled"))
+        };
+        if matches!(action, Action::MoveCursor { .. }) {
+            return self
+                .native
+                .lock()
+                .await
+                .cursors
+                .update(
+                    &self.cursor,
+                    Some(point?),
+                    cursor_overlay::CursorAction::Idle,
+                    Some(window.window_id),
+                )
+                .await
+                .map(|state| json!(state));
+        }
+        if self.cursor.enabled
+            && let Ok(point) = point
+        {
+            self.native.lock().await.cursors.cue(
+                &self.cursor,
+                point,
+                action.cursor_action(),
+                window.window_id,
+            );
+        }
+        if cancellation.is_cancelled() {
+            return Err(failed("Computer Use cancelled before input dispatch"));
+        }
         let target = self.targets.get(handle).unwrap();
         #[cfg(target_os = "macos")]
         if crate::macos::Target::handles(&action)
@@ -642,12 +699,63 @@ impl Session {
     pub async fn close(&mut self) -> Result<(), ToolError> {
         self.closed = true;
         self.targets.clear();
+        self.browsers.remove_cursors(&self.cursor).await;
         self.browsers.close();
+        self.native
+            .lock()
+            .await
+            .cursors
+            .remove(&self.cursor.id)
+            .await;
         if let Some(session) = &self.id {
             self.native.lock().await.release_session(session).await?;
         }
         self.id = None;
         Ok(())
+    }
+    async fn cursor_point(
+        &self,
+        handle: &str,
+        position: Option<Position>,
+        window: &WindowInfo,
+    ) -> Result<[f64; 2], ToolError> {
+        let target = self
+            .targets
+            .get(handle)
+            .ok_or_else(|| failed("stale_target"))?;
+        match position {
+            None => Ok([
+                window.bounds.x + window.bounds.width / 2.0,
+                window.bounds.y + window.bounds.height / 2.0,
+            ]),
+            Some(Position::Point(point)) => {
+                target.point(point, window)?;
+                let snapshot = target.snapshot.as_ref().unwrap();
+                let width = f64::from(snapshot.screenshot_width.unwrap_or(0));
+                let height = f64::from(snapshot.screenshot_height.unwrap_or(0));
+                if width <= 0.0 || height <= 0.0 {
+                    return Err(failed("cursor capture dimensions unavailable"));
+                }
+                Ok([
+                    window.bounds.x + point[0] * window.bounds.width / width,
+                    window.bounds.y + point[1] * window.bounds.height / height,
+                ])
+            }
+            Some(Position::Element(index)) => {
+                #[cfg(target_os = "macos")]
+                if let Some(macos) = target.macos.clone() {
+                    return tokio::task::spawn_blocking(move || {
+                        macos.lock().unwrap().cursor_point(index)
+                    })
+                    .await
+                    .map_err(failed)?;
+                }
+                let _ = index;
+                Err(failed(
+                    "native cursor element geometry unavailable; use screenshot coordinates",
+                ))
+            }
+        }
     }
 }
 impl Target {

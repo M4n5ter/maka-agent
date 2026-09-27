@@ -24,6 +24,7 @@
 
 mod browser;
 mod catalog;
+pub mod cursor;
 mod driver;
 mod identity;
 #[cfg(target_os = "macos")]

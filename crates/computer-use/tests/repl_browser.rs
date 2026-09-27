@@ -30,22 +30,19 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-struct Bridge(Arc<Mutex<Session>>);
+struct Bridge(Arc<Mutex<Session>>, &'static str);
 impl ToolExecutor for Bridge {
     fn names(&self) -> Vec<String> {
         vec!["cua".into()]
     }
     fn invoke(&self, _: String, input: Value, cancellation: CancellationToken) -> ToolFuture {
         let session = self.0.clone();
+        let id = self.1;
         Box::pin(async move {
             session
                 .lock()
                 .await
-                .invoke(
-                    serde_json::from_value(input).unwrap(),
-                    "browser-fixture",
-                    &cancellation,
-                )
+                .invoke(serde_json::from_value(input).unwrap(), id, &cancellation)
                 .await
         })
     }
@@ -112,7 +109,7 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
         .iter()
         .find(|window| window["id"] == window_id)
         .unwrap();
-    let bridge = Arc::new(Bridge(Arc::new(Mutex::new(native))));
+    let bridge = Arc::new(Bridge(Arc::new(Mutex::new(native)), "browser-fixture"));
     let clipboard = clipboard_snapshot();
     let repl = Repl::new(
         facade(),
@@ -191,7 +188,10 @@ async fn native_observation_recovers_after_busy_and_preserves_external_edits() {
     let mut form = NativeForm::start(true).await;
     assert_eq!(form.command("activity").await, "inactive");
     let driver = Arc::new(Mutex::new(Driver::default()));
-    let bridge = Arc::new(Bridge(Arc::new(Mutex::new(Session::new(driver.clone())))));
+    let bridge = Arc::new(Bridge(
+        Arc::new(Mutex::new(Session::new(driver.clone()))),
+        "browser-fixture",
+    ));
     let repl = Repl::new(
         facade(),
         CellLimits {
@@ -282,6 +282,163 @@ async fn native_observation_recovers_after_busy_and_preserves_external_edits() {
     repl.close().await.unwrap();
     bridge.0.lock().await.close().await.unwrap();
     driver.lock().await.close().await.unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+#[ignore = "requires a built MAKA_CUA_TEST_HOST and macOS desktop; synthetic cursors and background AX"]
+async fn native_cursors_are_visible_independent_and_retire_without_moving_system_pointer() {
+    let executable = std::env::var_os("MAKA_CUA_TEST_HOST")
+        .expect("build maka-cli and set MAKA_CUA_TEST_HOST to its executable");
+    let mut form = NativeForm::start(true).await;
+    let before: Value = serde_json::from_str(&form.command("probe").await).unwrap();
+    let driver = Arc::new(Mutex::new(Driver::with_cursor_executable(
+        executable.into(),
+    )));
+    let a = Arc::new(Bridge(
+        Arc::new(Mutex::new(Session::new(driver.clone()))),
+        "cursor-a",
+    ));
+    let b = Arc::new(Bridge(
+        Arc::new(Mutex::new(Session::new(driver.clone()))),
+        "cursor-b",
+    ));
+    let first = Repl::new(facade(), CellLimits::default());
+    let second = Repl::new(facade(), CellLimits::default());
+    for (repl, bridge, label, color, point) in [
+        (&first, a.clone(), "Maka A", "blue", "[100,90]"),
+        (&second, b.clone(), "Maka B", "mint", "[280,160]"),
+    ] {
+        let (ok,output)=evaluate(repl,bridge,format!(
+            "await cua.cursor.configure({{label:{label:?},color:{color:?},reducedMotion:true}}); const app=await cua.getApp({{windowId:{}}}); await app.getScreenshot(); nodeRepl.write(await app.moveCursor({point}));",
+            form.window_id
+        )).await;
+        assert!(
+            ok && texts(&output).contains("\"visible\":true"),
+            "{}",
+            texts(&output)
+        );
+    }
+    let (ok, output) = evaluate(&first, a.clone(), "await cua.cursor.getState();".into()).await;
+    assert!(ok);
+    let state: Value = serde_json::from_str(&texts(&output)).unwrap();
+    let renderer = state["native"]["rendererPid"].as_u64().unwrap();
+
+    // Capture the renderer's own transparent window, not the user's desktop.
+    let windows = driver
+        .lock()
+        .await
+        .invoke(
+            "list_windows",
+            json!({}),
+            "cursor-inspection",
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let windows = windows.structured_content.unwrap();
+    let overlay = windows["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["pid"] == renderer)
+        .expect("native cursor window is in WindowServer inventory");
+    let capture = driver
+        .lock()
+        .await
+        .invoke(
+            "get_window_state",
+            json!({
+                "pid":renderer,"window_id":overlay["window_id"],"include_accessibility_tree":false,
+                "include_screenshot":true,"max_image_dimension":1600
+            }),
+            "cursor-inspection",
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let value = serde_json::to_value(capture).unwrap();
+    let encoded = value["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["type"] == "image")
+        .unwrap()["data"]
+        .as_str()
+        .unwrap();
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    let pixels = tiny_skia::Pixmap::decode_png(&bytes).unwrap();
+    let blue = pixels
+        .pixels()
+        .iter()
+        .filter(|p| {
+            p.blue() > p.red().saturating_add(40) && p.blue() > p.green().saturating_add(20)
+        })
+        .count();
+    let mint = pixels
+        .pixels()
+        .iter()
+        .filter(|p| {
+            p.green() > p.red().saturating_add(40) && p.green() > p.blue().saturating_add(10)
+        })
+        .count();
+    assert!(
+        blue > 15 && mint > 15,
+        "both session colors must be present in the actual overlay image: blue={blue}, mint={mint}"
+    );
+    if let Some(path) = std::env::var_os("MAKA_CUA_CURSOR_ARTIFACT") {
+        std::fs::write(path, bytes).unwrap();
+    }
+    let (ok, output) = evaluate(
+        &first,
+        a.clone(),
+        "await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok);
+    let state = texts(&output);
+    let message = index(&state, "AXTextArea", "Message");
+    let button = index(&state, "AXButton", "Submit fixture");
+    let (ok,output)=evaluate(&first,a.clone(),format!("await app.setValue({message},'cursor probe'); await app.click({button}); await app.getAXState();")).await;
+    assert!(
+        ok,
+        "a visible overlay must not obstruct background AX actions: {}",
+        texts(&output)
+    );
+    let submitted: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert_eq!(submitted["submitted"], "hello hello / cursor probe");
+    let (ok, _) = evaluate(
+        &second,
+        b.clone(),
+        "await app.moveCursor([280,160]);".into(),
+    )
+    .await;
+    assert!(ok);
+    first.close().await.unwrap();
+    a.0.lock().await.close().await.unwrap();
+    let (ok, output) = evaluate(&second, b.clone(), "await cua.cursor.getState();".into()).await;
+    assert!(
+        ok && texts(&output).contains("\"visible\":true"),
+        "closing one session must not hide another: {}",
+        texts(&output)
+    );
+    let after: Value = serde_json::from_str(&form.command("probe").await).unwrap();
+    assert_eq!(
+        before, after,
+        "cursor display must not activate the fixture or move the system pointer (external user movement also changes this probe)"
+    );
+    second.close().await.unwrap();
+    b.0.lock().await.close().await.unwrap();
+    driver.lock().await.close().await.unwrap();
+    assert_ne!(
+        unsafe { libc::kill(renderer as i32, 0) },
+        0,
+        "renderer must be reaped when Host closes"
+    );
+    form.stop().await;
 }
 
 #[cfg(target_os = "macos")]
@@ -454,7 +611,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         }])
         .unwrap();
     let session = Arc::new(Mutex::new(native));
-    let bridge = Arc::new(Bridge(session.clone()));
+    let bridge = Arc::new(Bridge(session.clone(), "browser-fixture"));
     let repl = Repl::new(
         facade(),
         CellLimits {
@@ -470,7 +627,14 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     )
     .await;
     assert!(ok, "{}", texts(&output));
-    let mut state = texts(&output);
+    let mut state = browser_cursor_scenario(
+        driver.clone(),
+        format!("http://127.0.0.1:{}", url.port().unwrap()),
+        &page,
+        bridge.clone(),
+        &repl,
+    )
+    .await;
     for (text, diagnostic) in [("missing", "text_not_found"), ("hello", "ambiguous_text")] {
         let name = index(&state, "textbox", "Name ");
         let (ok, output) = evaluate(&repl, bridge.clone(), format!(
@@ -494,7 +658,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     let message = index(&state, "textbox", "Message ");
     let color = index(&state, "combobox", "Color");
     let button = index(&state, "button", "Submit fixture");
-    let (ok,output)=evaluate(&repl,bridge.clone(),format!("await tab.selectText({name}, 'hello', {{prefix:'hello '}}); await tab.typeText(null, 'world'); await tab.setValue({message}, '你好'); await tab.setValue({color}, 'blue-id'); await tab.click({button}); await tab.getAXState({{disableDiffing:true}});")).await;
+    let (ok,output)=evaluate(&repl,bridge.clone(),format!("await tab.selectText({name}, 'hello', {{prefix:'hello '}}); await tab.moveCursor({name}); await tab.typeText(null, 'world'); await tab.setValue({message}, '你好'); await tab.setValue({color}, 'blue-id'); await tab.click({button}); await tab.getAXState({{disableDiffing:true}});")).await;
     assert!(ok, "{}", texts(&output));
     assert!(
         texts(&output).contains("hello world / 你好"),
@@ -560,4 +724,128 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     let _ = chrome.wait().await;
     logging.abort();
     server.abort();
+}
+
+async fn browser_cursor_scenario(
+    driver: Arc<Mutex<Driver>>,
+    endpoint: String,
+    page: &str,
+    a: Arc<Bridge>,
+    first: &Repl,
+) -> String {
+    let mut native = Session::new(driver);
+    native
+        .configure_browsers(vec![BrowserConnection {
+            id: "fixture".into(),
+            endpoint,
+        }])
+        .unwrap();
+    let b = Arc::new(Bridge(Arc::new(Mutex::new(native)), "cursor-browser-b"));
+    let second = Repl::new(facade(), CellLimits::default());
+    let (ok,output)=evaluate(first,a.clone(),"await cua.cursor.configure({label:'Maka A',color:'blue',reducedMotion:true}); await tab.getScreenshot(); nodeRepl.write(await tab.moveCursor([90,100]));".into()).await;
+    assert!(
+        ok && texts(&output).contains("\"visible\":true"),
+        "{}",
+        texts(&output)
+    );
+    let (ok,output)=evaluate(&second,b.clone(),format!("await cua.cursor.configure({{label:'Maka B',color:'mint',reducedMotion:true}}); const tab=await cua.getTab({{url:{}}}); await tab.getScreenshot(); nodeRepl.write(await tab.moveCursor([210,160]));",json!(page))).await;
+    assert!(
+        ok && texts(&output).contains("\"visible\":true"),
+        "{}",
+        texts(&output)
+    );
+    let (ok, output) = evaluate(first, a.clone(), "await tab.getScreenshot();".into()).await;
+    assert!(ok);
+    let bytes = image_bytes(&output);
+    let (blue, mint) = cursor_colors(&bytes);
+    assert!(
+        blue > 15 && mint > 15,
+        "both CDP cursor colors must be rendered: blue={blue}, mint={mint}"
+    );
+    if let Some(path) = std::env::var_os("MAKA_CUA_BROWSER_CURSOR_ARTIFACT") {
+        std::fs::write(path, &bytes).unwrap();
+    }
+    let (ok, output) = evaluate(
+        first,
+        a.clone(),
+        "await cua.cursor.configure({enabled:false}); await tab.getScreenshot();".into(),
+    )
+    .await;
+    assert!(ok);
+    let (blue, mint) = cursor_colors(&image_bytes(&output));
+    assert!(
+        blue == 0 && mint > 15,
+        "disabling A must hide only A's cursor: blue={blue}, mint={mint}"
+    );
+    let (ok, _) = evaluate(
+        first,
+        a.clone(),
+        "await cua.cursor.configure({enabled:true}); await tab.moveCursor([90,100]);".into(),
+    )
+    .await;
+    assert!(ok);
+    second.close().await.unwrap();
+    b.0.lock().await.close().await.unwrap();
+    let (ok, output) = evaluate(first, a.clone(), "await tab.getScreenshot();".into()).await;
+    assert!(ok);
+    let (blue, mint) = cursor_colors(&image_bytes(&output));
+    assert!(
+        blue > 15 && mint == 0,
+        "closing B must remove only B's cursor: blue={blue}, mint={mint}"
+    );
+    let (ok, _) = evaluate(
+        first,
+        a.clone(),
+        "await tab.reload(); await tab.getAXState();".into(),
+    )
+    .await;
+    assert!(ok);
+    let (ok, _) = evaluate(first, a.clone(), "await tab.moveCursor([90,100]);".into()).await;
+    assert!(
+        !ok,
+        "cursor movement must not bypass screenshot invalidation after navigation"
+    );
+    let (ok,output)=evaluate(first,a,"await tab.getScreenshot(); nodeRepl.write(await tab.moveCursor([90,100])); await tab.getAXState({disableDiffing:true});".into()).await;
+    assert!(
+        ok && texts(&output).contains("\"visible\":true"),
+        "{}",
+        texts(&output)
+    );
+    let state = texts(&output);
+    assert!(
+        !state.contains("Maka A"),
+        "the decorative cursor must not enter the accessibility tree"
+    );
+    state
+}
+fn image_bytes(output: &[CellOutput]) -> Vec<u8> {
+    use base64::Engine;
+    let image = output
+        .iter()
+        .find_map(|part| match part {
+            CellOutput::Media { content, .. } => Some(serde_json::to_value(content).unwrap()),
+            _ => None,
+        })
+        .expect("screenshot output");
+    base64::engine::general_purpose::STANDARD
+        .decode(image["data"].as_str().unwrap())
+        .unwrap()
+}
+fn cursor_colors(bytes: &[u8]) -> (usize, usize) {
+    let pixels = tiny_skia::Pixmap::decode_png(bytes).unwrap();
+    let blue = pixels
+        .pixels()
+        .iter()
+        .filter(|p| {
+            p.blue() > p.red().saturating_add(40) && p.blue() > p.green().saturating_add(20)
+        })
+        .count();
+    let mint = pixels
+        .pixels()
+        .iter()
+        .filter(|p| {
+            p.green() > p.red().saturating_add(40) && p.green() > p.blue().saturating_add(10)
+        })
+        .count();
+    (blue, mint)
 }

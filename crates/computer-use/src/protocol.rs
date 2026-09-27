@@ -35,6 +35,12 @@ pub enum Handle {
 #[serde(tag = "method", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Command {
     Documentation,
+    ConfigureCursor {
+        options: crate::cursor::Options,
+    },
+    CursorState {
+        options: InventoryOptions,
+    },
     GetState {
         options: InventoryOptions,
     },
@@ -213,6 +219,9 @@ pub enum SelectionType {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
+    MoveCursor {
+        target: Position,
+    },
     Click {
         target: Position,
         options: ClickOptions,

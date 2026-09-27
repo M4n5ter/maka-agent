@@ -40,9 +40,17 @@ enum State {
 pub struct Driver {
     state: State,
     sessions: std::collections::HashSet<String>,
+    pub(crate) cursors: crate::cursor::Host,
 }
 
 impl Driver {
+    /// Embedding hosts may provide their trusted cursor-capable executable.
+    pub fn with_cursor_executable(path: std::path::PathBuf) -> Self {
+        Self {
+            cursors: crate::cursor::Host::with_executable(path),
+            ..Default::default()
+        }
+    }
     pub async fn release_session(&mut self, session: &str) -> Result<(), ToolError> {
         if self.sessions.contains(session)
             && let State::Active(driver) = &self.state
@@ -147,6 +155,7 @@ impl Driver {
 
     /// Host calls this after all Session resources retire.
     pub async fn close(&mut self) -> Result<(), ToolError> {
+        self.cursors.stop().await;
         let previous = std::mem::replace(&mut self.state, State::Closed);
         self.sessions.clear();
         if let State::Active(driver) = previous {

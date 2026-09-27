@@ -82,6 +82,46 @@ text selection, value editing, text/HTML paste, keys, navigation and tab creatio
 Navigation waits for the selected document to become observable. Readiness does not
 mean that every asynchronous application task has completed; verify the visible result.
 
+## Session cursors
+
+Each Session has a synthetic pointer with an original Maka M/star design and one of
+six colors. Inputs provide automatic feedback; explicit `app.moveCursor(indexOrPoint)`
+and `tab.moveCursor(indexOrPoint)` only indicate a validated target. Their coordinates
+use the current screenshot without consuming its mapping.
+
+```js
+await cua.cursor.configure({ label: "Research", color: "blue", reducedMotion: true });
+await tab.moveCursor(7); // use an index from the current observation
+await cua.cursor.getState();
+```
+
+The CLI/service registers a private renderer entry point using the same executable.
+The renderer inherits only display-related environment, reads a bounded typed stdio
+protocol, and reuses Cua's transparent, mouse-through overlay. It has no input operations
+or public socket. macOS owns AppKit on that child's main thread. Library hosts call
+`cursor::bootstrap()` at process entry or pass a trusted, compatible executable through
+`Driver::with_cursor_executable`. Renderer failure leaves input outcomes unchanged;
+configuration explicitly permits retry after a failure.
+Automatic native feedback uses a bounded display queue and drops stale cues; it
+does not wait for rendering before dispatching input. Explicit cursor movement and
+state queries await a response. Visibility describes the target's rendered surface,
+which may still be covered by another window or an inactive browser tab.
+
+CDP renders the same artwork in an isolated world with a decorative, fixed-position
+shadow tree. It does not participate in layout, hit testing or accessibility. Idle
+DOM cursors expire and remove themselves, including after a lost connection. Session
+retirement removes only its cursor; Host shutdown reaps the native renderer.
+
+Artwork is defined in `src/cursor/theme.rs` and compiled into bounded Cua vector
+artifacts in a private temporary directory. Custom model-provided theme code and
+arbitrary theme paths are not accepted. Generate a comparison preview with
+`cargo run -p maka-computer-use --example cursor-preview -- preview.png`.
+Native display availability requires an interactive desktop; the upstream macOS
+renderer currently uses the main screen, X11 and Windows use their platform overlays,
+and this adapter does not enable a Wayland overlay. Linux/Windows remain unverified
+on physical desktops. Multiple visual pointers do not create separate OS keyboard
+or focus seats.
+
 ## Platform boundaries
 
 macOS semantic actions use Cua's bounded AX walker and exact-window checks with
@@ -130,5 +170,10 @@ typing. The recovery test stays in the background and uses no keyboard input:
 ```sh
 cargo nextest run -p maka-computer-use --test repl_browser -E 'test(native_observation_recovers)' --run-ignored all
 ```
+
+For native cursor acceptance, build `maka-cli --bin maka`, set `MAKA_CUA_TEST_HOST`
+to that executable, and select `test(native_cursors)` in the same test target. The test
+captures the renderer's own window and checks multiple colors, Session cleanup,
+unchanged system pointer/focus and process retirement without keyboard input.
 
 See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for source and licensing.

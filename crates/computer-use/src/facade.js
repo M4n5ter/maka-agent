@@ -130,6 +130,7 @@ const bind = async (method, args) => {
     getScreenshot: (options) => observe('screenshot', options),
     getAXStateAndScreenshot: (options) => observe('both', options),
     click: (target, options = {}) => action('click', { target, options }),
+    moveCursor: (target) => invoke('action', { handle, action: { kind: 'moveCursor', target } }),
     drag: (from, to) => action('drag', { from, to }),
     scroll: (target, direction, distance) => action('scroll', { target, direction, distance }),
     setValue: (index, value) => action('setValue', { index, value }),
@@ -162,6 +163,10 @@ Object.defineProperty(globalThis, 'nodeRepl', { value: Object.freeze({ write, em
 Object.defineProperty(globalThis, 'cua', {
   value: Object.freeze({
     computer: Object.freeze({ target: nativePlatform }),
+    cursor: Object.freeze({
+      configure: (options = {}) => invoke('configureCursor', { options }),
+      getState: () => observation('cursorState'),
+    }),
     getState: (options) => observation('getState', options),
     listApps: (options) => observation('listApps', options),
     listWindows: (options) => observation('listWindows', options),

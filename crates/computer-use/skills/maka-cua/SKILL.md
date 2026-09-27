@@ -44,6 +44,12 @@ Read the emitted API reference for platform-specific methods. On browser tabs,
 uses `prefix`/`suffix` to disambiguate repeated text. Secondary actions must be
 listed in the current native accessibility state.
 
+Input actions show this Session's Maka cursor automatically. Use
+`app.moveCursor(indexOrPoint)` or `tab.moveCursor(indexOrPoint)` when the task is
+to point without acting. For display preferences, use `cua.cursor.configure` as
+described in the emitted API reference. Judge task success from the application
+state; cursor animation is only visual feedback and does not isolate keyboard focus.
+
 Observations emit automatically. Use `{emit:false}` for programmatic inspection;
 use `nodeRepl.write(value)` and `await nodeRepl.emitImage(image)` for explicit
 output. There is no Node, arbitrary filesystem or network API. Get a screenshot

@@ -83,6 +83,15 @@ pub(crate) struct Target {
     elements: HashMap<u64, RetainedElement>,
 }
 impl Target {
+    pub(crate) fn cursor_point(&self, index: u64) -> Result<[f64; 2], ToolError> {
+        let element = self.element(index)?;
+        let [x, y, width, height] = unsafe { element_screen_rect(element) }
+            .ok_or_else(|| failed("cursor target geometry unavailable"))?;
+        if width <= 0.0 || height <= 0.0 {
+            return Err(failed("cursor target has no visible area"));
+        }
+        Ok([x + width / 2.0, y + height / 2.0])
+    }
     pub(crate) fn geometry(&self) -> Result<cua_driver_contract::WindowBounds, ToolError> {
         let [x, y, width, height] =
             unsafe { element_screen_rect(self.window.as_ptr() as AXUIElementRef) }

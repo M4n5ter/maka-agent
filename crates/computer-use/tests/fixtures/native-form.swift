@@ -58,6 +58,13 @@ final class Fixture: NSObject, NSApplicationDelegate {
         FileHandle.standardOutput.write(Data("ready \(window.windowNumber)\n".utf8))
         DispatchQueue.global().async { [self] in
             while let command = readLine() {
+                if command == "probe" {
+                    DispatchQueue.main.async {
+                        let point = CGEvent(source: nil)!.location
+                        let data = try! JSONSerialization.data(withJSONObject: ["active": NSApp.isActive, "mouse": [point.x, point.y]])
+                        FileHandle.standardOutput.write(data + Data([10]))
+                    }
+                }
                 if command == "activity" {
                     DispatchQueue.main.async {
                         FileHandle.standardOutput.write(Data((NSApp.isActive ? "active\n" : "inactive\n").utf8))

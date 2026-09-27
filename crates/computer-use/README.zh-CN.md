@@ -50,6 +50,18 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 内置 `maka-cua` skill 可从原生 Skill library 安装，不自动写入用户库。
 不包含视觉识别扩展、模型下载、Python 或 Desktop UI 接入。
 
+每个 Session 拥有独立的 Maka M/四角星合成光标，支持六种配色、标签、显示开关和减弱动画。
+输入动作自动显示反馈；`app.moveCursor(indexOrPoint)` / `tab.moveCursor(indexOrPoint)`
+只指示当前观察中的位置，不移动系统鼠标，也不消耗截图坐标。
+`cua.cursor.configure({label, color, enabled, reducedMotion})` 配置当前光标，
+`cua.cursor.getState()` 查看原生和浏览器的显示状态。
+
+原生覆盖层运行在同一 CLI/service 可执行文件的私有显示子进程中，只接收有界绘制命令；
+macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参与布局、命中测试和 AX
+的装饰层，空闲后自动删除。Session/reset 清理自己的光标，Host 退出回收显示进程。
+原生 macOS 当前沿用上游主屏渲染；X11/Windows 提供对应后端但未实机验收，未启用
+Wayland 覆盖层。多个图案不会隔离操作系统键盘、焦点或输入法。
+
 测试包括独立 REPL/权限/取消/资源边界，以及需主动运行的真实 Chrome、AppKit 表单
 验收。验证成功的范围与完整 cua_repl 等价、性能更优是不同结论，后两者尚未宣称。
 表单编辑验收会短暂切换键盘焦点，需要在用户没有打字时运行；
