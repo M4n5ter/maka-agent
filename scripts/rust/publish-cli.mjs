@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { compareProductReleaseVersions, parseProductReleaseVersion } from '../release-version.mjs';
@@ -77,6 +77,7 @@ export async function readNativePreviewRelease(directory) {
 }
 
 export async function readPreviewRelease(directory) {
+  directory = resolve(directory);
   const packages = await readNativePreviewRelease(directory);
   const receipt = JSON.parse(await readFile(join(directory, 'launcher.json'), 'utf8'));
   const version = packages[0].version;
@@ -146,12 +147,22 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
     }
   }
   for (const pkg of packages) {
+    // Re-read immediately before moving a tag: another publisher may have
+    // advanced it since preflight. Immutable versions alone are not discovery.
+    const tagsPath = '-/package/' + pkg.name.replace('/', '%2f') + '/dist-tags';
+    const tags = await metadata(tagsPath);
+    if (
+      tags?.['rust-preview'] &&
+      compareProductReleaseVersions(tags['rust-preview'], pkg.version) > 0
+    ) {
+      throw new Error('Refusing to move rust-preview backwards: ' + pkg.name);
+    }
     if (!pkg.published) {
       execFileSync(
         'npm',
         [
           'publish',
-          pkg.archive,
+          basename(pkg.archive),
           '--tag',
           'rust-preview',
           '--access',
@@ -159,13 +170,30 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
           '--ignore-scripts',
           ...(provenance ? ['--provenance'] : []),
         ],
+        npmSpawnOptions({ cwd: dirname(pkg.archive), stdio: 'inherit', timeout: 180_000 }),
+      );
+    }
+    if (tags?.['rust-preview'] !== pkg.version) {
+      execFileSync(
+        'npm',
+        [
+          'dist-tag',
+          'add',
+          pkg.name + '@' + pkg.version,
+          'rust-preview',
+          '--registry',
+          'https://registry.npmjs.org/',
+        ],
         npmSpawnOptions({ stdio: 'inherit', timeout: 180_000 }),
       );
     }
     let verified = false;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const observed = await metadata(pkg.name + '/' + pkg.version);
-      if (observed?.dist?.integrity === pkg.integrity) {
+      const [observed, tags] = await Promise.all([
+        metadata(pkg.name + '/' + pkg.version),
+        metadata(tagsPath),
+      ]);
+      if (observed?.dist?.integrity === pkg.integrity && tags?.['rust-preview'] === pkg.version) {
         verified = true;
         break;
       }

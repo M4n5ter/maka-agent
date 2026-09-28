@@ -194,7 +194,12 @@ export const exclusionRules = [
     id: 'third-party-license-texts',
     justification:
       'Third-party license and notice texts redistributed with the product. An ASF header on any of them would assert ASF provenance over content ASF does not own. The upstream texts additionally have to stay byte-identical to what their projects published. Some aggregated notices are generator output that a hand-written header would not survive.',
-    matches: isOneOf('crates/cli/DEPENDENCIES.rust.tsv', 'crates/computer-use/THIRD_PARTY_NOTICES'),
+    matches: (path) =>
+      isOneOf(
+        'crates/cli/DEPENDENCIES.rust.tsv',
+        'crates/computer-use/THIRD_PARTY_NOTICES',
+        'crates/cli/THIRD_PARTY_NOTICES.txt',
+      )(path) || path.startsWith('scripts/rust/licenses/'),
   },
   {
     id: 'third-party-source',

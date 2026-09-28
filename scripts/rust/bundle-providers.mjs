@@ -38,7 +38,7 @@ for (const name of ['@ai-sdk/openai', '@ai-sdk/anthropic', '@ai-sdk/openai-compa
     throw new Error(`Provider SDK does not match repository lockfile: ${name}`);
   }
 }
-await build({
+const result = await build({
   entryPoints: [entry],
   outfile: resolve(output, 'providers.js'),
   bundle: true,
@@ -63,7 +63,9 @@ await build({
     },
   ],
   legalComments: 'eof',
+  metafile: Boolean(process.argv[3]),
 });
+if (process.argv[3]) await writeFile(process.argv[3], JSON.stringify(result.metafile));
 // Tests check these unmodified sources against the locked Deno extension.
 // Transpilation needs neither a build-time V8 nor a compiler in the running host.
 for (const name of ['telemetry', 'util']) {

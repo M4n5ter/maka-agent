@@ -33,6 +33,20 @@ Create a committed source candidate with `just source <version>`. Each platform 
 just package <source.tar.gz> <target> <build-id> native-preview
 ```
 
-Collect the platform archives, receipts and source archive with its SHA-512 sidecar in one directory. `just release-prepare native-preview` packages the launcher from that verified source and validates the complete set. `just publish native-preview` publishes the native packages first and the launcher last, using the `rust-preview` npm tag.
+The package command writes the platform archive and `<target>.json` receipt. Collect all three platforms and the source archive with its SHA-512 sidecar, then run:
+
+```sh
+just release-prepare native-preview
+just release-check native-preview
+just publish native-preview
+```
+
+`release-prepare` assembles and validates all four packages from one source. `release-check` installs the launcher and native package offline on the current platform and exercises the CLI/V8; run it on all three platforms. Publication installs the Windows component first, the other native packages next, and the launcher last, then verifies every `rust-preview` tag. Retry the same artifacts after interruption; never rebuild an already published version. Use one publisher at a time per channel: npm tags have no conditional-write API.
+
+GitHub uses the registered `npm-publication.yml` entry. `gh workflow run npm-publication.yml --ref <branch> -f publish=false` produces the complete artifacts and three-platform verification. Publishing requires explicit `publish=true`, the `main` branch and the existing `npm-publication` environment.
+
+Release packaging builds V8 from a pinned upstream commit with its optional LGPL glibc math implementation disabled, then uses the matching static library and Rust bindings. It requires Python 3, Git, Clang/libclang 19 or newer and the native C++ toolchain; Linux also needs glib development files and cargo-zigbuild/Zig. The first build downloads Chromium toolchains, can take over 30 minutes, and needs tens of GiB of temporary space. Temporary build directories are removed afterwards.
+
+After dependency changes, run `node scripts/rust/notices.mjs generate` and review the snapshot. It collects full and nested license texts from pinned dependency sources; reviewed exceptions for missing upstream license files live in `notices-sources.json`. Release builds validate the snapshot's source-input binding and append notices from the actual V8 build graph and Rust standard library. The license TSV is an inventory, not a substitute for these texts.
 
 No install script downloads or executes an unverified helper. Runtime behavior lives in `crates/cli`.

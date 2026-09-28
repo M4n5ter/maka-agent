@@ -33,6 +33,20 @@
 just package <source.tar.gz> <target> <build-id> native-preview
 ```
 
-将平台包、收据、源码包及其 SHA-512 文件收集到同一目录。`just release-prepare native-preview` 从已验证源码打包启动器并验证完整集合。`just publish native-preview` 先发布原生平台包，再发布启动器，使用 `rust-preview` npm 标签。
+打包命令会在输出目录写入平台包及 `<target>.json` 回执。将三个平台的产物、源码包及其 SHA-512 文件收集到同一目录后：
+
+```sh
+just release-prepare native-preview
+just release-check native-preview
+just publish native-preview
+```
+
+`release-prepare` 从同一源码包生成启动器并校验四个包；`release-check` 在当前平台离线安装启动器和原生包，实际运行 CLI/V8。三个平台均应完成验收。`publish` 先发布 Windows 辅助组件，再发布其余原生包，最后发布启动器，并确认各包的 `rust-preview` 标签。中断后重试同一份产物；不要重新构建同一版本。一个发布通道同一时刻只允许一个发布者，npm 标签没有条件写入接口。
+
+GitHub 使用已登记的 `npm-publication.yml`。在功能分支可运行 `gh workflow run npm-publication.yml --ref <branch> -f publish=false`，得到完整产物与三平台验收结果。实际发布须显式选择 `publish=true`，且仅在 `main`、现有 `npm-publication` 环境中执行。
+
+正式打包会从固定的上游提交构建 V8，关闭其可选的 LGPL glibc 数学实现，再使用匹配的静态库和 Rust bindings。需要 Python 3、Git、可用的 Clang/libclang（19 或更新）及原生 C++ 工具链；Linux 还需要 glib 开发包和 cargo-zigbuild/Zig。首次构建会下载 Chromium 工具链，可能耗时超过 30 分钟，请预留数十 GiB 临时空间。构建完成后临时目录自动清理。
+
+依赖变化后运行 `node scripts/rust/notices.mjs generate` 并审查许可证快照。它从固定依赖版本收集全文和嵌套声明，少数上游缺少独立许可文件的例外记录在 `notices-sources.json`。发布校验快照与源码输入的绑定，并追加实际 V8 构建图和 Rust 标准库声明；许可证 TSV 仅用作清单，不能代替全文。
 
 安装脚本不会下载或执行未经验证的辅助程序。运行时行为由 `crates/cli` 实现。

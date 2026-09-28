@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Native CLI preview
+name: npm publication
 
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-cli-preview
+  group: npm-publication-rust-preview
   cancel-in-progress: false
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
   build:
     needs: source
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +91,9 @@ jobs:
           node-version: '24'
       - name: Update Rust
         run: rustup update stable --no-self-update
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
       - name: Select the checked-in npm toolchain
         shell: bash
         run: npm install --global --ignore-scripts --no-audit --no-fund "$(node -p 'require("./package.json").packageManager')"
@@ -101,7 +104,13 @@ jobs:
           version: 0.16.0
       - name: Install native Computer Use build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libglib2.0-dev libclang-19-dev
+          echo 'LIBCLANG_PATH=/usr/lib/llvm-19/lib' >> "$GITHUB_ENV"
+      - name: Select libclang on macOS
+        if: runner.os == 'macOS'
+        run: echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
       - name: Install cargo-zigbuild
         if: runner.os == 'Linux'
         uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
@@ -115,16 +124,12 @@ jobs:
         shell: bash
         run: |
           node --input-type=module <<'JS'
-          import { writeFile } from 'node:fs/promises';
-          import { basename } from 'node:path';
           import { releaseNativeCli } from './scripts/rust/release-cli.mjs';
           const target = process.env.NATIVE_TARGET;
-          const receipt = await releaseNativeCli({
+          await releaseNativeCli({
             source: 'source/apache-maka-' + process.env.SOURCE_VERSION + '-incubating-src.tar.gz',
             target, buildId: process.env.BUILD_ID, output: 'native-preview',
           });
-          await writeFile('native-preview/' + target + '.json',
-            JSON.stringify({ ...receipt, archive: basename(receipt.archive) }) + '\n');
           JS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -132,10 +137,63 @@ jobs:
           path: native-preview/*
           if-no-files-found: error
 
-  publish:
+  prepare:
     needs: build
-    if: inputs.publish && github.ref == 'refs/heads/feat/runtime-host-rust'
-    environment: rust-preview-publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Select the checked-in npm toolchain
+        run: npm install --global --ignore-scripts --no-audit --no-fund "$(node -p 'require("./package.json").packageManager')"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-preview-*
+          merge-multiple: true
+          path: native-preview
+      - name: Package the launcher from the verified source
+        run: node scripts/rust/pack-launcher.mjs native-preview
+      - name: Validate the complete release
+        run: node scripts/rust/publish-cli.mjs native-preview
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-release
+          path: native-preview/*
+          if-no-files-found: error
+
+  verify:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Select the checked-in npm toolchain
+        shell: bash
+        run: npm install --global --ignore-scripts --no-audit --no-fund "$(node -p 'require("./package.json").packageManager')"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-release
+          path: native-preview
+      - name: Install offline and exercise the packaged launcher
+        run: node scripts/rust/verify-release.mjs native-preview
+
+  publish:
+    needs: verify
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    environment: npm-publication
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -153,12 +211,9 @@ jobs:
         run: npm install --global --ignore-scripts --no-audit --no-fund "$(node -p 'require("./package.json").packageManager')"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: native-preview-*
-          merge-multiple: true
+          name: npm-release
           path: native-preview
-      - name: Package the launcher from the verified source
-        run: node scripts/rust/pack-launcher.mjs native-preview
-      - name: Publish the complete source-bound platform set
+      - name: Publish the verified release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node scripts/rust/publish-cli.mjs native-preview --publish --provenance

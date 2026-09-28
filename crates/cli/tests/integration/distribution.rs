@@ -88,6 +88,14 @@ fn npm_package_round_trips_native_code_offline_and_never_overwrites_a_release() 
     let package: serde_json::Value = serde_json::from_slice(&packed.stdout).unwrap();
     let archive = package["archive"].as_str().unwrap();
     let integrity = package["integrity"].as_str().unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.join(format!("{target}.json"))).unwrap())
+            .unwrap();
+    assert_eq!(
+        receipt["archive"],
+        Path::new(archive).file_name().unwrap().to_str().unwrap()
+    );
+    assert_eq!(receipt["integrity"], integrity);
     let cache = temporary.path().join("cache");
     let fetch = Command::new(executable)
         .args([

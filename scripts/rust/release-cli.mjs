@@ -19,7 +19,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -29,6 +29,8 @@ import { npmSpawnOptions } from '../npm-spawn.mjs';
 import { parseProductReleaseVersion } from '../release-version.mjs';
 import { buildCli, rustTarget } from './build-cli.mjs';
 import { nativeCliTargets, packNativeCli } from './pack-cli.mjs';
+import { verifyNotices } from './notices.mjs';
+import { buildV8 } from './build-v8.mjs';
 
 const run = promisify(execFile);
 
@@ -47,15 +49,7 @@ export function previewVersion(sourceVersion, buildId) {
 }
 
 /** Build only the verified archive, never caller-supplied executable bytes. Does not publish. */
-export async function releaseNativeCli({
-  source,
-  keys,
-  target,
-  notices,
-  validator,
-  output,
-  buildId,
-}) {
+export async function releaseNativeCli({ source, keys, target, validator, output, buildId }) {
   const platform = Object.hasOwn(nativeCliTargets, target) ? nativeCliTargets[target] : undefined;
   if (!platform || !source || !output || !buildId) {
     throw new Error('source, supported target, output, and build-id are required');
@@ -86,7 +80,21 @@ export async function releaseNativeCli({
     const repositoryRoot = join(extraction, candidate.rootDirectory);
     // JS must come from this install, not an ambient MAKA_JS_DEPS checkout.
     const env = controlledProcessEnvironment({
-      excludedNames: ['MAKA_JS_DEPS', 'CARGO_BUILD_TARGET', 'MAKA_NATIVE_PACKAGE_VERSION'],
+      excludedPrefixes: ['BINDGEN_EXTRA_CLANG_ARGS'],
+      excludedNames: [
+        'MAKA_JS_DEPS',
+        'CARGO_BUILD_TARGET',
+        'MAKA_NATIVE_PACKAGE_VERSION',
+        'RUSTY_V8_ARCHIVE',
+        'RUSTY_V8_SRC_BINDING_PATH',
+        'RUSTY_V8_MIRROR',
+        'V8_FROM_SOURCE',
+        'V8_FORCE_DEBUG',
+        'GN_ARGS',
+        'EXTRA_GN_ARGS',
+        'DISABLE_CLANG',
+        'CLANG_BASE_PATH',
+      ],
       overrides: { MAKA_JS_DEPS: repositoryRoot, MAKA_NATIVE_PACKAGE_VERSION: version },
     });
     const metadata = JSON.parse(
@@ -105,6 +113,7 @@ export async function releaseNativeCli({
     if (cli?.version !== candidate.version) {
       throw new Error('Native CLI version does not match the source archive');
     }
+    const reviewedNotices = await verifyNotices(repositoryRoot);
     // Apply build-time dependency patches without running package lifecycle hooks.
     await execute(
       'npm',
@@ -115,11 +124,50 @@ export async function releaseNativeCli({
       cwd: repositoryRoot,
       env,
     });
+    const v8 = await buildV8({
+      root: repositoryRoot,
+      directory: join(stage, 'v8'),
+      target: rustTarget(platform.os, platform.cpu),
+      env,
+      metadata: JSON.parse(
+        (
+          await run(
+            'cargo',
+            [
+              'metadata',
+              '--locked',
+              '--format-version',
+              '1',
+              '--filter-platform',
+              rustTarget(platform.os, platform.cpu),
+            ],
+            {
+              cwd: repositoryRoot,
+              env,
+              maxBuffer: 16 * 1024 * 1024,
+              timeout: 180_000,
+            },
+          )
+        ).stdout,
+      ),
+    });
+    const notices = join(stage, 'THIRD_PARTY_NOTICES.txt');
+    const sysroot = (
+      await run('rustc', ['--print', 'sysroot'], { cwd: repositoryRoot, env })
+    ).stdout.trim();
+    const rustNotices = await readFile(
+      join(sysroot, 'share/doc/rust/COPYRIGHT-library.html'),
+      'utf8',
+    );
+    await writeFile(
+      notices,
+      [await readFile(reviewedNotices, 'utf8'), v8.notices, rustNotices].join('\n\n'),
+    );
     const binary = await buildCli({
       release: true,
       target: rustTarget(platform.os, platform.cpu),
       repositoryRoot,
-      env,
+      env: { ...env, ...v8.environment },
     });
     if (native) {
       const executables = [
@@ -140,7 +188,7 @@ export async function releaseNativeCli({
       target,
       version,
       binary,
-      notices: notices ?? join(repositoryRoot, 'crates/cli/DEPENDENCIES.rust.tsv'),
+      notices,
       validator: validator ?? binary,
       output,
       repositoryRoot,
@@ -159,7 +207,9 @@ async function verifyCode(executable, log) {
       { encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true },
       (error, stdout) => (error ? reject(error) : resolveOutput(stdout)),
     );
-    child.stdin.end('if (6 * 7 !== 42) throw new Error("V8 smoke failed");');
+    child.stdin.end(
+      'if (Math.abs(Math.sin(1) - 0.8414709848078965) > 1e-15 || Math.cos(0) !== 1 || !new Intl.DateTimeFormat("en").format(new Date(0)) || Temporal.PlainDate.from("2026-09-28").year !== 2026) throw new Error("V8 smoke failed");',
+    );
     child.stdin.on('error', reject);
   });
   if (JSON.parse(stdout).output?.ok !== true) throw new Error('Built CLI failed its real V8 smoke');
@@ -179,7 +229,7 @@ async function execute(command, args, options) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const { values } = parseArgs({
     options: Object.fromEntries(
-      ['source', 'keys', 'target', 'notices', 'validator', 'output', 'build-id'].map((name) => [
+      ['source', 'keys', 'target', 'validator', 'output', 'build-id'].map((name) => [
         name,
         { type: 'string' },
       ]),

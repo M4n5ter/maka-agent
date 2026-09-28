@@ -1,0 +1,140 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { v8Notices } from './v8-notices.mjs';
+
+/** Build the locked V8 without its optional LGPL glibc implementation. */
+export async function buildV8({ root, directory, target, env, metadata }) {
+  const source = JSON.parse(await readFile(join(root, 'scripts/rust/v8-source.json'), 'utf8'));
+  const pkg = metadata.packages.find((pkg) => pkg.name === 'v8');
+  if (pkg?.version !== source.version) throw new Error('V8 source pin differs from Cargo.lock');
+  const features = metadata.resolve.nodes
+    .find((node) => node.id === pkg.id)
+    .features.filter((name) => name !== 'default');
+  const checkout = join(directory, 'source');
+  const output = join(directory, 'target');
+  await mkdir(checkout, { recursive: true });
+  const run = async (command, args, variables = env) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(command, args, { cwd: checkout, env: variables, stdio: 'inherit' });
+      child.once('error', reject);
+      child.once('exit', (code, signal) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`V8 source build failed: ${command} (${signal ?? code})`)),
+      );
+    });
+  await run('git', ['init', '--quiet']);
+  await run('git', [
+    '-c',
+    'core.symlinks=true',
+    'fetch',
+    '--depth=1',
+    source.repository,
+    source.revision,
+  ]);
+  await run('git', ['-c', 'core.symlinks=true', 'checkout', '--quiet', '--detach', 'FETCH_HEAD']);
+  await run('git', [
+    '-c',
+    'core.symlinks=true',
+    'submodule',
+    'update',
+    '--init',
+    '--recursive',
+    '--depth=1',
+  ]);
+  const buildDirectory = join(output, target, 'release');
+  const python = execFileSync(
+    env.PYTHON || 'python3',
+    ['-c', 'import sys; print(sys.executable)'],
+    {
+      env,
+      encoding: 'utf8',
+    },
+  ).trim();
+  // Select the tools pinned by this checkout, even when PATH contains GN/Ninja.
+  const tools = join(buildDirectory, 'ninja_gn_binaries');
+  await run(python, ['tools/ninja_gn_binaries.py', '--dir', tools]);
+  let gnArgs = source.gnArgs;
+  const bindingEnvironment = {};
+  if (target === 'x86_64-unknown-linux-gnu') {
+    // Chromium's sysroot headers preserve the glibc baseline used by Zig below.
+    await run(python, ['build/linux/sysroot_scripts/install-sysroot.py', '--arch=amd64']);
+    gnArgs += ' use_sysroot=true';
+    bindingEnvironment.BINDGEN_EXTRA_CLANG_ARGS =
+      '--sysroot=' + JSON.stringify(join(checkout, 'build/linux/debian_bullseye_amd64-sysroot'));
+  }
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const buildEnvironment = {
+    ...env,
+    ...bindingEnvironment,
+    PYTHON: python,
+    GN: join(tools, 'gn', 'gn' + suffix),
+    NINJA: join(tools, 'ninja', 'ninja' + suffix),
+    DEPOT_TOOLS_WIN_TOOLCHAIN: '0',
+    V8_FROM_SOURCE: '1',
+    GN_ARGS: gnArgs,
+  };
+  await run(
+    'cargo',
+    [
+      '+stable',
+      'build',
+      '--release',
+      '--locked',
+      '--lib',
+      '--target',
+      target,
+      '--target-dir',
+      output,
+      '--no-default-features',
+      '--features',
+      features.join(','),
+    ],
+    buildEnvironment,
+  );
+  const generated = join(buildDirectory, 'gn_out');
+  const archive = join(
+    generated,
+    'obj',
+    target.includes('windows') ? 'rusty_v8.lib' : 'librusty_v8.a',
+  );
+  const ar = join(
+    output,
+    target,
+    'release/clang/bin',
+    target.includes('windows') ? 'llvm-ar.exe' : 'llvm-ar',
+  );
+  const members = execFileSync(ar, ['t', archive], {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (/\b(?:branred|s_sin)\.(?:o|obj)\b/.test(members))
+    throw new Error('V8 archive still contains vendored glibc objects');
+  return {
+    environment: {
+      RUSTY_V8_ARCHIVE: archive,
+      RUSTY_V8_SRC_BINDING_PATH: join(generated, 'src_binding.rs'),
+    },
+    notices: await v8Notices(checkout, generated, source, buildEnvironment),
+  };
+}

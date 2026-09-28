@@ -59,6 +59,7 @@ test-js:
 licenses:
     node scripts/asf-license-headers.mjs check
     node scripts/rust/dependencies.mjs check
+    node scripts/rust/notices.mjs check
 
 # Build a source-bound native npm package without publishing.
 package source target build_id output="native-preview":
@@ -68,6 +69,10 @@ package source target build_id output="native-preview":
 release-prepare directory="native-preview":
     node scripts/rust/pack-launcher.mjs "$1"
     node scripts/rust/publish-cli.mjs "$1"
+
+# Install and exercise the prepared release on this platform, offline.
+release-check directory="native-preview":
+    node scripts/rust/verify-release.mjs "$1"
 
 # Publish the verified platform set and launcher.
 publish directory="native-preview" *args:

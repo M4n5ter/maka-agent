@@ -18,18 +18,24 @@
  */
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import childProcess, { execFileSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { previewVersion, releaseNativeCli } from './release-cli.mjs';
-import { previewTargets, readNativePreviewRelease, readPreviewRelease } from './publish-cli.mjs';
+import {
+  previewTargets,
+  publishPreviewRelease,
+  readNativePreviewRelease,
+  readPreviewRelease,
+} from './publish-cli.mjs';
 import { packLauncher } from './pack-launcher.mjs';
 
-test('launcher is packed from the native source archive and pins its complete platform set', async () => {
-  const stage = await mkdtemp(join(tmpdir(), 'maka-launcher-release-'));
+test('prepared release binds its source and recovers partial publication and missing tags', async (t) => {
+  const stage = await mkdtemp(join(tmpdir(), 'maka launcher release '));
   try {
     const version = '0.2.0-rust-preview.1';
     const root = 'apache-maka-0.2.0-incubating';
@@ -119,6 +125,7 @@ test('launcher is packed from the native source archive and pins its complete pl
       Object.fromEntries(previewTargets.map((target) => ['@maka-agent/cli-' + target, version])),
     );
     assert.deepEqual(manifest.makaSource, source);
+    await publicationRecovery(t, stage, packages);
     await writeFile(packed, 'tampered');
     await assert.rejects(readPreviewRelease(stage), /integrity differs/);
     await writeFile(join(stage, archive), 'tampered source');
@@ -127,6 +134,82 @@ test('launcher is packed from the native source archive and pins its complete pl
     await rm(stage, { recursive: true, force: true });
   }
 });
+
+async function publicationRecovery(t, directory, packages) {
+  const versions = new Map();
+  const tags = new Map();
+  const uploads = [];
+  const originalExec = childProcess.execFileSync;
+  let fail = true;
+  let raced = false;
+  let tagReads = 0;
+  const fetch = t.mock.method(globalThis, 'fetch', async (url) => {
+    const path = new URL(url).pathname;
+    if (path.startsWith('/-/package/')) {
+      const name = decodeURIComponent(path.slice('/-/package/'.length, -'/dist-tags'.length));
+      if (raced && ++tagReads > packages.length) tags.set(name, '0.2.0-rust-preview.999');
+      return new Response(JSON.stringify(tags.has(name) ? { 'rust-preview': tags.get(name) } : {}));
+    }
+    const pkg = packages.find((pkg) => path === '/' + pkg.name + '/' + pkg.version);
+    assert.ok(pkg, 'only fixture registry paths may be read');
+    return versions.has(pkg.name)
+      ? new Response(JSON.stringify({ dist: { integrity: versions.get(pkg.name) } }))
+      : new Response('', { status: 404 });
+  });
+  const exec = t.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+    if (command === 'tar') return originalExec(command, args, options);
+    assert.equal(command, 'npm');
+    if (args[0] === 'publish') {
+      const pkg = packages.find((pkg) => pkg.archive === join(options.cwd, args[1]));
+      assert.ok(pkg, 'publish uses a cwd and basename even when the directory has spaces');
+      assert.ok(!versions.has(pkg.name), 'accepted immutable versions are never uploaded again');
+      versions.set(pkg.name, pkg.integrity);
+      uploads.push(pkg.name);
+      if (fail && uploads.length === 2) {
+        fail = false;
+        throw new Error('lost publication response');
+      }
+      tags.set(pkg.name, pkg.version);
+    } else {
+      assert.deepEqual(args.slice(0, 2), ['dist-tag', 'add']);
+      const pkg = packages.find((pkg) => pkg.name + '@' + pkg.version === args[2]);
+      assert.ok(pkg);
+      assert.equal(versions.get(pkg.name), pkg.integrity);
+      tags.set(pkg.name, pkg.version);
+    }
+    return '';
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(publishPreviewRelease(directory), /lost publication response/);
+    await publishPreviewRelease(directory);
+    assert.deepEqual(
+      uploads,
+      packages.map((pkg) => pkg.name),
+    );
+    assert.deepEqual([...tags].sort(), packages.map((pkg) => [pkg.name, pkg.version]).sort());
+    tags.delete('maka-agent');
+    await publishPreviewRelease(directory);
+    assert.equal(tags.get('maka-agent'), packages[0].version);
+    tags.set('maka-agent', '0.2.0-rust-preview.999');
+    await assert.rejects(publishPreviewRelease(directory), /backwards/);
+    assert.equal(tags.get('maka-agent'), '0.2.0-rust-preview.999');
+    assert.equal(uploads.length, packages.length);
+    versions.clear();
+    tags.clear();
+    raced = true;
+    await assert.rejects(publishPreviewRelease(directory), /backwards/);
+    assert.equal(
+      uploads.length,
+      packages.length,
+      'a tag advanced after preflight prevents the first publication',
+    );
+  } finally {
+    fetch.mock.restore();
+    exec.mock.restore();
+    syncBuiltinESMExports();
+  }
+}
 
 test('publication rejects incomplete, mixed-source, or modified platform sets before writing npm', async () => {
   const stage = await mkdtemp(join(tmpdir(), 'maka-publication-'));

@@ -156,7 +156,16 @@ export async function packNativeCli({
     await mkdir(destination, { recursive: true });
     const path = join(destination, result.filename);
     await copyFile(archive, path, constants.COPYFILE_EXCL);
-    return { name, version, target, archive: path, integrity };
+    const receipt = { name, version, target, archive: result.filename, integrity };
+    try {
+      await writeFile(join(destination, target + '.json'), JSON.stringify(receipt) + '\n', {
+        flag: 'wx',
+      });
+    } catch (error) {
+      await rm(path);
+      throw error;
+    }
+    return { ...receipt, archive: path };
   } finally {
     await rm(stage, { recursive: true, force: true });
   }

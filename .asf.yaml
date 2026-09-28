@@ -85,14 +85,14 @@ github:
       restrict_force_push: true
 
   environments:
-    rust-preview-publication:
+    npm-publication:
       required_reviewers: []
       wait_timer: 0
       prevent_self_review: false
       deployment_branch_policy:
         protected_branches: false
         policies:
-          - name: feat/runtime-host-rust
+          - name: main
             type: branch
 
 notifications:
