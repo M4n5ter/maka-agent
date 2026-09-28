@@ -24,7 +24,6 @@ mod tools;
 
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     kernel::{Plugin, PluginContext},
@@ -39,18 +38,11 @@ pub const ID: &str = "maka.todo";
 const MAX_ITEMS: usize = 200;
 const MAX_CONTENT_CHARS: usize = 200;
 
-pub fn client_service(package: &str) -> String {
-    format!("{package}.client")
-}
-
-pub struct Builtin {
-    pub client: Option<Arc<Bundle>>,
-}
-struct ClientSupport(Arc<Bundle>);
+pub struct Builtin;
 
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        *scope == Scope::Profile || (*scope == Scope::DesktopUi && self.client.is_some())
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|object| object.is_empty()) {
@@ -64,30 +56,12 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let client = self.client.clone();
         Box::pin(async move {
             let identity = context.lifecycle.identity().map_err(message)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                let handle = context
-                    .services
-                    .get::<ClientSupport>(&client_service(&identity.package_id))
-                    .map_err(message)?
-                    .ok_or("Todo backend is not active")?;
-                let support = handle.acquire().map_err(message)?;
-                staged
-                    .insert(
-                        identity.entry_id,
-                        Client {
-                            bundle: support.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(message)?;
-                return Ok(staged);
-            }
+
             let host = context.host.ok_or("Todo requires Host storage")?;
             let repository = Arc::new(Repository {
                 store: host.storage,
@@ -95,16 +69,8 @@ impl Plugin for Builtin {
             });
             tools::publish(repository.clone(), &mut staged)?;
             terminal::publish(repository.clone(), &identity.package_id, &mut staged)?;
-            if let Some(bundle) = client {
-                remote::publish(repository, &identity.package_id, &bundle, &mut staged)?;
-                context
-                    .services
-                    .provide(
-                        &client_service(&identity.package_id),
-                        Arc::new(ClientSupport(bundle)),
-                    )
-                    .map_err(message)?;
-            }
+            remote::publish(repository, &identity.package_id, &mut staged)?;
+
             Ok(staged)
         })
     }

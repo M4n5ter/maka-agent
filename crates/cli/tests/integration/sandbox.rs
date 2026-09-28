@@ -24,8 +24,6 @@ use std::{
     time::Duration,
 };
 use tokio::io::AsyncReadExt;
-#[cfg(windows)]
-mod windows;
 
 async fn run(cwd: &Path, policy: &Sandbox, command: &str, timeout: u64) -> Output {
     let path = cwd.join("policy.json");

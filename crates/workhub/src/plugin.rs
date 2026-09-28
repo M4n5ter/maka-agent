@@ -25,7 +25,6 @@ mod tools;
 use crate::{Access, Coordinator, Repository, assignment::Assignments};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     kernel::{Plugin, PluginContext},
@@ -39,12 +38,10 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 pub const ID: &str = "maka.workhub";
-pub struct Builtin {
-    pub bundle: Arc<Bundle>,
-}
+pub struct Builtin;
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        matches!(scope, Scope::Profile | Scope::DesktopUi)
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|object| object.is_empty()) {
@@ -58,18 +55,12 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let bundle = self.bundle.clone();
         Box::pin(async move {
             let identity = context.lifecycle.identity().map_err(error)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                staged
-                    .insert(identity.entry_id, Client { bundle, config })
-                    .map_err(error)?;
-                return Ok(staged);
-            }
+
             let host = context
                 .host
                 .ok_or("WorkHub Host capabilities unavailable")?;
@@ -103,12 +94,7 @@ impl Plugin for Builtin {
                 recovering: AtomicBool::new(true),
                 report: Mutex::default(),
             });
-            remote::publish(
-                &mut staged,
-                manager.clone(),
-                &identity.package_id,
-                &bundle.content_digest,
-            )?;
+            remote::publish(&mut staged, manager.clone(), &identity.package_id)?;
             session::publish(&mut staged, manager.clone())?;
             tools::publish(&mut staged, manager.clone())?;
             staged

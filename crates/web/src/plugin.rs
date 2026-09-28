@@ -45,14 +45,7 @@ mod remote;
 mod search_tool;
 mod terminal;
 
-pub struct Builtin {
-    pub client: Option<Arc<maka_plugins::client::Bundle>>,
-}
-struct ClientSupport(Arc<maka_plugins::client::Bundle>);
-
-pub fn client_service(package_id: &str) -> String {
-    format!("{package_id}.client")
-}
+pub struct Builtin;
 
 #[derive(Clone)]
 struct Web {
@@ -65,7 +58,6 @@ struct Web {
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
-            || (*scope == Scope::DesktopUi && self.client.is_some())
     }
 
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
@@ -81,33 +73,14 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let client = self.client.clone();
         Box::pin(async move {
             let identity = context
                 .lifecycle
                 .identity()
                 .map_err(|error| error.to_string())?;
-            if identity.scope == Scope::DesktopUi {
-                let service = context
-                    .services
-                    .get::<ClientSupport>(&client_service(&identity.package_id))
-                    .map_err(|error| error.to_string())?
-                    .ok_or("Web backend is not active")?;
-                let bundle = service.acquire().map_err(|error| error.to_string())?;
-                let mut staged = Staged::default();
-                staged
-                    .insert(
-                        identity.entry_id,
-                        maka_plugins::client::Client {
-                            bundle: bundle.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                return Ok(staged);
-            }
+
             let host = context.host.ok_or("Web requires Host capabilities")?;
             let web = Arc::new(Web {
                 fetcher: Fetcher::new(host.http.clone()),
@@ -135,16 +108,8 @@ impl Plugin for Builtin {
                 .map_err(|error| error.to_string())?;
             search_tool::publish(web.clone(), &mut staged)?;
             terminal::publish(web.clone(), &identity, &mut staged)?;
-            if let Some(bundle) = client {
-                remote::publish(web, &identity, &bundle, &mut staged)?;
-                context
-                    .services
-                    .provide(
-                        &client_service(&identity.package_id),
-                        Arc::new(ClientSupport(bundle)),
-                    )
-                    .map_err(|error| error.to_string())?;
-            }
+            remote::publish(web, &identity, &mut staged)?;
+
             Ok(staged)
         })
     }

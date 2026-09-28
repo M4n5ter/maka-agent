@@ -17,12 +17,6 @@
 
 [workspace]
 default-members = ["crates/cli"]
-exclude = [
-    "experiments/windows-sandbox/launcher",
-    "native/gitoxide-helper",
-    "native/runtime-host-peer",
-    "native/runtime-host-windows-task-launcher",
-]
 members = [
     "crates/acp",
     "crates/agent",

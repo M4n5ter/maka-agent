@@ -25,11 +25,6 @@ Bundled model providers using the public `maka-plugins::provider` contract. Prov
 
 API providers own their bundled model facts, authentication, bounded inventory discovery and protocol policy. The ChatGPT provider composes the native Responses adapter; neither provider authentication nor discovery requires V8. Discovery support does not imply support for every inference protocol.
 
-Cargo embeds the checked-in facts without Node. To refresh model and pricing data from the repository metadata snapshot and provider definitions, run from the repository root:
+Cargo embeds the checked-in facts without Node. Provider facts live in `data/catalog-facts.json`; pricing facts live in `../config/data/pricing-facts.json`. Review changes with their owning crate tests.
 
-```sh
-node scripts/rust/generate-catalog-facts.mjs crates/providers/data providers
-node scripts/rust/generate-catalog-facts.mjs crates/config/data pricing
-```
-
-Review the generated data changes together with provider tests; metadata updates do not implement new inference protocols.
+Metadata updates do not implement new inference protocols.

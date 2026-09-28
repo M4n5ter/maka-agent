@@ -20,7 +20,6 @@
 mod terminal;
 use crate::{Agent, settings::Manager};
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     kernel::{Plugin, PluginContext},
@@ -31,18 +30,11 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub const ID: &str = "maka.external-agent";
-pub struct Builtin {
-    pub client: Option<Arc<Bundle>>,
-}
-struct ClientSupport(Arc<Bundle>);
-pub fn client_service(package: &str) -> String {
-    format!("{package}.client")
-}
+pub struct Builtin;
 
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
-            || (*scope == Scope::DesktopUi && self.client.is_some())
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|value| value.is_empty()) {
@@ -56,81 +48,41 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> futures_util::future::BoxFuture<'static, Result<Staged, String>> {
-        let client = self.client.clone();
         Box::pin(async move {
             let identity = context.lifecycle.identity().map_err(message)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                let service = context
-                    .services
-                    .get::<ClientSupport>(&client_service(&identity.package_id))
-                    .map_err(message)?
-                    .ok_or("external agent backend is inactive")?;
-                let bundle = service.acquire().map_err(message)?;
-                staged
-                    .insert(
-                        identity.entry_id,
-                        Client {
-                            bundle: bundle.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(message)?;
-            } else {
-                let host = context
-                    .host
-                    .ok_or("external agents require Host capabilities")?;
-                let manager =
-                    Manager::load(host, context.data, context.contributions, &mut staged).await?;
-                let setup = Arc::new(crate::setup::Provider {
-                    manager: manager.clone(),
-                    context: context.lifecycle.clone(),
-                });
-                let handler = Arc::new(Management(manager));
-                terminal::publish(
-                    handler.clone(),
-                    setup.clone(),
-                    &identity.package_id,
-                    &mut staged,
-                )?;
-                staged
-                    .insert(
-                        remote::key(&identity.package_id, "manage").map_err(message)?,
-                        Endpoint::standalone(Handler::Method(handler.clone()))
-                            .requiring_host_paths(),
-                    )
-                    .map_err(message)?;
-                staged
-                    .insert(
-                        remote::key(&identity.package_id, "setup").map_err(message)?,
-                        Endpoint::standalone(Handler::Stream(setup.clone())),
-                    )
-                    .map_err(message)?;
-                if let Some(client) = client {
-                    staged
-                        .insert(
-                            remote::key(&identity.package_id, "request").map_err(message)?,
-                            Endpoint::new(client.content_digest.clone(), Handler::Method(handler))
-                                .requiring_host_paths(),
-                        )
-                        .map_err(message)?;
-                    staged
-                        .insert(
-                            remote::key(&identity.package_id, "setup-request").map_err(message)?,
-                            Endpoint::new(client.content_digest.clone(), Handler::Stream(setup)),
-                        )
-                        .map_err(message)?;
-                    context
-                        .services
-                        .provide(
-                            &client_service(&identity.package_id),
-                            Arc::new(ClientSupport(client)),
-                        )
-                        .map_err(message)?;
-                }
-            }
+
+            let host = context
+                .host
+                .ok_or("external agents require Host capabilities")?;
+            let manager =
+                Manager::load(host, context.data, context.contributions, &mut staged).await?;
+            let setup = Arc::new(crate::setup::Provider {
+                manager: manager.clone(),
+                context: context.lifecycle.clone(),
+            });
+            let handler = Arc::new(Management(manager));
+            terminal::publish(
+                handler.clone(),
+                setup.clone(),
+                &identity.package_id,
+                &mut staged,
+            )?;
+            staged
+                .insert(
+                    remote::key(&identity.package_id, "manage").map_err(message)?,
+                    Endpoint::standalone(Handler::Method(handler.clone())).requiring_host_paths(),
+                )
+                .map_err(message)?;
+            staged
+                .insert(
+                    remote::key(&identity.package_id, "setup").map_err(message)?,
+                    Endpoint::standalone(Handler::Stream(setup.clone())),
+                )
+                .map_err(message)?;
+
             Ok(staged)
         })
     }

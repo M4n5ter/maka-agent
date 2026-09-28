@@ -19,7 +19,7 @@
 
 mod terminal;
 
-use super::{ClientFixture, Host, LocalListener, Peer, Provider, configure, converged, disabled};
+use super::{Host, HostFixture, LocalListener, Peer, Provider, configure, converged, disabled};
 use maka_client::{Client, ClientError, Operations, RequestFailure};
 use maka_protocol::{
     OperationErrorCode,
@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_candidates_page_by_session_and_reject_changed_catalog_and_retired_binding() {
-    let fixture = ClientFixture::new("maka-native-candidates-");
+    let fixture = HostFixture::new("maka-native-candidates-");
     for index in 0..=MAX_ITEMS {
         let dir = fixture
             .workspace

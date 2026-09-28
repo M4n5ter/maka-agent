@@ -17,7 +17,7 @@
  * under the License.
  */
 
-//! Disposable Rust roots only. The discovery marker and both owner leases match TypeScript.
+//! State-root discovery, ownership and mutually exclusive leases.
 
 mod lock;
 pub use lock::{FileLease, private_directory};

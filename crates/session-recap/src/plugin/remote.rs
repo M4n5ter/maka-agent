@@ -21,7 +21,6 @@ use crate::recap::{Error as RecapError, Recaps};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     authorization::{Capability, Request as Authorization, Target},
-    client::Bundle,
     contributions::Staged,
     remote::{Caller, Endpoint, Error, Handler, Method, key},
 };
@@ -39,11 +38,7 @@ enum Request {
     Read,
     Generate { operation_id: uuid::Uuid },
 }
-pub(super) fn publish(
-    backend: Arc<Recaps>,
-    bundle: Option<&Bundle>,
-    staged: &mut Staged,
-) -> Result<(), String> {
+pub(super) fn publish(backend: Arc<Recaps>, staged: &mut Staged) -> Result<(), String> {
     let service = Arc::new(Service(backend));
     staged
         .insert(
@@ -51,14 +46,7 @@ pub(super) fn publish(
             Endpoint::standalone(Handler::Method(service.clone())),
         )
         .map_err(message)?;
-    if let Some(bundle) = bundle {
-        staged
-            .insert(
-                key(super::ID, "request").map_err(message)?,
-                Endpoint::new(bundle.content_digest.clone(), Handler::Method(service)),
-            )
-            .map_err(message)?;
-    }
+
     Ok(())
 }
 struct Service(Arc<Recaps>);

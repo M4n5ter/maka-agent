@@ -27,9 +27,9 @@ use std::sync::Arc;
 
 pub(crate) fn install(setup: &mut Setup) -> Result<(), maka_plugins::Error> {
     if setup.builtins.contains_key(ID) || setup.layers.contains_key(ID) {
-        return Err(maka_plugins::Error::Invalid(
-            "built-in Insights identity is reserved".into(),
-        ));
+        return Err(maka_plugins::Error::Invalid(format!(
+            "built-in {ID} identity is reserved"
+        )));
     }
     setup.builtins.insert(
         ID.into(),
@@ -38,39 +38,19 @@ pub(crate) fn install(setup: &mut Setup) -> Result<(), maka_plugins::Error> {
             revision: env!("CARGO_PKG_VERSION").into(),
             dependencies: vec![],
             inject: vec![],
-            plugin: Arc::new(Builtin {
-                client: maka_plugins::client::Bundle::builtin(
-                    ID,
-                    env!("CARGO_PKG_VERSION"),
-                    include_str!(concat!(env!("OUT_DIR"), "/insights-client.js")),
-                )?,
-            }),
+            plugin: Arc::new(Builtin),
         }),
     );
     let mut entry = Entry::new(ID)?;
     entry.package_id = Some(ID.into());
-    let mut client = Entry::new("maka.insights.ui")?;
-    client.package_id = Some(ID.into());
-    client.inject =
-        maka_plugins::composition::Injection::Names(vec![maka_insights::plugin::client_service(
-            ID,
-        )]);
     setup.layers.insert(
         ID.into(),
-        vec![
-            Operation::Insert {
-                root_id: Some(Scope::Profile),
-                parent_id: None,
-                position: None,
-                entry,
-            },
-            Operation::Insert {
-                root_id: Some(Scope::DesktopUi),
-                parent_id: None,
-                position: None,
-                entry: client,
-            },
-        ],
+        vec![Operation::Insert {
+            root_id: Some(Scope::Profile),
+            parent_id: None,
+            position: None,
+            entry,
+        }],
     );
     Ok(())
 }

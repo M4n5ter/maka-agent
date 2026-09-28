@@ -23,16 +23,10 @@ use maka_runtime::{
     event::{Fact, Invocation, RuntimeEvent},
     input::{DeliveredMessage, InvocationInput, MessageInput},
 };
-use serde_json::{Value, json};
-use std::{
-    io::Write,
-    path::Path,
-    process::{Command, Stdio},
-};
+use serde_json::json;
 
 #[tokio::test]
-async fn attachment_references_remain_structured_and_match_the_original_model_formatter_after_reopen()
- {
+async fn attachment_references_remain_structured_after_reopen() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("runtime.sqlite");
     let log = EventLog::open(&path).await.unwrap();
@@ -182,33 +176,4 @@ async fn attachment_references_remain_structured_and_match_the_original_model_fo
         );
     }
     log.close().await.unwrap();
-    compare(&cases);
-}
-fn compare(cases: &[Value]) {
-    let mut child = Command::new("node")
-        .arg(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fixtures/client-attachment-projection.mjs"),
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&serde_json::to_vec(cases).unwrap())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("original-attachment-reference-projection")
-    );
 }

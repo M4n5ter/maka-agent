@@ -114,43 +114,13 @@ The installed SDK must recognize the descriptor as provider-executed. Unknown ID
 
 `commands.createChild({ ..., workspace: 'isolated_git' })` binds a Host-owned linked worktree to the child Session. The parent must permit writes and have a clean repository-root workspace. Replays and Host restarts preserve child changes. After execution and workspace writers settle, `workspacePatch(operationId)` publishes an immutable, base-relative Git patch artifact, including committed and uncommitted changes; it never merges into the parent. Export before advancing the child to another Turn. Workspaces remain available for resumption; disabling a plugin does not delete them. Sparse checkout, submodules, external Git filters, and patches exceeding 50 MiB fail explicitly. Host Git operations use gix, not a system Git executable.
 
-## Client SDK
+## Remote capabilities
 
-When provided, `settings.page.onOpenSession(rawSessionId)` projects the ID through the originating Host and rejects navigation after page, Host or connection retirement.
+Host plugins publish methods with `ctx.remote.method(name, callback)` and streams with `ctx.remote.stream(name, open)`. Authenticated applications bind `{ packageId, method, sessionId }` through `plugin.remote`. Bindings pin the backend registration and preserve document ownership, cancellation and Host authorization.
 
-`ctx.slots.register('tool.detail', toolName, Component, { order? })` replaces the detail body for an exact tool name. The first registration in slot order wins. Props identify the canonical Session, Turn and tool call and carry observed arguments, result and bounded output; open payloads require narrowing. Native sandbox/recovery controls remain outside the extension. Missing, retired or failed renderers fall back to native details.
+Rust endpoints use `Endpoint::standalone`. Endpoints accepting raw Host paths also declare `requiring_host_paths()`; project IDs and existing Session queries use explicit authorized views. Remote calls do not imply process or filesystem permission.
 
-`ctx.slots.register('settings.page', key, Component, { label, order? })` publishes a page and its navigation entry together on the selected Settings Host. `label` is a string or an `en`/`zh-CN`/`zh-TW` translation map; the component receives `locale` and `page` (the registration key). Selection expires on Host, connection or registration replacement. Native settings remain available while plugins reconnect. Other slots accept optional `{ order }`.
-
-Client SDK API **1** uses React supplied by Desktop. Export a `ClientPlugin` from `@maka-agent/plugin-sdk/client`; its `activate(ctx, config)` stages keyed Slot registrations and effects. Slot registration closes after initialization. `ctx.effect` and `ctx.style` remain available while active; their disposer is idempotent. Async cleanup stays owned until settlement, including after explicit disposal. Cleanup failure requires reloading the document before that Entry can activate again.
-
-Build with `buildClient({ packageId, entryPoint })` from `@maka-agent/plugin-sdk/build` (requires esbuild in the author's build environment). Save the returned JavaScript and declare `client: { entry: "client.js", sdkVersion: 1 }` in the manifest. The loader checks exact bytes and SDK compatibility before execution. Bundles share the trusted Renderer, not a sandbox; they have no Node compatibility layer.
-
-Slots include `session.composer.before`, `workspace.composer.before`, `workspace.manage`, `application.manage` and `navigation.status`. Application actions carry an ID and an explicit `handled()` acknowledgement. Workspace props describe a candidate, not an authorized filesystem path. Composer Slots offer draft-only `appendText` and `publishSuggestions`. A publication has `update(items)` and `dispose()`; update the same owner on refresh and dispose it on effect cleanup. Item identities survive refresh; publications retire with their owner or target and never submit a message. Each registration has an Entry-local key and optional numeric order. Declare package imports in manifest dependencies; React, `react/jsx-runtime`, and the Client SDK are supplied by Desktop. Do not bundle another React instance.
-
-Suggestions may set `tokenLabel` to display `insertText` as an inline chip. The label is presentation only; submission, editing and recovery still use the serialized text.
-
-Optional `ctx.localFiles.pick()` / `open(path)` use Desktop-local paths only. They are unavailable for remote Host files. Desktop validates the published Client identity before native actions and discards picker results after navigation or retirement.
-
-`application.overlay` mounts on the application's default Host. `session.header.actions` and `turn.footer` mount on the viewed Session's Host with canonical `sessionId`; the footer also receives `turnId`, once per visible Turn even after steering. They add UI without replacing native actions. Session and Turn props identify observations, not execution permission.
-
-`ctx.events.subscribe({ kind: 'session.changed' }, listener, onError?)` observes originating-Host invalidations. `session.event` and `tool.activity` also require `sessionId`, always canonical on that Host. The listener receives a discriminated `ClientProductEvent`; event-specific payloads remain open product projections. These observations include live deltas and replayed seeds, not durable `LogEvent`s or exactly-once receipts. Subscriptions publish with the instance and stop immediately on disposal or retirement; they never follow a replacement connection. Plugin-owned domain changes use public Remote streams.
-
-Desktop supplies `@maka/ui/plugin` as a shared UI module (currently `Button`). Import supported components from this entry instead of bundling another component-library instance. It is not the internal UI package's complete API.
-
-Host plugins publish `ctx.remote.method(name, callback)` or `ctx.remote.stream(name, open)`. Client plugins obtain a callable with `ctx.remote.method<Input, Output>(name, sessionId?)` or an async-iterable factory with `ctx.remote.stream<Input, Output>(name, sessionId?)`. Calls start only after UI publication. Handles retain their original Host connection and backend registration; replacement never redirects them. Breaking iteration closes its stream; retiring UI or navigating closes its document. Remote callers are not Agent invocations and receive no implicit process permission.
-
-Remote callbacks may throw an `Error` carrying a `RemoteFailure.code`. `outcome_unknown` preserves an uncertain business result and requires domain recovery, not blind retry. It does not fence an otherwise settled plugin; Host independently fences unconfirmed resource cleanup. Unclassified exceptions become `operation_unavailable`.
-
-Streams allow one outstanding pull. Returning or cancelling interrupts a pending pull without waiting for the producer; late opens are cleaned up and late items are discarded. This ends observation, not Host-owned settlement of accepted work.
-
-Authenticated applications can also bind `plugin.remote` by `{ packageId, method, sessionId }`, without loading a plugin UI. Rust providers without a frontend use `Endpoint::standalone`; JS providers use the same `ctx.remote` registrations. Package bindings pin the backend registration and retain document ownership, cancellation and authorization. They do not acquire a frontend identity or bypass Host grants. Paired client bindings additionally verify package bytes and retire with the UI.
-
-Native endpoints accepting caller-supplied Host paths declare `Endpoint::requiring_host_paths()`. Host checks that grant at both bind and call, even for a borrowed registration target. Project-ID and existing-Session queries do not require raw-path authority; plugins receive explicitly injected read-only views.
-
-`ctx.models.search({ query })` returns enabled chat choices with supported and default thinking levels, at most 50 entries / 48 KiB; refine the query when `complete` is false. `ctx.models.resolve({ kind: 'named', connectionSlug, model })` returns the same choice shape for an exact model; `{ kind: 'default' }` resolves the current default. Neither grants execution authority or promises provider readiness.
-
-`restoreRoot(operationId)` recovers a root created by this package/scope under current workspace and source ceilings, independently of its original model. Creation provenance does not make an ordinary root exclusively managed. `restoreChild` requires the original child creation request. Neither creates anything; absence does not exclude a concurrent creation. `configure` advances the Session revision on every committed choice, including identical values, fencing older configuration CASes without changing event history.
+A stream has one in-flight read. Cancellation stops observation and cleans up late results; it does not undo accepted effects. `outcome_unknown` requires domain recovery, while unconfirmed resource cleanup is isolated by the Host.
 
 ## Composer discovery
 

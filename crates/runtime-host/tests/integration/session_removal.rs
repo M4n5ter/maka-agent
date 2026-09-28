@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_client::{Client, Notification};
 use maka_event_log::sessions::SessionRetirement;
 use maka_fs_tools::worktree::Worktrees;
@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn removal_recovers_without_its_requester_and_releases_only_the_last_workspace_owner() {
-    let fixture = ClientFixture::new("maka-removal-");
+    let fixture = HostFixture::new("maka-removal-");
     let cwd =
         maka_fs_tools::workspace::project::host_path(&fixture.workspace.canonicalize().unwrap())
             .unwrap()

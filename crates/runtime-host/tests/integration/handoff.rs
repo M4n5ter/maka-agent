@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_protocol::session::{SandboxMode, WorkspaceProjection, WorkspaceTarget};
 use maka_runtime::{
     artifact::content_digest,
@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cooperative_retirement_recovers_frozen_step_without_repeating_effects() {
-    let fixture = ClientFixture::new("maka-cooperative-");
+    let fixture = HostFixture::new("maka-cooperative-");
     let (provider, mut requests) = super::support::message_recovery::Provider::controlled().await;
     let model = super::support::message_recovery::configure(&fixture, &provider.base_url).await;
     let cwd = fixture.workspace.to_string_lossy().into_owned();
@@ -379,7 +379,7 @@ async fn cooperative_retirement_recovers_frozen_step_without_repeating_effects()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_sealed_turn_uses_public_identity_without_provider_and_survives_restart() {
     for queued in [false, true] {
-        let fixture = ClientFixture::new("maka-handoff-stop-");
+        let fixture = HostFixture::new("maka-handoff-stop-");
         let unavailable = SessionModel {
             connection_id: "removed-provider".into(),
             connection_slug: "removed".into(),

@@ -18,105 +18,11 @@
  */
 
 use maka_runtime::{
-    context::{
-        MAX_SUMMARY_BYTES, SUMMARY_FORMAT_TEMPLATE, SummaryDefect, SummaryFormat, TextSummary,
-        validate_summary,
-    },
+    context::{MAX_SUMMARY_BYTES, SummaryDefect, SummaryFormat, TextSummary, validate_summary},
     model::{ModelFinishReason, ModelPart, ModelStep, ModelUsage, TextKind},
-};
-use std::{
-    path::Path,
-    process::{Command, Stdio},
 };
 
 const VALID: &str = "## Goal\nKeep durable evidence.\n## Progress\n### Done\n- Saved raw output.\n## Next Steps\n1. Verify replay.\n## Critical Context\n- src/event.rs and cargo nextest passed.";
-
-#[test]
-fn structural_scanner_matches_original_typescript_on_markdown_adversaries() {
-    let mut cases = vec![
-        VALID.into(),
-        "".into(),
-        SUMMARY_FORMAT_TEMPLATE.into(),
-        format!("```markdown\n{VALID}\n```"),
-        VALID.replace(
-            "### Done\n- Saved raw output.",
-            "## Key Decisions\n- Saved raw output.",
-        ),
-    ];
-    for suffix in [
-        "...", ":", "：", ",", "，", "、", ";", "；", "…", "(", "（", "—", "`", ".",
-    ] {
-        cases.push(format!("{VALID}{suffix}"));
-    }
-    for indent in 0..=5 {
-        cases.push(
-            VALID
-                .lines()
-                .map(|line| format!("{}{line}", " ".repeat(indent)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-        for family in ['`', '~'] {
-            for width in [3, 4] {
-                for closing in ["```", "````", "~~~", "~~~~", "``` trailing", "    ````"] {
-                    let open =
-                        format!("{}{}", " ".repeat(indent), family.to_string().repeat(width));
-                    cases.push(format!(
-                        "{VALID}\n{open}text\n## Goal\nliteral command error ``` details\n{closing}"
-                    ));
-                }
-            }
-        }
-    }
-    for body in [
-        "",
-        "### Done",
-        "   ### Done",
-        "    ### Done",
-        "- - -",
-        "***",
-        "_ _ _",
-        "- * -",
-        "[What the user is trying to accomplish]",
-        "```\n```",
-        "```\ncommand\n```",
-        "~~~\n```\n~~~",
-        "(none)",
-        "\u{85}",
-        "\u{feff}",
-    ] {
-        cases.push(VALID.replace("- Saved raw output.", body));
-    }
-    cases.push(VALID.replace('\n', "\r\n"));
-    cases.push(VALID.replace("## Progress", "## Progress\u{feff}"));
-    cases.push(VALID.replace("## Progress", "## Progress\u{85}"));
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/runtime/src/history-compact-summary-validation.ts");
-    let mut child = Command::new("node").args(["--input-type=module", "-e", r#"
-import {readFileSync} from 'node:fs';
-import {pathToFileURL} from 'node:url';
-const {findCheckpointSummaryDefect} = await import(pathToFileURL(process.argv[1]));
-const cases = JSON.parse(readFileSync(0, 'utf8'));
-process.stdout.write(JSON.stringify(cases.map(text => text.trim().length === 0 ? 'empty_summary' : findCheckpointSummaryDefect(text) ?? null)));
-"#]).arg(source).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    serde_json::to_writer(child.stdin.take().unwrap(), &cases).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: Vec<Option<String>> = serde_json::from_slice(&output.stdout).unwrap();
-    for (text, expected) in cases.iter().zip(expected) {
-        assert_eq!(
-            validate_summary(text, None)
-                .err()
-                .map(|error| error.to_string()),
-            expected,
-            "{text:?}"
-        );
-    }
-}
 
 fn step(text: &str) -> ModelStep {
     ModelStep {

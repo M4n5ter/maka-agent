@@ -42,7 +42,7 @@ const steps = {
   ],
   checksum: [`curl -O ${dist}${archive}.sha512`, `shasum -a 512 -c ${archive}.sha512`],
   clone: ['git clone https://github.com/apache/maka.git', 'cd maka'],
-  build: ['npm ci', 'npm run build'],
+  build: ['just setup', 'just run'],
 };
 const sections = [
   ['apache-releases', d.releases.h2],
@@ -61,7 +61,7 @@ const sections = [
       <div class="status">
         <h3>{d.status.h3}</h3>
         <a class="row" href="#apache-releases"><b>{d.status.release.label}</b><span>{d.status.release.value}</span><small class="warn">{d.status.release.note}</small></a>
-        <a class="row" href={links.releases}><b>{d.status.nightly.label}</b><span>{d.status.nightly.value}</span><small class="warn">{d.status.nightly.note}</small></a>
+        <a class="row" href={links.cli}><b>{d.status.nightly.label}</b><span>{d.status.nightly.value}</span><small class="warn">{d.status.nightly.note}</small></a>
         <a class="row" href={links.repo}><b>{d.status.source.label}</b><span>{d.status.source.value}</span><small>{d.status.source.note}</small></a>
       </div>
 
@@ -90,8 +90,8 @@ const sections = [
       <section id="nightly">
         <h2>{d.nightly.h2}</h2>
         <span class="note">{d.nightly.note}</span>
-        <p>{d.nightly.p} <a href={links.windows}>{d.nightly.windows}</a></p>
-        <a class="btn primary" href={links.releases}>{copy.hero.nightly} <span class="arr">→</span></a>
+        <p>{d.nightly.p} {d.nightly.windows}</p>
+        <a class="btn primary" href={links.cli}>{copy.hero.nightly} <span class="arr">→</span></a>
       </section>
 
       <hr class="div" />

@@ -18,8 +18,8 @@
  */
 
 #[allow(dead_code)]
-#[path = "integration/support/client_probe.rs"]
-mod client_probe;
+#[path = "integration/support/host_fixture.rs"]
+mod host_fixture;
 #[allow(dead_code)]
 #[path = "integration/support/message_recovery.rs"]
 mod message_recovery;

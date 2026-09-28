@@ -23,6 +23,26 @@ use std::{path::Path, process::Command};
 fn npm_package_round_trips_native_code_offline_and_never_overwrites_a_release() {
     let temporary = tempfile::tempdir().unwrap();
     let executable = env!("CARGO_BIN_EXE_maka");
+    // Package executable code without the development symbol table, as a
+    // release artifact would. Keep the real parser and installation limits.
+    #[cfg(unix)]
+    let package_executable = {
+        let path = temporary.path().join("maka");
+        std::fs::copy(executable, &path).unwrap();
+        assert!(Command::new("strip").arg(&path).status().unwrap().success());
+        #[cfg(target_os = "macos")]
+        assert!(
+            Command::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        path
+    };
+    #[cfg(not(unix))]
+    let package_executable = Path::new(executable).to_path_buf();
     let target = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "darwin-arm64",
         ("macos", "x86_64") => "darwin-x64",
@@ -48,7 +68,7 @@ fn npm_package_round_trips_native_code_offline_and_never_overwrites_a_release() 
                 "--version",
                 "0.0.0-test",
                 "--binary",
-                executable,
+                package_executable.to_str().unwrap(),
                 "--validator",
                 executable,
                 "--notices",

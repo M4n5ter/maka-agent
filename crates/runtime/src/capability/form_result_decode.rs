@@ -33,7 +33,7 @@ pub(crate) fn decode_outcome_result(value: &Value) -> Result<FormResult> {
 }
 fn decode(value: &Value, reserve_outcome: bool) -> Result<FormResult> {
     let r = record(value, "form result")?;
-    // TypeScript's {kind: 'form', ...record} also accepts an explicit form kind.
+    // Form records may carry an explicit form kind.
     if let Some(kind) = r.get("kind") {
         ensure(kind == "form")?;
     }

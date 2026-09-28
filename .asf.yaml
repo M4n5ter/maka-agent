@@ -19,8 +19,7 @@
 
 github:
   description: >-
-    Apache Maka (Incubating) is a high-performance agent workspace
-    that keeps a complete record of everything it did.
+    Apache Maka (Incubating) is a high-performance agent workspace that keeps a complete record of everything it did.
   labels:
     - ai
     - ai-agent
@@ -29,9 +28,8 @@ github:
     - llm
     - tool-use
     - event-sourcing
-    - desktop
-    - electron
-    - typescript
+    - rust
+    - tui
     - cli
     - apache
     - incubator
@@ -87,54 +85,18 @@ github:
       restrict_force_push: true
 
   environments:
-    # These environments are the deployment boundaries around signing secrets
-    # and npm OIDC. Release publication adds human review; scheduled npm
-    # Nightly relies on exact ref admission instead. Naming an environment here
-    # replaces its settings wholesale, so keep every protection rule in this
-    # declarative authority.
-    release:
-      required_reviewers:
-        - id: M4n5ter
-          type: User
-      wait_timer: 0
-      prevent_self_review: true
-      deployment_branch_policy:
-        protected_branches: false
-        policies:
-          - name: "v*-incubating-rc*"
-            type: tag
-    npm-publication:
+    rust-preview-publication:
       required_reviewers: []
       wait_timer: 0
       prevent_self_review: false
       deployment_branch_policy:
         protected_branches: false
         policies:
-          - name: main
-            type: branch
-    nightly:
-      required_reviewers: []
-      wait_timer: 0
-      prevent_self_review: false
-      deployment_branch_policy:
-        protected_branches: false
-        policies:
-          - name: main
-            type: branch
-    product-release:
-      required_reviewers:
-        - id: M4n5ter
-          type: User
-      wait_timer: 0
-      prevent_self_review: true
-      deployment_branch_policy:
-        protected_branches: false
-        policies:
-          - name: main
+          - name: feat/runtime-host-rust
             type: branch
 
 notifications:
-  commits:      commits@maka.apache.org
-  discussions:  dev@maka.apache.org 
-  issues:       commits@maka.apache.org
+  commits: commits@maka.apache.org
+  discussions: dev@maka.apache.org
+  issues: commits@maka.apache.org
   pullrequests: commits@maka.apache.org

@@ -19,9 +19,9 @@
 
 use super::{
     javascript_plugins::ready,
-    support::{client_probe::ClientFixture, message_recovery::configure, peer::Peer},
+    support::{host_fixture::HostFixture, message_recovery::configure, peer::Peer},
 };
-use maka_plugins::{client::Bundle, kernel::Definition};
+use maka_plugins::kernel::Definition;
 use maka_runtime_host::{
     plugins::Setup,
     server::{Host, HostOptions, local::LocalListener},
@@ -40,7 +40,7 @@ async fn renamed_insights_uses_public_remote_capabilities_and_preserves_state_ac
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-insights-");
+    let fixture = HostFixture::new("maka-insights-");
     let model = configure(&fixture, "http://127.0.0.1:9/v1").await;
     let preferences = json!({"range":"30d","tab":"activity","selection":{"search":"🦀"}});
     let mut old_cursor = Value::Null;
@@ -187,21 +187,7 @@ async fn scenario() {
                 )
                 .await,
             );
-            loop {
-                let clients = success(
-                    peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                        .await,
-                );
-                if clients["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|entry| entry["extensionId"] != ID)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
+            ready(&mut peer).await;
             let mut stale = call.clone();
             stale["input"] = json!({"kind":"preferences"});
             assert_eq!(peer.rpc("plugin.remote", stale).await["ok"], false);
@@ -258,16 +244,11 @@ fn setup() -> Setup {
     Setup {
         builtins: [(ID.into(), Arc::new(Definition {
             id: ID.into(), revision: "binary".into(), dependencies: vec![], inject: vec![],
-            plugin: Arc::new(maka_insights::plugin::Builtin {
-                client: Bundle::builtin(ID, "binary", "export default function() {}").unwrap(),
-            }),
+            plugin: Arc::new(maka_insights::plugin::Builtin),
         }))].into(),
         layers: [(ID.into(), serde_json::from_value(json!([
-            {"type":"remove","entryId":"maka.insights.ui"},
             {"type":"remove","entryId":"maka.insights"},
             {"type":"insert","rootId":"profile","entry":{"id":"statistics-backend","packageId":ID}},
-            {"type":"insert","rootId":"desktop-ui","entry":{"id":"statistics-ui","packageId":ID,
-                "inject":[maka_insights::plugin::client_service(ID)]}}
         ])).unwrap())].into(),
         ..Default::default()
     }
@@ -276,19 +257,7 @@ async fn bind(peer: &mut Peer) -> Value {
     bind_session(peer, None).await
 }
 async fn bind_session(peer: &mut Peer, session: Option<&str>) -> Value {
-    let clients = success(
-        peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
-            .await,
-    );
-    let entry = clients["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == ID)
-        .unwrap();
-    let binding = json!({"method":"request","sessionId":session,"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],"activation":entry["activation"],
-        "contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]}});
+    let binding = json!({"packageId":"z.statistics","method":"request","sessionId":session});
     let target = success(
         peer.rpc("plugin.remote", json!({"kind":"bind","binding":binding}))
             .await,

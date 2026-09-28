@@ -179,7 +179,7 @@ fn resolve_reference(root: &Value, reference: &str) -> Result<()> {
 }
 
 fn validate_pattern(pattern: &str) -> Result<()> {
-    // Deliberately narrower than TypeScript new RegExp: cap structural operators
+    // Bound regular-expression structural operators
     // at 128 to bound recursive parsing, lookbehind IR traversal and binary Alt
     // destruction. Disable optimization to avoid expanding counted repetitions.
     // Only compile syntax; never execute these untrusted patterns.

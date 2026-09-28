@@ -29,7 +29,7 @@ async fn native_consent_distinguishes_session_context_from_the_resolved_backend_
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-native-consent-scope-");
+    let fixture = HostFixture::new("maka-native-consent-scope-");
     let model =
         crate::support::message_recovery::configure(&fixture, "http://127.0.0.1:1/v1").await;
     let user_home = fixture.workspace.join("user-home");

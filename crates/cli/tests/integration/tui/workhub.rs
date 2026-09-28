@@ -73,13 +73,15 @@ fn new_root_delegates_repairs_the_same_task_and_composes_a_runtime_js_filler() {
     assert_eq!(readback::source_session(&alpha), coordinator);
     let alpha_session = readback::session(&alpha);
     assert_ne!(alpha_session, coordinator);
-    setup::open_task(&mut tui, "Task alpha");
+    tui.send(b"\x1b[1;3D");
+    setup::select_task(&mut tui, "Task alpha");
     tui.wait_for("Result alpha complete");
     tui.click_page_text("Open the session doing it");
     tui.wait_for("Message…");
     tui.session_view_action("Show / hide session details");
     tui.wait_for(&format!("Session ID: {alpha_session}"));
-    setup::open_task(&mut tui, "Task alpha");
+    tui.send(b"\x1b[1;3D");
+    setup::wait_page_text(&mut tui, "Change task model");
 
     runtime.block_on(composition::install(&client, directory.path()));
     assert_eq!(
@@ -118,7 +120,8 @@ fn new_root_delegates_repairs_the_same_task_and_composes_a_runtime_js_filler() {
         original["target"]["request"]["settings"]["target"]["model"]["model"],
         "worker-model"
     );
-    setup::open_task(&mut tui, "Task beta");
+    tui.send(b"\x1b[1;3D");
+    setup::select_task(&mut tui, "Task beta");
     tui.wait_for("Note draft");
     assert!(
         !tui.screen
@@ -149,7 +152,7 @@ fn new_root_delegates_repairs_the_same_task_and_composes_a_runtime_js_filler() {
     );
     let beta_session = readback::session(&repaired);
     assert_ne!(alpha_session, beta_session);
-    setup::open_task(&mut tui, "Task beta");
+    setup::select_task(&mut tui, "Task beta");
     tui.wait_for("Result beta complete");
     tui.wait_for("beta private draft");
     assert!(

@@ -17,8 +17,7 @@
  * under the License.
  */
 
-// Independently indexed implementation of the behavior documented in
-// packages/runtime/src/edit-replace.ts; no upstream matcher code is copied.
+// Match ECMAScript whitespace when comparing model-supplied edits.
 
 pub(super) fn js_space(c: char) -> bool {
     matches!(c, '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}'

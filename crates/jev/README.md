@@ -22,8 +22,8 @@
 [简体中文](./README.zh-CN.md)
 
 `maka.jev` is a statically linked Profile plugin. It publishes the callable
-service `maka.jev.evaluate`; the separate Desktop UI entry contributes a Settings
-page. Consumers use the same service from native Rust or JavaScript.
+service `maka.jev.evaluate` and a native Settings page. Consumers use the same
+service from Rust or JavaScript.
 
 ## Configuration
 
@@ -70,7 +70,7 @@ JSON consumers use the same method name and JSON values. For example:
 ```
 
 Every call requires an admitted caller scope with Host network authority. Service
-availability does not grant authority. Desktop's test button obtains a separate
+availability does not grant authority. The Settings test button obtains a separate
 Network authorization and tests the saved configuration. Plugin retirement
 invalidates captured service handles. Cancellation and timeout settle the scoped
 HTTP resources before returning. No redirects or automatic retries forward

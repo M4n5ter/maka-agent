@@ -20,11 +20,7 @@
 #[path = "oauth/support.rs"]
 mod support;
 mod verification;
-use maka_config::{
-    ConfigurationStore,
-    oauth::enrollment::{LoginCompletion, LoginPreparation},
-};
-use maka_runtime::{oauth::LoginStart, provider::Credential};
+use maka_config::ConfigurationStore;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use support::*;
@@ -193,70 +189,4 @@ async fn pending_connect(proxy: &tokio::net::TcpListener) -> BufReader<tokio::ne
         assert!(line.len() < 8192 && !line.is_empty());
     }
     socket
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn durable_login_receipts_replay_without_provider_or_presentation_after_reopen() {
-    let fixture = Fixture::new(None).await;
-    let store = Arc::new(
-        ConfigurationStore::for_root(Arc::new(fixture.owner()))
-            .await
-            .unwrap(),
-    );
-    let mut saved = Vec::new();
-    for name in ["first", "second"] {
-        let mut value = start(name);
-        value["target"]["slug"] = json!(name);
-        value["target"]["provider"]["packageId"] = json!("external.removed");
-        let input: LoginStart = serde_json::from_value(value).unwrap();
-        let LoginPreparation::Ready(ticket) =
-            store.prepare_oauth_login(input.clone()).await.unwrap()
-        else {
-            panic!("expected unpublished ticket");
-        };
-        let identity = ticket.identity().clone();
-        assert!(ticket.claim().await.unwrap());
-        assert!(matches!(
-            ticket
-                .complete(
-                    Credential {
-                        secret: "synthetic-receipt-fixture".into(),
-                        refresh_at: None
-                    },
-                    1
-                )
-                .await
-                .unwrap(),
-            LoginCompletion::Committed(_)
-        ));
-        saved.push((input, identity));
-    }
-    store.shutdown().await.unwrap();
-    drop(store);
-    for _ in 0..2 {
-        let (host, drain, server) = fixture.serve().await;
-        let mut command = tokio::process::Command::new("node");
-        command
-            .kill_on_drop(true)
-            .arg(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../tests/fixtures/client.mjs"),
-            )
-            .arg("--socket")
-            .arg(&fixture.endpoint)
-            .args(["--root-id", host.root_id(), "--oauth-receipts"])
-            .arg(serde_json::to_string(&saved).unwrap());
-        let output = tokio::time::timeout(Duration::from_secs(30), command.output()).await;
-        drain.cancel();
-        finish(server).await;
-        drop(host);
-        let output = output.unwrap().unwrap();
-        assert!(
-            output.status.success(),
-            "original client failed: {}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("\"check\":\"oauth-receipts\""));
-    }
 }

@@ -30,12 +30,12 @@ The audit states two properties of the tree it is pointed at, and nothing else:
 1. **Every entry is classified exactly once** — covered, excluded with a recorded reason, or an audit failure.
 2. **In every covered file the ASF license text occurs exactly once**, and that occurrence is the canonical rendering at the top of the file.
 
-Both are properties of the artifact. Neither is stated in terms of what `npm run write:asf-headers` produces, and that separation is deliberate: an audit defined as "the file starts with the bytes the writer emits" can only ever confirm its own writer. Such an audit accepts a second license block stacked on top of a first one it failed to recognize, because the block it just wrote is sitting at the top of the file.
+Both are properties of the artifact. Neither is stated in terms of what `node scripts/asf-license-headers.mjs write` produces, and that separation is deliberate: an audit defined as "the file starts with the bytes the writer emits" can only ever confirm its own writer. Such an audit accepts a second license block stacked on top of a first one it failed to recognize, because the block it just wrote is sitting at the top of the file.
 
 ```sh
-npm run check:asf-headers          # audit; fails on anything unresolved
-npm run check:asf-headers -- --report
-npm run write:asf-headers          # insert the header where there is none
+node scripts/asf-license-headers.mjs check          # audit; fails on anything unresolved
+node scripts/asf-license-headers.mjs check --report
+node scripts/asf-license-headers.mjs write          # insert the header where there is none
 ```
 
 ## Detection is loose, acceptance is strict
@@ -78,7 +78,7 @@ Subtracting in a checkout is not the enumeration excusing itself. It decides whi
 
 ## Reviewed exclusions
 
-Each rule is a category with a justification. A rule **names the files it excludes, or states a structural property** that holds for anything it matches. A bare directory prefix does neither: it lends its justification to whatever is added to that directory next, which is the failure this audit exists to prevent. `npm run check:asf-headers -- --report` prints the resolved file list for every rule.
+Each rule is a category with a justification. A rule **names the files it excludes, or states a structural property** that holds for anything it matches. A bare directory prefix does neither: it lends its justification to whatever is added to that directory next, which is the failure this audit exists to prevent. `node scripts/asf-license-headers.mjs check --report` prints the resolved file list for every rule.
 
 | Rule | Why the header does not belong |
 | --- | --- |
@@ -115,6 +115,6 @@ The guard therefore exempts a change that is exactly `applyHeader` applied to th
 
 ## Changing the policy
 
-Adding a file type means adding it to `coveredExtensions` or `coveredNames` and running `npm run write:asf-headers`.
+Adding a file type means adding it to `coveredExtensions` or `coveredNames` and running `node scripts/asf-license-headers.mjs write`.
 
 Adding an exclusion means adding a rule with an `id` and a `justification` that a mentor can evaluate without reading the code around it. "The audit failed on it" is not a justification. If a file is source that Maka wrote, it gets the header.

@@ -38,7 +38,7 @@ async fn managed_native_input_refreshes_the_authenticated_caller_before_effects(
         .unwrap();
 }
 async fn caller() {
-    let fixture = ClientFixture::new("maka-managed-caller-");
+    let fixture = HostFixture::new("maka-managed-caller-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     fixture::seed(&fixture, &model).await;

@@ -19,7 +19,7 @@
 
 use super::{
     javascript_plugins::{package, ready},
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_plugins::{
     composition::Scope,
@@ -41,7 +41,7 @@ async fn sdk_files_preserve_permissions_ceilings_and_durable_settlement() {
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-plugin-files-");
+    let fixture = HostFixture::new("maka-plugin-files-");
     let (provider, mut requests) = super::support::message_recovery::Provider::controlled().await;
     let model = super::support::message_recovery::configure(&fixture, &provider.base_url).await;
     std::fs::write(

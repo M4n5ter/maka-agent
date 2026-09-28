@@ -391,79 +391,6 @@ describe('ASF source release verification', () => {
     }
   });
 
-  test('documents the checkout-only DeepSeek Harness toolchain build in the candidate', async () => {
-    const temporaryRoot = mkdtempSync(join(tmpdir(), 'maka-asf-dsh-contract-test-'));
-    const repositoryRoot = join(temporaryRoot, 'repository');
-    const outputDirectory = join(temporaryRoot, 'release');
-    const identity = sourceCandidateIdentity('0.1.12');
-    try {
-      writeReleaseContents(repositoryRoot, { includeAttributes: true });
-      mkdirSync(join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain'), {
-        recursive: true,
-      });
-      mkdirSync(join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-profile'), {
-        recursive: true,
-      });
-      mkdirSync(join(repositoryRoot, 'scripts'), { recursive: true });
-      copyFileSync(
-        join(import.meta.dirname, '../packages/eval/README.md'),
-        join(repositoryRoot, 'packages/eval/README.md'),
-      );
-      writeFileSync(
-        join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain/package.json'),
-        '{}\n',
-      );
-      writeFileSync(
-        join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain/package-lock.json'),
-        '{}\n',
-      );
-      writeFileSync(
-        join(repositoryRoot, 'scripts/prepare-deepseek-harness-toolchain.mjs'),
-        'export {};\n',
-      );
-      for (const name of ['package.json', 'cordis.patch.yml']) {
-        copyFileSync(
-          join(import.meta.dirname, `../packages/eval/harbor/deepseek-harness-profile/${name}`),
-          join(repositoryRoot, `packages/eval/harbor/deepseek-harness-profile/${name}`),
-        );
-      }
-
-      git(repositoryRoot, ['init']);
-      git(repositoryRoot, ['add', '.']);
-      commitFixture(repositoryRoot, 'test DSH source archive contract');
-
-      const candidate = await createSourceCandidate({
-        outputDirectory,
-        repositoryRoot,
-        version: '0.1.12',
-      });
-      const entries = execFileSync('tar', ['-tzf', candidate.archivePath], { encoding: 'utf8' });
-      const archivedReadme = execFileSync(
-        'tar',
-        ['-xOzf', candidate.archivePath, `${identity.rootDirectory}/packages/eval/README.md`],
-        { encoding: 'utf8' },
-      );
-
-      assert.doesNotMatch(entries, /deepseek-harness-toolchain\/package(?:-lock)?\.json/);
-      assert.match(entries, /scripts\/prepare-deepseek-harness-toolchain\.mjs/);
-      for (const name of ['package.json', 'cordis.patch.yml']) {
-        const relativePath = `packages/eval/harbor/deepseek-harness-profile/${name}`;
-        assert.deepEqual(
-          execFileSync('tar', [
-            '-xOzf',
-            candidate.archivePath,
-            `${identity.rootDirectory}/${relativePath}`,
-          ]),
-          readFileSync(join(repositoryRoot, relativePath)),
-        );
-      }
-      assert.match(archivedReadme, /only from a complete Git checkout/u);
-      assert.match(archivedReadme, /intentionally excluded from ASF source archives/u);
-    } finally {
-      rmSync(temporaryRoot, { force: true, recursive: true });
-    }
-  });
-
   test('creates reproducible candidates from committed files only', async () => {
     const temporaryRoot = mkdtempSync(join(tmpdir(), 'maka-asf-source-test-'));
     const repositoryRoot = join(temporaryRoot, 'repository');
@@ -479,33 +406,6 @@ describe('ASF source release verification', () => {
       mkdirSync(join(repositoryRoot, '.maka-shots'));
       writeFileSync(join(repositoryRoot, '.claude/launch.json'), '{}\n');
       writeFileSync(join(repositoryRoot, '.maka-shots/review.png'), 'review evidence\n');
-      writeFileSync(join(repositoryRoot, 'maka-proposal-zh-review.txt'), 'working notes\n');
-      mkdirSync(join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain'), {
-        recursive: true,
-      });
-      mkdirSync(join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-profile'), {
-        recursive: true,
-      });
-      writeFileSync(
-        join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain/package-lock.json'),
-        '{}\n',
-      );
-      writeFileSync(
-        join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-toolchain/package.json'),
-        '{}\n',
-      );
-      writeFileSync(
-        join(
-          repositoryRoot,
-          'packages/eval/harbor/deepseek-harness-toolchain/patch-subprocess-local.mjs',
-        ),
-        'export {};\n',
-      );
-      writeFileSync(
-        join(repositoryRoot, 'packages/eval/harbor/deepseek-harness-profile/cordis.yml'),
-        'profile: maka-eval\n',
-      );
-
       git(repositoryRoot, ['init']);
       git(repositoryRoot, [
         'add',
@@ -519,11 +419,6 @@ describe('ASF source release verification', () => {
         'README.md',
         '.claude/launch.json',
         '.maka-shots/review.png',
-        'maka-proposal-zh-review.txt',
-        'packages/eval/harbor/deepseek-harness-toolchain/package-lock.json',
-        'packages/eval/harbor/deepseek-harness-toolchain/package.json',
-        'packages/eval/harbor/deepseek-harness-toolchain/patch-subprocess-local.mjs',
-        'packages/eval/harbor/deepseek-harness-profile/cordis.yml',
       ]);
       git(repositoryRoot, [
         '-c',
@@ -595,10 +490,7 @@ describe('ASF source release verification', () => {
         encoding: 'utf8',
       });
       assert.doesNotMatch(entries, /untracked\.txt/);
-      assert.doesNotMatch(entries, /\.claude|\.maka-shots|maka-proposal-zh-review/);
-      assert.doesNotMatch(entries, /deepseek-harness-toolchain\/package(?:-lock)?\.json/);
-      assert.match(entries, /deepseek-harness-toolchain\/patch-subprocess-local\.mjs/);
-      assert.match(entries, /deepseek-harness-profile\/cordis\.yml/);
+      assert.doesNotMatch(entries, /\.claude|\.maka-shots/);
       assert.match(entries, /README\.md/);
 
       const originalCompressedBytes = readFileSync(first.archivePath);

@@ -17,10 +17,8 @@
  * under the License.
  */
 
-mod access;
 mod candidate;
 mod code_command;
-mod deployment;
 mod distribution;
 mod sandbox;
 mod tui;

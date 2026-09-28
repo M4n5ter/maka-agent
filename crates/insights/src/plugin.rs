@@ -19,7 +19,6 @@
 
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     kernel::{Plugin, PluginContext},
@@ -33,18 +32,11 @@ mod terminal;
 
 pub const ID: &str = "maka.insights";
 
-pub struct Builtin {
-    pub client: Arc<Bundle>,
-}
-struct ClientSupport(Arc<Bundle>);
-
-pub fn client_service(package_id: &str) -> String {
-    format!("{package_id}.client")
-}
+pub struct Builtin;
 
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        matches!(scope, Scope::Profile | Scope::DesktopUi)
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|value| value.is_empty()) {
@@ -58,53 +50,25 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let client = self.client.clone();
         Box::pin(async move {
             let identity = context.lifecycle.identity().map_err(message)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                let service = context
-                    .services
-                    .get::<ClientSupport>(&client_service(&identity.package_id))
-                    .map_err(message)?
-                    .ok_or("Insights backend is not active")?;
-                let bundle = service.acquire().map_err(message)?;
-                staged
-                    .insert(
-                        identity.entry_id,
-                        Client {
-                            bundle: bundle.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(message)?;
-            } else {
-                let host = context.host.ok_or("Insights requires Host capabilities")?;
-                let insights = remote::Insights {
-                    usage: host.usage,
-                    pricing: host.pricing,
-                    store: host.storage,
-                };
-                terminal::publish(insights.clone(), &identity.package_id, &mut staged)?;
-                staged
-                    .insert(
-                        key(&identity.package_id, "request").map_err(message)?,
-                        Endpoint::new(
-                            client.content_digest.clone(),
-                            Handler::Method(Arc::new(insights)),
-                        ),
-                    )
-                    .map_err(message)?;
-                context
-                    .services
-                    .provide(
-                        &client_service(&identity.package_id),
-                        Arc::new(ClientSupport(client)),
-                    )
-                    .map_err(message)?;
-            }
+
+            let host = context.host.ok_or("Insights requires Host capabilities")?;
+            let insights = remote::Insights {
+                usage: host.usage,
+                pricing: host.pricing,
+                store: host.storage,
+            };
+            terminal::publish(insights.clone(), &identity.package_id, &mut staged)?;
+            staged
+                .insert(
+                    key(&identity.package_id, "request").map_err(message)?,
+                    Endpoint::standalone(Handler::Method(Arc::new(insights))),
+                )
+                .map_err(message)?;
             Ok(staged)
         })
     }

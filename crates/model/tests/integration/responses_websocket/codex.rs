@@ -86,22 +86,27 @@ fn check_headers(actual: &reqwest::header::HeaderMap, expected: &Value) {
     clippy::result_large_err,
     reason = "tungstenite fixes the handshake callback error type"
 )]
-async fn subscription_profile_matches_ts_through_proxy_ws_continuation_and_http_fallback() {
+async fn subscription_profile_survives_proxy_ws_continuation_and_http_fallback() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let oracle = tokio::process::Command::new("node")
-            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/responses-websocket-oracle.mjs"))
-            .arg("http://models.maka.invalid/v1").arg("codex")
-            .kill_on_drop(true).output().await.unwrap();
-        assert!(oracle.status.success(), "{}", String::from_utf8_lossy(&oracle.stderr));
-        let profiles: Vec<Value> = serde_json::from_slice(&oracle.stdout).unwrap();
-        assert_eq!(profiles.len(), 5);
-        assert_eq!(profiles[0]["headers"]["chatgpt-account-id"], "nested-account");
-        assert_eq!(profiles[1]["headers"]["chatgpt-account-id"], "primary-account");
-        assert_eq!(profiles[2]["headers"]["chatgpt-account-id"], "organization-account");
-        assert!(profiles[3]["headers"].get("chatgpt-account-id").is_none());
-        assert!(profiles[4]["headers"].get("chatgpt-account-id").is_none());
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let profiles: Vec<Value> = [
+            (json!({"https://api.openai.com/auth":{"chatgpt_account_id":"nested-account"},"sub":"not-an-account"}), Some("nested-account")),
+            (json!({"chatgpt_account_id":"primary-account","organizations":[{"id":"secondary-account"}]}), Some("primary-account")),
+            (json!({"organizations":[null,{"id":" "},{"id":" organization-account "}]}), Some("organization-account")),
+            (json!({"sub":"not-an-account"}), None),
+            (Value::Null, None),
+        ].into_iter().map(|(claims, account)| {
+            let token = if claims.is_null() { "opaque-token".into() } else {
+                format!("fixture.{}.signature", URL_SAFE_NO_PAD.encode(claims.to_string()))
+            };
+            let mut headers = json!({"authorization":format!("Bearer {token}"),
+                "originator":"codex_cli_rs","session_id":"codex-session",
+                "x-client-request-id":"codex-session","openai-beta":"responses=experimental"});
+            if let Some(account) = account { headers["chatgpt-account-id"] = json!(account); }
+            json!({"token":token,"headers":headers})
+        }).collect();
         let expected = profiles.clone();
         let server = tokio::spawn(async move {
             for (index, expected) in expected.into_iter().enumerate() {
@@ -121,7 +126,7 @@ async fn subscription_profile_matches_ts_through_proxy_ws_continuation_and_http_
                          reqwest::header::HeaderValue::from_str(value.trim()).unwrap())
                     }).collect();
                     check_headers(&headers, &expected["headers"]);
-                    assert_eq!(serde_json::from_str::<Value>(body).unwrap(), expected["body"]);
+                    check_body(&serde_json::from_str::<Value>(body).unwrap());
                     let body: String = events("resp_http", "OK").iter().map(|event| format!("data: {event}\n\n")).collect();
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                     continue;
@@ -135,7 +140,7 @@ async fn subscription_profile_matches_ts_through_proxy_ws_continuation_and_http_
                 assert_eq!(first["type"], "response.create");
                 first.as_object_mut().unwrap().remove("type");
                 first["stream"] = json!(true);
-                assert_eq!(first, expected["body"]);
+                check_body(&first);
                 finish(&mut socket, "resp_1").await;
                 if index == 0 {
                     let next = continuation::body(&mut socket).await;
@@ -189,4 +194,19 @@ fn accepted_content(step: &maka_runtime::model::ModelStep) -> Vec<Value> {
             _ => panic!("text-only subscription probe returned a tool"),
         })
         .collect()
+}
+
+fn check_body(body: &Value) {
+    assert_eq!(body["model"], "test-responses");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["instructions"], "Keep this system instruction.");
+    assert_eq!(body["text"]["verbosity"], "medium");
+    assert!(
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["role"] == "user" && item["content"][0]["text"] == "first")
+    );
 }

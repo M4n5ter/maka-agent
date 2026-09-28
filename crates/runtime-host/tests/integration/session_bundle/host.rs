@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::super::support::{client_probe::ClientFixture, peer::Peer};
+use super::super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_client::{Client, Notification};
 use maka_runtime_host::server::{Host, HostError, local::LocalListener};
 use std::time::Duration;
@@ -30,7 +30,7 @@ pub(super) struct Running {
     server: tokio::task::JoinHandle<Result<(), HostError>>,
 }
 impl Running {
-    pub async fn open(fixture: &ClientFixture) -> Self {
+    pub async fn open(fixture: &HostFixture) -> Self {
         let owner = fixture.owner();
         let root = owner.root_id().to_owned();
         let host = Host::open(owner).await.unwrap();

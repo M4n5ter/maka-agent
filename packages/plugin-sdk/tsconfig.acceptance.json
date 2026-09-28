@@ -1,32 +1,27 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
     "incremental": false,
-    "jsx": "react-jsx",
     "paths": {
-      "@maka-agent/plugin-sdk/host": ["./src/host.ts"],
-      "@maka-agent/plugin-sdk/client": ["./src/client.ts"]
+      "@maka-agent/plugin-sdk/host": ["./src/host.ts"]
     },
     "types": [],
-    "useUnknownInCatchVariables": false
+    "useUnknownInCatchVariables": false,
+    "composite": false,
+    "rootDir": "../.."
   },
   "include": [
     "tests/*.types.ts",
-    "../../crates/*/src/client.tsx",
     "../../crates/runtime-host/tests/fixtures/host-plugin.mjs",
-    "../../crates/runtime-host/tests/fixtures/workflow/host.mjs",
-    "../../crates/runtime-host/tests/fixtures/workflow/client.tsx",
     "../../crates/runtime-host/tests/fixtures/background-plugin.mjs",
     "../../crates/runtime-host/tests/fixtures/http-plugin.mjs",
     "../../crates/runtime-host/tests/fixtures/files-plugin.mjs",
     "../../crates/runtime-host/tests/fixtures/clients-plugin.mjs",
     "../../crates/runtime-host/tests/fixtures/remote-plugin.mjs",
     "../../crates/cli/tests/fixtures/board-plugin/host.mjs",
-    "../workhub/src/client.tsx",
-    "../workhub/src/styles.d.ts",
-    "../../crates/assistant/src/todo/client.tsx"
+    "../../crates/cli/tests/fixtures/executor-plugin.mjs"
   ]
 }

@@ -27,13 +27,12 @@ export interface Copy {
   siteName: string;
   positioning: string;
   theme: { toDark: string; toLight: string };
-  // The README hero's alt text, which describes the same scene the social
+  // The social preview's alt text, which describes the same scene the social
   // preview shows; the site test holds it to README.md's `<img alt>`.
   sceneAlt: string;
   nav: {
     docs: string;
     downloads: string;
-    benchmarks: string;
     community: string;
     security: string;
     asf: string;
@@ -62,9 +61,7 @@ export interface Copy {
     caption: string;
     formula: string;
   };
-  measured: { h2: string; p: string };
-  leaderboard: { h3: string; p: string; more: string; caption: string };
-  paired: { h3: string; p: string; more: string; stat: string; statSmall: string };
+  features: { h2: string; p: string };
   host: { h3: string; p: string; more: string; clients: string[]; core: string; coreSmall: string };
   log: { h3: string; p: string; more: string };
   get: {
@@ -73,14 +70,6 @@ export interface Copy {
     nightly: { title: string; body: string; note: string };
     source: { title: string; body: string; note: string };
     releases: { title: string; body: string; note: string };
-  };
-  reads: {
-    h2: string;
-    p: string;
-    blogLog: { cover: string; small: string; h3: string; meta: string };
-    blogTools: { cover: string; small: string; h3: string; meta: string };
-    nineArm: { cover: string; small: string; h3: string; meta: string };
-    paired: { cover: string; small: string; h3: string; meta: string };
   };
   footer: {
     foundation: string;

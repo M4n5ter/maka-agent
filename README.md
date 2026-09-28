@@ -17,254 +17,41 @@
   under the License.
 -->
 
-<h1 align="center">
-  <img src="apps/desktop/assets/app-icons/sky.png" alt="Maka" width="72" valign="middle" /> Apache Maka (Incubating)
-</h1>
+<h1 align="center"><img src="assets/logo.png" alt="Maka" width="72" /> Apache Maka (Incubating)</h1>
 
-<h3 align="center">Apache Maka (Incubating) is a high-performance agent workspace that keeps a complete record of everything it did.</h3>
+[简体中文](README.zh-CN.md)
 
-<p align="center">
-  <a href="https://maka.apache.org/en/">Website</a> ·
-  <a href="./docs/README.md">Documentation</a> ·
-  <a href="https://maka.apache.org/en/downloads/">Download</a> ·
-  <a href="./README.zh-CN.md">中文文档</a>
-</p>
+Apache Maka (Incubating) is a high-performance agent workspace that keeps a complete record of everything it did.
 
-<p align="center">
-  <a href="https://github.com/apache/maka/stargazers"><img src="https://img.shields.io/github/stars/apache/maka?style=flat&label=stars&color=4C8DFF" alt="GitHub stars" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-4C8DFF?style=flat" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20preview%20%C2%B7%20Linux%20preview-4C8DFF?style=flat" alt="Platforms: macOS, Windows preview, Linux preview" />
-</p>
+Maka runs agents through a native Rust CLI and TUI. A Runtime Host owns execution, permissions and durable state. Model providers, tools and business capabilities use public plugin interfaces.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/readme-hero.en.dark.png" />
-  <img alt="One turn of RuntimeEvents: the model speaks, runs a command, asks permission, you approve, it gets the result, edits a file, the turn ends." src="./.github/assets/readme-hero.en.light.png" />
-</picture>
+## Run from source
 
-## What Maka is
-
-An agent harness exists to finish tasks. We hold it to one measure: how many it completes and at what cost. We publish every run: same model, same official verifier, full per-task record.
-
-- **Measured, not claimed.** Maka is benchmarked against other harnesses on the same model with the official verifier, and the per-task results ship with every report in [`docs/eval/`](./docs/eval).
-- **The log is the runtime.** Every model message, tool call, permission decision and termination is an append-only RuntimeEvent. The UI, the next prompt and crash recovery are projections of that log, never the only copy. Old tool output can leave the next prompt without leaving the log.
-- **Your machine, your model.** Sessions, settings and run records stay local. You bring the model: a cloud API, a local model or a compatible gateway.
-- **One Runtime Host.** Desktop, the TUI and CLI, and Eval are thin clients of one execution authority; Eval owns only the experiment and its scores.
-
-The [website](https://maka.apache.org/en/) walks through one turn of the log and links the published runs. [ARCHITECTURE.md](./ARCHITECTURE.md) has the system map.
-
-## Get Maka
-
-**Apache Releases**: Maka has not made an Apache release yet. When one exists, the signed source archive will be the official release; packages distributed elsewhere are convenience artifacts. See the [downloads page](https://maka.apache.org/en/downloads/) and [`.github/ASF_SOURCE_RELEASE.md`](./.github/ASF_SOURCE_RELEASE.md) for candidate criteria, signing procedures, and verification steps.
-
-**Desktop Nightly**: Built daily from `main` for developers and testers, for macOS on Apple Silicon and Intel, Windows x64 and Linux x64 and arm64; the Windows and Linux builds are unsigned previews. It is not an ASF release and is not intended for production use. The [downloads page](https://maka.apache.org/en/downloads/) has the installers and the platform status.
-
-**Build from source**: To compile and run Desktop, the TUI, or the CLI directly from a source checkout, see the [Build from source](#build-from-source) section below.
-
-## Build from source
-
-### Requirements
-
-- Node.js 22.19 or newer (CI uses Node.js 24);
-- npm (the lockfile and scripts use npm; the current `packageManager` is npm 11);
-- Git;
-- `ripgrep`, used by Runtime's `Grep` tool.
-
-### Start Desktop
+Install Rust 1.98 or newer, Node.js 22.19 or newer, npm 11.19.0 and [just](https://github.com/casey/just). Native Computer Use additionally needs Xcode Command Line Tools on macOS or the X11 development libraries on Linux.
 
 ```sh
 git clone https://github.com/apache/maka.git
 cd maka
-npm ci
-npm run dev
+just setup
+just run
 ```
 
-`npm run dev` starts the Desktop development environment with HMR. To build every workspace before starting Electron, use:
+`just run --help` lists the CLI commands. `just build --release` produces `target/release/maka` (`maka.exe` on Windows). Node.js bundles provider SDKs at build time; the resulting executable runs its embedded JavaScript in V8.
 
-```sh
-npm run dev:full
-```
+## Repository
 
-Direct Peer and Peer Mesh development additionally requires Rust stable 1.98 or newer and the
-platform linker (Xcode Command Line Tools on macOS, MSVC Build Tools on Windows). Use the
-peer-enabled entry point so the native addon is built before Desktop starts:
+| Directory | Purpose |
+| --- | --- |
+| `crates/` | Runtime Host, CLI/TUI, plugins and native platform capabilities |
+| `packages/plugin-sdk/` | Host and declarative terminal-view contracts for JavaScript plugins |
+| `packages/cli/` | npm launcher for platform-specific Rust executables |
+| `scripts/rust/` | Embedded SDK bundling and source-bound npm packaging |
+| `website/` | Independently built project website |
 
-```sh
-npm run dev:peer       # HMR
-npm run dev:full:peer  # full build
-```
+Use `just --list` for development commands. See [Contributing](CONTRIBUTING.md), [Architecture](ARCHITECTURE.md), [Documentation](docs/README.md) and [Security](SECURITY.md).
 
-If dependencies were installed with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, install the Electron platform binary before starting:
+## Distribution
 
-```sh
-node node_modules/electron/install.js
-```
+The npm launcher selects a matching native package; it contains no agent runtime. Native preview artifacts are built and verified from one source archive. Packaging and publication are documented in [packages/cli](packages/cli/README.md).
 
-### First run
-
-Maka does not bundle a shared model account. On first launch:
-
-1. Open `Settings → Models`;
-2. Add an API, local-model, or supported account connection;
-3. Test it and choose a default model;
-4. Return to the workspace and start a task.
-
-The app distinguishes configured, send-ready, and experimental connection states. An account flow that is not wired into Runtime is not presented as a usable model.
-
-## Terminal entry points
-
-For the public npm package, see the [CLI installation and usage guide](./packages/cli/README.md).
-The commands below run the development CLI from a source checkout.
-
-Build the native CLI:
-
-```sh
-cargo build -p maka-cli
-```
-
-Then start the Rust TUI or inspect the native commands:
-
-```sh
-npm run cli:dev
-npm run cli:dev -- --help
-```
-
-The native `maka` executable opens the TUI by default in an interactive terminal;
-`maka tui` is the explicit entry. It uses its own native Host state root, not the
-Desktop development profile. This branch no longer contains the TypeScript TUI.
-On first launch, Maka initializes an empty state root and starts a local Host
-automatically; later terminals reuse it. Existing managed deployments retain
-their launch settings. No system service is installed automatically. In a chat,
-click the composer's sandbox label to change isolation for that session;
-disabling the sandbox requires confirmation and does not disable approvals.
-The same menu manages on-request, never-ask, and category-specific approvals;
-explicit full bypass disables both isolation and approvals in one change.
-Settings → New session sandbox changes only future sessions. The initial default
-is workspace-write with on-request approvals.
-The npm CLI retains automation and Host management commands. Evaluation specs and
-adapters live in [`packages/eval`](./packages/eval).
-
-## Architecture
-
-The backend spine is:
-
-```text
-Desktop / TUI / CLI → Runtime Host → SessionManager → AgentRun
-                                             ↓
-                         Model + Tool Runtime → Runtime Event Log
-                                             ↓
-                              Context / Session / UI projections
-
-Experiment → Cells → Attempts → Results
-                    ↓
-       Runtime Host executes Maka subjects
-```
-
-Start with [ARCHITECTURE.md](./ARCHITECTURE.md). It provides the system map, code boundaries, problem-oriented reading paths, and links to the deep dives under `docs/architecture/`.
-
-## Repository layout
-
-```text
-apps/desktop/          Electron main / preload / React renderer
-crates/                Rust TUI, CLI, runtime and Host (root Cargo workspace)
-
-packages/core/         Pure contracts for Sessions, Events, Permissions, and Connections
-packages/storage/      SQLite operational state, configuration, and payload stores
-packages/mcp/          Provider-neutral Model Context Protocol client integration
-packages/runtime/      AgentRun, model adapters, tools, context, and recovery
-packages/runtime-host/ Single-owner Runtime Host lifecycle, protocol, and client bootstrap
-packages/eval/         Experiment cells, attempts, results, and executor/subject adapters
-packages/computer-use/ Computer-use backend selection, host lifecycle, and protocol adapters
-packages/cli/          npm automation CLI, ACP and Host management
-packages/ui/           Shared conversation, Markdown, Artifact, and UI primitives
-native/                Rust: the direct-peer addon for Runtime Host and the gitoxide helper
-website/               Astro source for maka.apache.org
-
-docs/                  Architecture, product, security, privacy, and test contracts
-scripts/               Build hygiene, visual checks, smoke tests, and release helpers
-skills/                Agent skills shipped with the repository
-patches/               Patches applied to npm dependencies at install
-experiments/           Platform experiments, currently the Windows sandbox smoke scripts
-```
-
-The Rust rewrite's crate map, supported behavior, and validation commands are in
-[Rust runtime host](./docs/rust-runtime.md).
-
-## Local data and recovery
-
-Desktop defaults to the Rust host, with separate host and Desktop state:
-
-```text
-<Electron userData>/
-  runtime-host-rust/
-    runtime-rust.sqlite
-    configuration-rust.sqlite
-  desktop-state/
-```
-
-- `runtime-rust.sqlite` holds committed execution facts. Connections and unencrypted credentials live in `configuration-rust.sqlite`, protected by OS-account permissions.
-- **There is no OS sandbox.** File and shell tools run with your OS permissions.
-- Existing TypeScript State Roots are neither migrated nor adopted. Their `workspaces/default/runtime.sqlite` and `credential-vault.json` remain separate; configure the new host before use.
-- Safe resume is not implemented in Rust. `MAKA_RUNTIME_SAFE_BOUNDARY_RESUME` applies only to the TypeScript backend and does not enable Rust recovery.
-
-Current behavior: [Rust runtime host](./docs/rust-runtime.md). The [privacy](./docs/workspace-privacy-context.md) and [resume](./docs/architecture/runtime-resume-architecture.md) contracts describe the TypeScript backend. See [SECURITY.md](./SECURITY.md) for reporting vulnerabilities.
-
-## Development and verification
-
-Before sending a change, read [CONTRIBUTING.md](./CONTRIBUTING.md).
-
-Common repository-level commands:
-
-```sh
-npm run build
-npm run typecheck
-npm test
-npm run check:release
-```
-
-Run one workspace in isolation:
-
-```sh
-npm --workspace @maka/runtime run test:dist
-npm --workspace @maka/eval run test:dist
-npm --workspace @maka/desktop run test:dist
-```
-
-Use `refresh:model-metadata` to fetch the current catalog from models.dev, update the committed snapshot, and regenerate the derived TypeScript files. A refresh fails closed when any committed model, capability, provider override, or pricing field disappears; after reviewing an intentional upstream removal, acknowledge it with `npm run refresh:model-metadata -- --accept-upstream-removals`. `sync:model-metadata` is intentionally offline: it only regenerates those files from the committed snapshot. Keep access-path-specific overrides in `model-metadata.ts`; do not edit the generated files by hand.
-
-```sh
-npm run refresh:model-metadata
-npm --workspace @maka/core run test:dist
-```
-
-Desktop real-window and visual verification:
-
-```sh
-npm --workspace @maka/desktop run e2e
-npm --workspace @maka/desktop run smoke:real-window
-```
-
-Before submitting code, run typecheck, build, and focused tests proportionate to the change, followed by `git diff --check`.
-
-## Documentation
-
-- [Website](https://maka.apache.org/en/)
-- [Documentation index and authority map](./docs/README.md)
-- [Backend architecture](./ARCHITECTURE.md)
-- [Product design](./DESIGN.md)
-- [Contributing guide](./CONTRIBUTING.md)
-- [Security policy](./SECURITY.md)
-- [DeepWiki](https://deepwiki.com/apache/maka), third-party AI-generated documentation the project does not maintain
-
-## License
-
-Maka is licensed under the [Apache License 2.0](./LICENSE). See
-[NOTICE](./NOTICE) for attribution information. Third-party components remain
-subject to their respective licenses and notices.
-
-Apache Maka, Maka, Apache, the Apache feather, and the Apache Maka project logo are either registered trademarks or trademarks of The Apache Software Foundation.
-
-> [!NOTE]
-> Apache Maka (Incubating) is an effort undergoing incubation at The Apache Software Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is required of all newly accepted projects until a further review indicates that the infrastructure, communications, and decision-making process have stabilized in a manner consistent with other successful ASF projects. While incubation status is not necessarily a reflection of the completeness or stability of the code, it does indicate that the project has yet to be fully endorsed by the ASF. [DISCLAIMER-WIP](./DISCLAIMER-WIP) records the issues the project is currently aware of.
-
-> [!IMPORTANT]
-> Maka is under active development. Data formats, CLI commands, and experimental capabilities may still change.
+Apache Maka is undergoing incubation at the Apache Software Foundation. See [DISCLAIMER-WIP](DISCLAIMER-WIP), [LICENSE](LICENSE) and [NOTICE](NOTICE).

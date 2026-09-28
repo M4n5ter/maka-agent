@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::{ClientFixture, SessionConfiguration};
+use super::{HostFixture, SessionConfiguration};
 use maka_client::Client;
 use maka_event_log::{
     EventLog,
@@ -29,7 +29,7 @@ use maka_runtime::{event::*, session::CopyPurpose};
 use maka_runtime_host::session::{PreparedSession, SessionModel};
 use serde_json::json;
 
-pub(super) async fn seed(log: &EventLog, fixture: &ClientFixture) {
+pub(super) async fn seed(log: &EventLog, fixture: &HostFixture) {
     let path =
         maka_fs_tools::workspace::project::host_path(&fixture.workspace.canonicalize().unwrap())
             .unwrap()

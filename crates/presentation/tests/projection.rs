@@ -24,9 +24,6 @@ use maka_runtime::event::{
 };
 use maka_runtime::model::{ModelEvent, ModelPart, ModelStep, ModelUsage, TextKind};
 use serde_json::json;
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, UNIX_EPOCH};
 
 fn events(outcome: InvocationOutcome) -> Vec<StoredEvent> {
@@ -149,7 +146,7 @@ fn events(outcome: InvocationOutcome) -> Vec<StoredEvent> {
 }
 
 #[test]
-fn completed_and_interrupted_rows_keep_overlay_identity_time_and_original_decoder_contract() {
+fn completed_and_interrupted_rows_keep_overlay_identity_time() {
     let mut messages = Vec::new();
     for outcome in [
         InvocationOutcome::Completed,
@@ -340,28 +337,6 @@ fn completed_and_interrupted_rows_keep_overlay_identity_time_and_original_decode
             }
         }
     }
-    // Same core decoder used by Desktop, not just a permissive JSON assembler.
-    let mut child = Command::new("node")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/support/source.mjs"))
-        .arg("crates/presentation/tests/fixtures/messages.mjs")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&serde_json::to_vec(&messages).unwrap())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[test]

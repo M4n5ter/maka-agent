@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_plugins::{composition::Scope, storage::Namespace};
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
@@ -56,7 +56,7 @@ async fn scenario() {
             }
         }
     });
-    let fixture = ClientFixture::new("maka-background-");
+    let fixture = HostFixture::new("maka-background-");
     let model_server = super::support::message_recovery::Provider::start().await;
     let model = super::support::message_recovery::configure(&fixture, &model_server.base_url).await;
     let configuration =

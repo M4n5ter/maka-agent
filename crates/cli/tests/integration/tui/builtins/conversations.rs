@@ -89,7 +89,7 @@ fn real_host_import_and_recall_open_the_exact_imported_session() {
         .unwrap();
     assert_eq!(
         serde_json::to_value(&session).unwrap()["workspace"]["target"],
-        json!({"kind":"host_path","path":destination})
+        json!({"kind":"host_path","path":maka_fs_tools::workspace::project::host_path(&destination.canonicalize().unwrap()).unwrap()})
     );
     assert_eq!(std::fs::read_to_string(&rollout).unwrap(), transcript);
 

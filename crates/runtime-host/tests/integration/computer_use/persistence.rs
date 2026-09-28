@@ -22,7 +22,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently() {
     tokio::time::timeout(Duration::from_secs(45),async {
-        let fixture=ClientFixture::new("maka-cua-persistence-");
+        let fixture=HostFixture::new("maka-cua-persistence-");
         let (provider,mut requests)=Provider::controlled().await;
         let model=configure(&fixture,&provider.base_url).await;
         let owner=fixture.owner();

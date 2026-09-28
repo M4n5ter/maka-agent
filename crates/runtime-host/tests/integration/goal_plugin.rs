@@ -20,7 +20,7 @@
 use super::{
     javascript_plugins::ready,
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{ModelRequest, Provider, configure},
         peer::Peer,
     },
@@ -30,21 +30,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-async fn binding(peer: &mut Peer) -> Value {
-    let snapshot = peer
-        .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-        .await;
-    let entry = snapshot["result"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "maka.goal")
-        .unwrap();
-    json!({"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],
-        "activation":entry["activation"],"contentDigest":entry["contentDigest"],
-        "clientDigest":entry["clientDigest"]
-    },"method":"request","sessionId":"goal-session"})
+async fn binding(_peer: &mut Peer) -> Value {
+    json!({"packageId":"maka.goal","method":"manage","sessionId":"goal-session"})
 }
 
 async fn open(peer: &mut Peer) -> Value {
@@ -86,28 +73,7 @@ async fn disable(peer: &mut Peer, disabled: bool) {
         )
         .await;
     assert_eq!(result["ok"], true, "{result}");
-    if !disabled {
-        ready(peer).await;
-    } else {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let clients = peer
-                    .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                    .await;
-                if !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.goal")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
+    ready(peer).await;
 }
 
 fn answer(text: &str) -> Value {
@@ -158,7 +124,7 @@ async fn goal_recovers_authority_continues_and_stops_with_exact_control_and_usag
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-goal-");
+    let fixture = HostFixture::new("maka-goal-");
     assert!(
         std::process::Command::new("git")
             .args(["init", "--quiet"])
@@ -191,10 +157,11 @@ async fn scenario() {
         if phase == 0 {
             let created=peer.rpc("session.create",json!({"sessionId":"goal-session","workspace":{"kind":"host_path","path":fixture.workspace},"sandboxMode":"danger-full-access","approvalPolicy":{"kind":"never"},"modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model}})).await;
             assert_eq!(created["ok"], true, "{created}");
-            let client = binding(&mut peer).await["client"].clone();
-            let approved=peer.rpc("plugin.authorization",json!({"client":client,"scope":"profile","command":{"kind":"approve","request":{"operationId":uuid::Uuid::new_v4(),"title":"Continue this Goal","target":{"kind":"session","sessionId":"goal-session"},"capabilities":["executions","read_usage"]}}})).await;
+            let consent = open(&mut peer).await;
+            let approved=peer.rpc("plugin.authorization",json!({"binding":consent["binding"],"target":consent["target"],"command":{"kind":"approve","request":{"operationId":uuid::Uuid::new_v4(),"title":"Continue this Goal","target":{"kind":"session","sessionId":"goal-session"},"capabilities":["executions","read_usage"]}}})).await;
             assert_eq!(approved["ok"], true, "{approved}");
             grant = approved["result"]["grant"]["id"].clone();
+            close(&mut peer, &consent).await;
             arm = json!({"kind":"arm","arm":{"operationId":id,"objective":"Verify the goal integration","grant":grant,"maxIterations":3,"tokenBudget":null,"start":false}});
         }
         let mut envelope = open(&mut peer).await;
@@ -351,16 +318,17 @@ async fn scenario() {
             assert_eq!(limited["goal"]["consumed"]["known"], 8);
             let cancel=call(&mut peer,&envelope,json!({"kind":"arm","arm":{"operationId":uuid::Uuid::new_v4(),"objective":"Cancel this owned execution","grant":grant,"maxIterations":2,"tokenBudget":null,"start":false}})).await;
             assert_eq!(cancel["ok"], true, "{cancel}");
-            let client = binding(&mut peer).await["client"].clone();
-            let revoked = peer.rpc("plugin.authorization", json!({"client":client,"scope":"profile","command":{"kind":"revoke","id":grant}})).await;
+            let consent = open(&mut peer).await;
+            let revoked = peer.rpc("plugin.authorization", json!({"binding":consent["binding"],"target":consent["target"],"command":{"kind":"revoke","id":grant}})).await;
             assert_eq!(revoked["ok"], true, "{revoked}");
             let c = current(&mut peer, &envelope).await;
             let denied = call(&mut peer, &envelope, json!({"kind":"control","id":c["goal"]["id"],"revision":c["revision"],"action":"resume"})).await;
             assert_eq!(denied["ok"], false, "{denied}");
             assert!(requests.try_recv().is_err());
-            let approved = peer.rpc("plugin.authorization", json!({"client":client,"scope":"profile","command":{"kind":"approve","request":{"operationId":uuid::Uuid::new_v4(),"title":"Renew Goal authority","target":{"kind":"session","sessionId":"goal-session"},"capabilities":["executions","read_usage"]}}})).await;
+            let approved = peer.rpc("plugin.authorization", json!({"binding":consent["binding"],"target":consent["target"],"command":{"kind":"approve","request":{"operationId":uuid::Uuid::new_v4(),"title":"Renew Goal authority","target":{"kind":"session","sessionId":"goal-session"},"capabilities":["executions","read_usage"]}}})).await;
             assert_eq!(approved["ok"], true, "{approved}");
             grant = approved["result"]["grant"]["id"].clone();
+            close(&mut peer, &consent).await;
             let resumed = call(&mut peer, &envelope, json!({"kind":"control","id":c["goal"]["id"],"revision":c["revision"],"action":"resume","grant":grant})).await;
             assert_eq!(resumed["ok"], true, "{resumed}");
             let in_flight = next(&mut requests).await;

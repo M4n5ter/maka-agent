@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
+use super::support::host_fixture::HostFixture;
 mod fixtures;
 mod host;
 mod recovery;
@@ -31,8 +31,8 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn native_bundle_transfer_binds_preview_and_recovers_original_receipt_after_restart() {
-    let source = ClientFixture::new("maka-bundle-source-");
-    let destination = ClientFixture::new("maka-bundle-destination-");
+    let source = HostFixture::new("maka-bundle-source-");
+    let destination = HostFixture::new("maka-bundle-destination-");
     let log = source.log().await;
     seed(&log, &source).await;
     fixtures::interrupt(&log).await;

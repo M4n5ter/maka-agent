@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -46,7 +46,7 @@ async fn native_computer_observation_crosses_host_approval_and_journal() {
 
 async fn scenario(native: bool) {
     tokio::time::timeout(Duration::from_secs(45), async {
-        let fixture = ClientFixture::new("maka-computer-");
+        let fixture = HostFixture::new("maka-computer-");
         let (provider, mut requests) = Provider::controlled().await;
         let model = configure(&fixture, &provider.base_url).await;
         let owner = fixture.owner();

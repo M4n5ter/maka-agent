@@ -20,7 +20,7 @@
 use super::{
     javascript_plugins::ready,
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{Provider, configure},
         peer::Peer,
     },
@@ -49,7 +49,7 @@ async fn health_reads_real_shell_state_through_agent_authority() {
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-background-health-");
+    let fixture = HostFixture::new("maka-background-health-");
     assert!(
         std::process::Command::new("git")
             .args(["init", "--quiet"])

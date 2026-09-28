@@ -67,11 +67,6 @@ test('the root redirects to the English homepage without a delay', () => {
   assert.match(page('index.html'), /content="0;url=\/en\/"/u);
 });
 
-const readmeAlt = (locale) =>
-  readFileSync(new URL(locale === 'en' ? 'README.md' : 'README.zh-CN.md', repo), 'utf8').match(
-    /<img alt="([^"]+)" src="\.\/\.github\/assets\/readme-hero\./u,
-  )[1];
-
 const meta = (html, key) =>
   [...html.matchAll(/<meta (?:property|name)="([^"]+)" content="([^"]*)"/gu)].find(
     ([, name]) => name === key,
@@ -88,14 +83,11 @@ test('every page carries a complete link preview', () => {
       assert.ok(meta(html, key), `${path} ${key}`);
     }
     // The alt is the language's positioning line plus the scene description the
-    // README hero already carries, so the two never drift apart.
+    // scene description, so shared previews remain accessible.
     const alt = meta(html, 'og:image:alt');
     assert.equal(meta(html, 'twitter:image:alt'), alt, path);
-    assert.equal(
-      alt,
-      `${meta(page(`${locale}/index.html`), 'description')} ${readmeAlt(locale)}`,
-      path,
-    );
+    const description = meta(page(`${locale}/index.html`), 'description');
+    assert.ok(alt.startsWith(description + ' ') && alt.length > description.length + 20, path);
     assert.equal(meta(html, 'twitter:card'), 'summary_large_image', path);
     assert.equal(meta(html, 'og:locale'), locale === 'en' ? 'en_US' : 'zh_CN', path);
     assert.match(meta(html, 'og:url'), /^https:\/\/maka\.apache\.org\//u, path);
@@ -163,7 +155,7 @@ test('the READMEs and the repository description open with the same sentence', (
   assert.ok(read('README.md').includes(positioning), 'README.md');
   assert.ok(
     read('README.zh-CN.md').includes(
-      'Apache Maka（孵化中）是一个高性能的 Agent 工作台，并完整记录它做过的每一件事。',
+      'Apache Maka (Incubating) 是一个高性能 Agent 工作台，完整记录它做过的每一件事。',
     ),
     'README.zh-CN.md',
   );
@@ -171,14 +163,14 @@ test('the READMEs and the repository description open with the same sentence', (
   assert.equal(description.replace(/\s+/gu, ' ').trim(), positioning);
 });
 
-// The README heroes are screenshots of these pages, so the copy the render
+// Social previews are screenshots of these pages, so the copy the render
 // baked in has to be the copy the pages carry now. Compare through the
 // manifest the render writes, which needs no browser and no pixels.
-test('the committed README heroes and social previews were rendered from the current hero copy', () => {
+test('the committed social previews were rendered from the current hero copy', () => {
   const manifest = JSON.parse(
-    readFileSync(new URL('../../.github/assets/readme-hero.json', import.meta.url), 'utf8'),
+    readFileSync(new URL('../src/assets/social-preview.json', import.meta.url), 'utf8'),
   );
-  const rerender = 'run `npm --workspace @maka/website run readme-hero` and commit the images';
+  const rerender = 'run `npm --prefix website run social-preview` and commit the images';
   for (const locale of locales) {
     const html = page(`${locale}/index.html`);
     assert.equal(heroText(html), manifest[locale], `${locale}: ${rerender}`);

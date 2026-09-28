@@ -35,7 +35,6 @@ pub(super) fn publish(
     staged: &mut Staged,
     manager: Arc<Manager>,
     package: &str,
-    digest: &str,
 ) -> Result<(), String> {
     super::terminal::publish(staged, manager.clone(), package)?;
     for (name, action) in [
@@ -66,13 +65,10 @@ pub(super) fn publish(
         staged
             .insert(
                 key(package, name).map_err(error)?,
-                Endpoint::new(
-                    digest.into(),
-                    Handler::Method(Arc::new(Call {
-                        manager: manager.clone(),
-                        action,
-                    })),
-                ),
+                Endpoint::standalone(Handler::Method(Arc::new(Call {
+                    manager: manager.clone(),
+                    action,
+                }))),
             )
             .map_err(error)?;
     }

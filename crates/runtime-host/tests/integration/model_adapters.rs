@@ -20,7 +20,7 @@
 use super::{
     javascript_plugins::{package, ready},
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{Provider, configure},
         peer::Peer,
     },
@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 async fn external_model_adapters_use_host_io_confirm_settled_tools_and_retire_without_fallback() {
     tokio::time::timeout(Duration::from_secs(60), async {
         for mode in ["shared", "dedicated"] {
-            let fixture = ClientFixture::new("maka-model-adapter-");
+            let fixture = HostFixture::new("maka-model-adapter-");
             let provider = Provider::start().await;
             let model = configure(&fixture, &provider.base_url).await;
             let configuration = ConfigurationStore::for_root(Arc::new(fixture.owner())).await.unwrap();

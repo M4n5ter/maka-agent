@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
+use super::support::host_fixture::HostFixture;
 use super::support::{
     message_recovery::{Provider, configure},
     peer::Peer,
@@ -28,26 +28,8 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn source_client_pages_edits_and_recovers_native_pricing() {
-    let fixture = ClientFixture::new("maka-pricing-client-");
-    for reopened in [false, true] {
-        fixture
-            .run(
-                "--pricing-workspace",
-                reopened,
-                if reopened {
-                    "pricing-reopened"
-                } else {
-                    "pricing-passed"
-                },
-            )
-            .await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn in_flight_model_quotes_are_frozen_and_next_admission_observes_rate_changes() {
-    let fixture = ClientFixture::new("maka-pricing-flight-");
+    let fixture = HostFixture::new("maka-pricing-flight-");
     let (provider, mut requests) = Provider::controlled_with_usage(100, 20).await;
     let model = configure(&fixture, &provider.base_url).await;
     let host = Host::open(fixture.owner()).await.unwrap();

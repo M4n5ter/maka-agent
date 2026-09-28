@@ -30,11 +30,7 @@ use maka_runtime::{
         ProjectionPart, RawToolResultRef,
     },
 };
-use serde_json::{Value, json};
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-};
+use serde_json::json;
 
 fn identity() -> ArchiveIdentity {
     ArchiveIdentity {
@@ -44,69 +40,6 @@ fn identity() -> ArchiveIdentity {
         source_projection_digest: content_digest(b"source"),
         body_sha256: content_digest(b"body")[7..].into(),
         original_bytes: 4,
-    }
-}
-#[test]
-fn frozen_body_and_source_hash_match_typescript_serializers() {
-    let cases = [
-        Projection::Text {
-            text: "quotes \" newline\n😀\0".into(),
-        },
-        Projection::Json {
-            value: json!({"10":10,"2":2,"__proto__":{"safe":true},
-            "😀":1e-7,"\u{e000}":1e21,"nested":[-0.0,1.0,9007199254740993_u64]}),
-        },
-        Projection::Failure,
-        Projection::Content {
-            parts: vec![
-                ProjectionPart::Text {
-                    text: "hello".into(),
-                },
-                ProjectionPart::Artifact {
-                    image: ImageOutput {
-                        detail: None,
-                        mime_type: "image/png".into(),
-                        reference: StorageRef::SessionFile {
-                            session_id: "session".into(),
-                            relative_path: "artifact-1".into(),
-                        },
-                    },
-                },
-            ],
-        },
-    ];
-    let wire: Vec<Value> = cases
-        .iter()
-        .map(|p| serde_json::to_value(p).unwrap())
-        .collect();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new("node").args(["--input-type=module", "-e", r#"
-import {readFileSync} from 'node:fs';
-import {pathToFileURL} from 'node:url';
-import {createHash} from 'node:crypto';
-const root = process.argv[1];
-const {serializeToolResultProjectionV1} = await import(pathToFileURL(root+'/packages/runtime/src/tool-result-archive-encoding.ts'));
-const {stableJsonStringify} = await import(pathToFileURL(root+'/packages/core/src/tool-args-identity.ts'));
-const cases = JSON.parse(readFileSync(0,'utf8'));
-const hash = value => 'sha256:'+createHash('sha256').update(stableJsonStringify(value)).digest('hex');
-process.stdout.write(JSON.stringify(cases.map(p => {
-  const ts = p.kind==='failure' ? {...p,message:'The tool completed, but its model-visible result could not be projected safely.'}
-    : p.kind==='content' ? {...p,parts:p.parts.map(x=>x.kind==='artifact'
-      ? {kind:'artifact',mediaType:x.image.mimeType,ref:{kind:'session_file',relativePath:x.image.ref.relativePath}} : x)} : p;
-  return [serializeToolResultProjectionV1(ts),hash(p)];
-})));
-"#]).arg(root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    serde_json::to_writer(child.stdin.take().unwrap(), &wire).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: Vec<(String, String)> = serde_json::from_slice(&output.stdout).unwrap();
-    for (projection, (body, digest)) in cases.iter().zip(expected) {
-        assert_eq!(encode_projection(projection).unwrap(), body.as_bytes());
-        assert_eq!(projection_digest(projection).unwrap(), digest);
     }
 }
 

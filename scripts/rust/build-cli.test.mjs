@@ -26,7 +26,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildCli, rustTarget } from './build-cli.mjs';
 
-test('release builders and Desktop consumers agree on the target and artifact path', async (t) => {
+test('CLI builds use the requested target and artifact path', async (t) => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const previous = process.env.CARGO_TARGET_DIR;
   process.env.CARGO_TARGET_DIR = 'target/isolated release';

@@ -35,7 +35,7 @@ async fn install(client: &maka_client::Client, directory: &std::path::Path) {
     // idle because this fresh Root has no queued intent or authorization grant.
     std::fs::write(
         package.join("host.mjs"),
-        include_str!("../../../../runtime-host/tests/fixtures/workflow/host.mjs"),
+        include_str!("../../fixtures/executor-plugin.mjs"),
     )
     .unwrap();
     std::fs::write(

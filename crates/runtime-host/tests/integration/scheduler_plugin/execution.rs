@@ -18,7 +18,7 @@
  */
 
 use super::super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{ModelRequest, Provider, configure},
     peer::Peer,
 };
@@ -34,7 +34,7 @@ async fn model_schedules_frozen_root_and_retirement_preserves_accepted_work() {
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-scheduler-execution-");
+    let fixture = HostFixture::new("maka-scheduler-execution-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     restricted_source(&fixture, model.clone()).await;
@@ -297,23 +297,11 @@ async fn ready(peer: &mut Peer) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
-async fn client(peer: &mut Peer) -> Value {
-    ready(peer).await;
-    let page = rpc(peer, "plugin.client.query", json!({"kind":"snapshot"})).await;
-    let entry = page["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["entryId"] == "maka.scheduler.ui")
-        .expect("Scheduler UI active");
-    json!({"entryId":entry["entryId"],"extensionId":entry["extensionId"],"activation":entry["activation"],
-        "contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]})
-}
 async fn remote(peer: &mut Peer, input: Value) -> Value {
-    let client = client(peer).await;
+    ready(peer).await;
     let document =
         rpc(peer, "plugin.remote", json!({"kind":"open_document"})).await["document"].clone();
-    let binding = json!({"client":client,"method":"request","sessionId":null});
+    let binding = json!({"packageId":"maka.scheduler","method":"request"});
     let target = rpc(
         peer,
         "plugin.remote",
@@ -344,13 +332,20 @@ async fn scheduler(peer: &mut Peer, kind: &str, input: Value) -> Value {
     remote(peer, request).await
 }
 async fn approve(peer: &mut Peer, target: Value) {
-    let client = client(peer).await;
+    ready(peer).await;
+    let binding = json!({"packageId":"maka.scheduler","method":"request"});
+    let bound = rpc(
+        peer,
+        "plugin.remote",
+        json!({"kind":"bind","binding":binding}),
+    )
+    .await;
     let capabilities = if target["kind"] == "profile" {
         json!(["notifications"])
     } else {
         json!(["executions", "notifications"])
     };
-    let grant = rpc(peer, "plugin.authorization", json!({"client":client,"scope":"profile","command":{
+    let grant = rpc(peer, "plugin.authorization", json!({"binding":binding,"target":bound["target"],"command":{
         "kind":"approve","request":{"operationId":uuid::Uuid::new_v4(),"title":"Scheduled background work","target":target,"capabilities":capabilities}
     }})).await["grant"].clone();
     remote(peer, json!({"kind":"remember_grant","id":grant["id"]})).await;
@@ -390,10 +385,7 @@ fn answer(text: &str) -> Value {
 
 // Establish a genuinely restricted canonical Session before opening Host. The
 // ordinary session.create wire intentionally does not accept plugin tool ceilings.
-async fn restricted_source(
-    fixture: &ClientFixture,
-    model: maka_runtime_host::session::SessionModel,
-) {
+async fn restricted_source(fixture: &HostFixture, model: maka_runtime_host::session::SessionModel) {
     let input = maka_protocol::session::decode_session_create_input(&json!({
         "sessionId":"scheduler-source", "workspace":{"kind":"host_path","path":fixture.workspace},
         "modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model},

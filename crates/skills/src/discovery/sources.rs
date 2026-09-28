@@ -81,17 +81,11 @@ impl std::fmt::Display for SourceCatalogError {
 }
 impl std::error::Error for SourceCatalogError {}
 
-/// The legacy skill remains shared with TS; Maka Cua belongs to the Rust plugin.
-const BUNDLED: &[(&str, &str)] = &[
-    (
-        "computer-use",
-        include_str!("../../../../packages/runtime/resources/bundled-skills/computer-use/SKILL.md"),
-    ),
-    (
-        "maka-cua",
-        include_str!("../../../computer-use/skills/maka-cua/SKILL.md"),
-    ),
-];
+/// Computer Use is supplied by the native Cua plugin.
+const BUNDLED: &[(&str, &str)] = &[(
+    "maka-cua",
+    include_str!("../../../computer-use/skills/maka-cua/SKILL.md"),
+)];
 
 pub(super) fn trusted_bundled_hash(id: &str, hash: &str) -> bool {
     BUNDLED.iter().any(|(candidate, content)| {

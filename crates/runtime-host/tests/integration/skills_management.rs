@@ -21,7 +21,7 @@ mod terminal;
 
 use super::{
     skills_plugin::{converged, disabled},
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_runtime::artifact::content_digest;
 use maka_runtime_host::server::{Host, HostOptions, local::LocalListener};
@@ -179,7 +179,7 @@ async fn discovery_locations(peer: &mut Peer, workspace: &std::path::Path) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skill_publication_and_confirmed_update_work_through_host_without_a_model() {
-    let fixture = ClientFixture::new("maka-skill-management-");
+    let fixture = HostFixture::new("maka-skill-management-");
     // Browsing never executes a model; this unreachable fixture target only gives
     // the real Session its normal model configuration.
     let model = super::support::message_recovery::configure(&fixture, "http://127.0.0.1:1").await;
@@ -346,7 +346,7 @@ async fn skill_publication_and_confirmed_update_work_through_host_without_a_mode
                 &context["workspace"]["path"],
                 json!({
                     "kind":"mutate","expectedRevision":bundled["revision"],
-                    "mutation":{"kind":"install","sourceType":"bundled","sourceId":"computer-use"}
+                    "mutation":{"kind":"install","sourceType":"bundled","sourceId":"maka-cua"}
                 }),
             )
             .await;

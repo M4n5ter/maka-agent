@@ -22,7 +22,7 @@
 [简体中文](./README.zh-CN.md)
 
 `maka.background-health` is a statically linked Profile plugin exposing the
-`BackgroundTaskHealth` Agent tool. Desktop uses its existing tool result UI.
+`BackgroundTaskHealth` Agent tool.
 
 Input: `ref` from Shell, optional `include_logs` (false by default), optional
 HTTP(S) `url`. The plugin reads the canonical Shell snapshot through Host's

@@ -121,7 +121,7 @@ pub(super) fn setup(manager: &Manager) -> Setup {
     );
     plugins
 }
-pub(super) async fn seed(fixture: &ClientFixture, model: &SessionModel) {
+pub(super) async fn seed(fixture: &HostFixture, model: &SessionModel) {
     let log = fixture.log().await;
     for (id, manager, scope, behavior) in [
         ("managed", "example", Scope::Profile, "example.review"),

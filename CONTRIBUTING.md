@@ -43,40 +43,22 @@ Every pull request to `main` needs an approving review from a committer other th
 
 Submit only work you have the right to contribute, and record third-party sources, licenses, and attribution. Contributions are licensed under the [Apache License 2.0](./LICENSE); for material AI-generated content, follow the [ASF Generative Tooling Guidance](https://www.apache.org/legal/generative-tooling.html).
 
-## Quick start
+## Development
 
-Requires Node `>=22.19.0` and npm `11.19.0` (root `package.json`). Direct Peer or Peer Mesh Desktop development additionally needs Rust stable 1.98 or newer and Xcode Command Line Tools on macOS, or MSVC Build Tools on Windows.
-
-```sh
-git clone https://github.com/apache/maka.git
-cd maka
-npm install                 # root only — never inside a workspace
-npm run build               # builds every workspace in dependency order
-npm --workspace @maka/core run test:dist
-```
-
-## Developing Maka
+Use Rust 1.98 or newer, Node.js 22.19 or newer, npm 11.19.0, just, cargo-nextest and Python 3. The license inventory check also uses cargo-deny.
 
 ```sh
-npm run dev          # desktop app with HMR
-npm run cli:dev      # Rust TUI; `npm run cli:dev -- --help` lists native commands
-npm test             # all workspaces, or: npm --workspace @maka/core run test:dist
+just setup                 # build-time JavaScript dependencies
+just run                   # native TUI
+just run --help            # CLI commands
+just check                 # formatting, Clippy, SDK, scripts and Rust tests
 ```
 
-Building a single workspace only succeeds when its dependencies are already built — when unsure, build from the root. Tests run against compiled output in `dist/`, so `test:dist` covers whatever the last build produced; rebuild before running it. `npm test` from the root does both.
+`just test -p maka-runtime-host` runs one crate's tests. Add build targets or release profiles through `just build` arguments. Use the existing Cargo cache and avoid redundant build profiles.
 
-Before pushing, match CI locally:
+The website is independent: `just website-setup`, then `just website-dev` or `just website-check`. Its dependency changes update `website/package-lock.json`; build tooling and plugin dependencies use the root lockfile.
 
-```sh
-npm run lint
-npm run format:check
-npm run build
-npm run typecheck
-npx knip --workspace apps/desktop
-npx knip --workspace packages/ui
-```
-
-Architecture is documented in [ARCHITECTURE.md](./ARCHITECTURE.md); evaluation commands and contracts live in [`packages/eval`](./packages/eval).
+Architecture is documented in [ARCHITECTURE.md](ARCHITECTURE.md). Each crate owns its implementation and behavioral tests.
 
 ## Rust workspace
 

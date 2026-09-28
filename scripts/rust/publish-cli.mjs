@@ -25,12 +25,13 @@ import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { compareProductReleaseVersions, parseProductReleaseVersion } from '../release-version.mjs';
+import { npmSpawnOptions } from '../npm-spawn.mjs';
 
 // Publish the Windows component before Linux can expose it to WSL users.
 export const previewTargets = ['win32-x64', 'darwin-arm64', 'linux-x64-gnu'];
 
 /** Validate the complete set before the first external write; npm has no multi-package transaction. */
-export async function readPreviewRelease(directory) {
+export async function readNativePreviewRelease(directory) {
   const packages = [];
   for (const target of previewTargets) {
     const receipt = JSON.parse(await readFile(join(directory, target + '.json'), 'utf8'));
@@ -73,6 +74,46 @@ export async function readPreviewRelease(directory) {
     packages.push({ name, version, archive, integrity, source: manifest.makaSource });
   }
   return packages;
+}
+
+export async function readPreviewRelease(directory) {
+  const packages = await readNativePreviewRelease(directory);
+  const receipt = JSON.parse(await readFile(join(directory, 'launcher.json'), 'utf8'));
+  const version = packages[0].version;
+  const filename = `maka-agent-${version}.tgz`;
+  if (
+    receipt.name !== 'maka-agent' ||
+    receipt.version !== version ||
+    receipt.archive !== filename
+  ) {
+    throw new Error('Invalid native launcher receipt');
+  }
+  const archive = join(directory, filename);
+  const hash = createHash('sha512');
+  for await (const chunk of createReadStream(archive)) hash.update(chunk);
+  if (receipt.integrity !== 'sha512-' + hash.digest('base64')) {
+    throw new Error('Launcher archive integrity differs');
+  }
+  const manifest = JSON.parse(
+    execFileSync('tar', ['-xOf', archive, 'package/package.json'], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024,
+      timeout: 30_000,
+    }),
+  );
+  const expected = Object.fromEntries(packages.map(({ name }) => [name, version]));
+  const entries = (value) => Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  if (
+    manifest.name !== 'maka-agent' ||
+    manifest.version !== version ||
+    manifest.bin?.maka !== 'bin/maka.mjs' ||
+    manifest.publishConfig?.tag !== 'rust-preview' ||
+    JSON.stringify(entries(manifest.optionalDependencies)) !== JSON.stringify(entries(expected)) ||
+    JSON.stringify(manifest.makaSource) !== JSON.stringify(packages[0].source)
+  ) {
+    throw new Error('Launcher does not match its native platform set');
+  }
+  return [...packages, { ...receipt, archive, source: packages[0].source }];
 }
 
 async function metadata(path) {
@@ -118,7 +159,7 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
           '--ignore-scripts',
           ...(provenance ? ['--provenance'] : []),
         ],
-        { stdio: 'inherit', timeout: 180_000 },
+        npmSpawnOptions({ stdio: 'inherit', timeout: 180_000 }),
       );
     }
     let verified = false;

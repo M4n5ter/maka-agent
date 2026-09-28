@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_event_log::sessions::SessionCopyResult;
 use maka_protocol::session::{
     RevisionState, SandboxMode, WorkspaceProjection, WorkspaceTarget, copy, sources,
@@ -35,7 +35,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn catalog_revisions_preserve_branch_origin_without_inheriting_execution_status() {
-    let fixture = ClientFixture::new("maka-revision-catalog-");
+    let fixture = HostFixture::new("maka-revision-catalog-");
     let cwd =
         maka_fs_tools::workspace::project::host_path(&fixture.workspace.canonicalize().unwrap())
             .unwrap()

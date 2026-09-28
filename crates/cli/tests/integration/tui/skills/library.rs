@@ -70,7 +70,7 @@ fn skill_library_import_install_update_and_reviewed_delete_through_real_host_pty
     tui.click_text("Browse sources");
     // The tabs also exist on the old installed page. Wait for the destination
     // content before sending another navigation click.
-    tui.wait_for("Computer Use");
+    tui.wait_for("maka-cua");
     tui.click_text("Local sources");
     tui.wait_for("Import Markdown");
     tui.click_text("Import Markdown");

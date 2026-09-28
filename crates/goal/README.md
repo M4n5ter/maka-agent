@@ -21,8 +21,8 @@
 
 [简体中文](./README.zh-CN.md)
 
-`maka.goal` is a statically linked Profile plugin with a separate Desktop Client
-in Session Inspector. Its business state uses public plugin Store/CAS; Host owns
+`maka.goal` is a statically linked Profile plugin with a native terminal view.
+Its business state uses public plugin Store/CAS; Host owns
 Session identity, authorization, execution admission, receipts and accounting.
 
 ## Workflow
@@ -81,18 +81,15 @@ Goal may report success even if its last iteration crossed the threshold.
 
 ## Interfaces and verification
 
-- Paired Remote `request` and standalone `manage`, always bound to a Session:
+- Remote `manage`, always bound to a Session:
   `read`, `arm { arm }`, `control { id, revision, action, grant? }`.
 - Controls: `pause`, `resume`, `cancel`, `complete` (only without pending work).
 - Agent tool: `GoalStatus { status, note }`; no arbitrary Session ID or background
   authority can be supplied through tool input.
-- No legacy `goal.*` protocol routes, TS evaluator or Jev coupling.
 
 Tests cover atomic arm retry, lost storage replies, immutable outbox recovery,
 stale CAS, terminal monotonicity, limits/missing usage, settlement despite usage
 failure, sealed handoff handling, plus real Host consent, continuation, pause,
 report-before-settlement, budget stop, revocation/renewal, cancellation,
 retirement, restart with an accepted execution, and an unknown cancelled dispatch that does
-not pin idle Host. The actual Client is also
-checked in a browser preview with mock Remote responses; this is not a full
-Electron integration test.
+not pin idle Host.

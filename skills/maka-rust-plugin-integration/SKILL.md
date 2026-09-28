@@ -1,6 +1,6 @@
 ---
 name: maka-rust-plugin-integration
-description: Implement, extend, or review plugins against Maka's Rust Runtime Host plugin platform, including native Rust contributions, external JS packages, Host services, Remote and Client slots. Use for the Rust rewrite branch; do not apply its contracts to the older TypeScript plugin platform.
+description: Implement or review Maka plugins using the Rust Runtime Host capabilities, the public Host SDK, and declarative terminal views.
 license: Apache-2.0
 ---
 <!--
@@ -22,34 +22,25 @@ license: Apache-2.0
   under the License.
 -->
 
-# Maka Rust Plugin Integration
+# Maka plugin integration
 
-Use this skill to connect a **product feature** to the Rust Runtime Host plugin platform. A Skill is developer guidance; it is not the runtime Plugin being built. The platform changes quickly, so inspect the target checkout before relying on an API name or status from this file. Source paths below are relative to the Maka repository root.
+Use the owning crate and public SDK as the API authority. Source paths below are relative to the repository root; inspect the relevant consumer before extending a contract.
 
-## Locate the seam
+## Choose the owner
 
-1. Identify the feature's business owner, durable state, side effects, UI, and callers. Decide which policy and presentation belong to the plugin and which canonical facts or authorization decisions must remain with Host. Do not create a second owner for Session identity, Turn admission, event log, permissions, credentials, or accepted execution receipts.
-2. Choose the scope of each contribution: `Profile`, `Session(id)`, or `DesktopUi`. A Session capture overlays Profile contributions; a Desktop UI Entry does not receive Host services. A visible Client slot or Remote method does not itself grant execution or filesystem access.
-3. Choose **native Rust** for a built-in feature registered by Host, or **external JS** for an installable package using the public SDK. Follow an existing consumer before inventing another platform primitive. Read [capability map](references/capability-map.md) when selecting contribution or Host service APIs.
+Keep domain policy and durable intent in the plugin. Host owns Session/Turn identity, admission, event facts, credentials and resource settlement. A visible method or view does not grant execution or filesystem authority.
 
-## Native Rust path
+Use native Rust for built-ins and the Host SDK for installable JavaScript packages. A Session capture overlays Profile contributions. Read [the capability map](references/capability-map.md) when choosing the contribution or Host service.
 
-- Start with `crates/web/src/plugin.rs` and `crates/runtime-host/src/plugins/web.rs` for a small complete path. `crates/graph/src/plugin.rs` shows `SessionBehavior`; `crates/scheduler/src/plugin.rs` shows background work and a separate Desktop UI Entry.
-- Implement `maka_plugins::kernel::Plugin`: validate supported scope/config, use `PluginContext`'s bound capabilities, and return typed `Staged` contributions from `activate`. Use `context.lifecycle` for tasks and cleanup. Host wiring creates a `Definition` and Composition layer/Entry; registration alone does not make a feature visible.
-- For Desktop UI, publish a `Client` from a `DesktopUi` Entry and use a separate Host-side Entry for business state. Connect them through the existing bounded service/Remote path. Verify the actual target code before copying a pattern.
+## Integrate the feature
 
-## External JS path
+- Native built-ins implement `maka_plugins::kernel::Plugin` and publish typed `Staged` contributions. Register their `Definition` and composition Entry in `crates/runtime-host/src/plugins/`. `crates/web/src/plugin.rs` is a small example; Graph adds Session behavior and Scheduler owns durable background work.
+- External packages use `@maka-agent/plugin-sdk/host`. Follow `crates/cli/tests/fixtures/board-plugin/` for a complete package with a Host entry and declarative view factories. The immutable manifest pins the SDK version and entrypoints.
+- Declare views through `ctx.tui.app`; view factories receive pure builders while business callbacks retain scoped Host capabilities. For native presentation, follow an owning crate's `plugin/terminal.rs`.
+- Use `context.lifecycle` in Rust or the scoped JS context for tasks and cleanup. Persist intent before effects, use stable operation IDs, and reconcile uncertain results through the original receipt. Stopping observation does not cancel accepted Host work.
 
-- Follow `crates/runtime-host/tests/fixtures/workflow/`: `maka.extension.json`, `maka.composition.yml`, `host.mjs`, and optional `client.tsx`. The manifest pins Host and Client SDK versions; its composition patch creates the Entries. Build the Client bundle with `@maka-agent/plugin-sdk/build` when UI is needed.
-- Use `@maka-agent/plugin-sdk/host` for tools, behaviors, executors, model adapters, prompt/input, Remote, storage, and scoped calls. Use `@maka-agent/plugin-sdk/client` for slots and a Remote client. The JS package is a trusted extension, not an OS sandbox or Node environment.
-- Store durable business intent before acting on it, use stable operation IDs and receipts for retryable Host commands, and recover uncertain outcomes by querying the original operation. `ctx.run` alone does not keep Host awake; register background pending work when persistent work requires it.
+## Verify the consumer
 
-## Verify the boundary, then the feature
+Exercise composition, activation, admission and the actual effect or view, then verify retirement and recovery where they matter. Partial activation must not publish half a contribution batch, and retired registrations must reject new calls.
 
-- Exercise the product's real consumer path, not only `activate`: composition change → Fiber activation → contribution capture → caller admission → effect/receipt → retirement and restart. Check that partial activation publishes nothing and a retired registration refuses new calls.
-- Cover the feature's relevant permission and scope refusals, cancellation, result-unknown path, duplicate submission, and Host restart. Previously accepted Host work retains its Host owner when the plugin retires; plugin policy must reconcile its own durable intent.
-- Run focused Rust tests for touched crates and `npm --workspace @maka-agent/plugin-sdk run typecheck` when the public JS SDK or fixture changes. Use the external workflow fixture for an end-to-end package path when applicable. Report exactly what ran and what remains unverified.
-
-## Keep the status honest
-
-Read `docs/rust-runtime.zh-CN.md`, `docs/rust-parity.zh-CN.md`, and the current SDK source before claiming parity. Distinguish implemented capabilities from migration targets. Old TypeScript plugin source is not directly compatible. If a needed public service is missing, identify the narrow Host contract and a real consumer; do not pass a private Host handle into a plugin or add a generic hook bus to bypass the boundary.
+Run focused `just test -p <crate>` checks and `just typecheck` for SDK or JavaScript fixture changes. Use `just test-js` for the SDK's runtime contracts. If the public capability is missing, identify the narrow contract and a concrete consumer instead of passing a private Host handle into a plugin.

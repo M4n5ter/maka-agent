@@ -30,7 +30,7 @@ async fn managed_native_input_preserves_identity_content_queue_and_restart_proof
         .unwrap();
 }
 async fn native() {
-    let fixture = ClientFixture::new("maka-managed-native-");
+    let fixture = HostFixture::new("maka-managed-native-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     fixture::seed(&fixture, &model).await;

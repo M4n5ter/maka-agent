@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "id": "example.workflow",
-  "displayName": "Public workflow acceptance",
-  "runtime": { "entry": "host.mjs", "sdkVersion": 3 },
-  "client": { "entry": "client.js", "sdkVersion": 1 },
-  "composition": { "patch": "maka.composition.yml" }
-}

@@ -17,14 +17,14 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
+use super::support::host_fixture::HostFixture;
 use maka_runtime::event::Fact;
 use sha2::{Digest, Sha256};
 mod workflow;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_client_writes_edits_reads_and_reopens_without_repeating_mutation() {
-    let fixture = ClientFixture::new("maka-write-");
+    let fixture = HostFixture::new("maka-write-");
     let mut original = None;
     let mut original_rows = None;
     let mut live = Vec::new();

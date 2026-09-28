@@ -37,7 +37,7 @@ const BODY: &[[f32; 2]] = &[
     [42.0, 108.0],
 ];
 
-// The product mark from scripts/generate-app-icons.py: apex, feet, inner
+// The product mark from scripts/generate-logo.py: apex, feet, inner
 // valley and detached top bar. Keep it upright and separate from the pointer
 // tip, so the bar cannot obscure the position being indicated.
 const BRAND_SCALE: f32 = 0.085;

@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_bundles_follow_publication_not_disk_or_intent_and_fence_reload_and_restart() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-client-plugin-");
+        let fixture = HostFixture::new("maka-client-plugin-");
         let path = fixture.workspace.join("package");
         std::fs::create_dir(&path).unwrap();
         let source = format!("/*{}*/ export default () => {{}};", "🦀中\\\"".repeat(9000));

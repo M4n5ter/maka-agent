@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::{ClientFixture, Host, Peer, package, ready};
+use super::{Host, HostFixture, Peer, package, ready};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
@@ -25,7 +25,7 @@ use std::{sync::Arc, time::Duration};
 async fn pending_work_owns_residency_and_wake_can_replace_itself_without_deadlock() {
     tokio::time::timeout(Duration::from_secs(20), async {
         for mode in ["shared", "dedicated"] {
-            let fixture = ClientFixture::new("maka-background-wake-");
+            let fixture = HostFixture::new("maka-background-wake-");
             let package = package(
                 &fixture.workspace,
                 "example.pending",

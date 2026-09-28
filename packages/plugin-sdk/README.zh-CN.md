@@ -118,43 +118,13 @@ capture 收到不含秘密的 `model`：选定模型 ID、生效的能力和可�
 
 `application.manage` 和 `navigation.status` 提供应用管理页和导航状态插槽。管理操作携带 ID，消费者调用 `handled()` 确认后不会因页面重新挂载而重复执行。
 
-## Client SDK
+## Remote 能力
 
-若提供 `settings.page.onOpenSession(rawSessionId)`，它通过来源 Host 映射会话 ID；页面、Host 或连接退休后拒绝跳转。
+Host 插件通过 `ctx.remote.method(name, callback)` 发布方法，通过 `ctx.remote.stream(name, open)` 发布流。认证后的应用通过 `plugin.remote` 绑定 `{ packageId, method, sessionId }`；绑定固定后端注册并保留文档所有权、取消和 Host 授权检查。
 
-`ctx.slots.register('tool.detail', toolName, Component, { order? })` 替换精确工具名对应的详情内容，使用 Slot 排序中的首个注册。参数包含 canonical Session、Turn、工具调用身份，以及观察到的参数、结果和有界输出；开放 payload 需自行收窄。原生沙箱／恢复操作保留在扩展之外。渲染器缺失、退出或失败时回退到原生详情。
+Rust endpoint 使用 `Endpoint::standalone`。接受原始 Host 路径的 endpoint 还需要 `requiring_host_paths()`；项目 ID 和现有 Session 查询使用显式授权视图。Remote 调用不隐含进程或文件权限。
 
-`ctx.slots.register('settings.page', key, Component, { label, order? })` 在设置页选中的 Host 上同时发布页面与导航项。`label` 是字符串或包含 `en`/`zh-CN`/`zh-TW` 的翻译表；组件接收 `locale` 和注册 key 对应的 `page`。切换 Host、连接或注册后，旧选择失效。插件重连不影响原生设置。其他 Slot 接受可选的 `{ order }`。
-
-`application.overlay` 挂载于应用默认 Host；`session.header.actions` 和 `turn.footer` 挂载于所查看 Session 的 Host，接收 canonical `sessionId`。页脚另含 `turnId`，同一可见 Turn 即使包含多次 steering 也只挂载一次，不替换原生操作。Session／Turn 参数用于定位观察，不授予执行权限。
-
-`ctx.events.subscribe({ kind: 'session.changed' }, listener, onError?)` 观察来源 Host 的失效通知。`session.event` 和 `tool.activity` 还须指定该 Host 的 canonical `sessionId`。回调接收可判别的 `ClientProductEvent`；事件 payload 是需自行收窄的开放产品投影。观察流包括实时增量和可能重放的 seed，不是持久 `LogEvent` 或恰好一次回执。订阅随实例发布，释放或退休立即停止投递，不跟随替代连接。插件领域变化使用公共 Remote 流。
-
-Client SDK API **1** 使用 Desktop 提供的 React。导出来自 `@maka-agent/plugin-sdk/client` 的 `ClientPlugin`；其 `activate(ctx, config)` 暂存带 key 的 Slot 注册和 Effect。初始化结束后关闭 Slot 注册；`ctx.effect` 和 `ctx.style` 在激活后仍可注册，释放函数幂等。异步清理在结算前始终归原实例所有，即使已主动释放；清理失败时，该 Entry 必须等待页面重载，不能自动重新激活。
-
-用 `@maka-agent/plugin-sdk/build` 的 `buildClient({ packageId, entryPoint })` 构建（作者的构建环境需安装 esbuild）。保存返回的 JavaScript，并在 manifest 中声明 `client: { entry: "client.js", sdkVersion: 1 }`。加载器在执行前校验字节和 SDK 版本。插件共享可信 Renderer，不是沙箱，也不提供 Node 兼容层。
-
-Slot 包括 `session.composer.before`、`workspace.composer.before`、`workspace.manage`、`application.manage` 和 `navigation.status`。应用操作携带 ID，并要求显式 `handled()` 确认。工作区参数只是候选目标，不是路径授权。Composer Slot 提供只编辑草稿的 `appendText` 和 `publishSuggestions`。发布对象提供 `update(items)` 和 `dispose()`：刷新时更新同一 owner，effect 清理时销毁。条目身份跨刷新稳定；建议随发布者或目标退出而撤下，不提交消息。每个注册拥有 Entry 内唯一 key 和可选数值排序。包导入需列入 manifest dependencies；React、`react/jsx-runtime` 和 Client SDK 由 Desktop 提供，不要重复打包 React。
-
-建议可设置 `tokenLabel`，将 `insertText` 显示为行内 token。标签只影响外观；提交、编辑与恢复仍使用序列化文本。
-
-可选的 `ctx.localFiles.pick()` / `open(path)` 仅处理 Desktop 本地路径，不用于远程 Host 文件。Desktop 在原生操作前校验 Client 发布身份，导航或退休后返回的文件选择结果会被丢弃。
-
-Desktop 通过 `@maka/ui/plugin` 提供共享 UI 模块（目前为 `Button`）。使用该入口支持的组件，不再打包一份组件库实例；它不暴露内部 UI 包的完整 API。
-
-Host 插件通过 `ctx.remote.method(name, callback)` 或 `ctx.remote.stream(name, open)` 发布接口。Client 插件通过 `ctx.remote.method<Input, Output>(name, sessionId?)` 获取调用函数，或通过 `ctx.remote.stream<Input, Output>(name, sessionId?)` 获取异步迭代器工厂。UI 发布后才能调用；句柄固定到原 Host 连接和后端注册，不随替换重定向。退出迭代会关闭流，UI 卸载或页面导航会关闭所属文档。Remote 调用不是 Agent 调用，不隐含进程权限。
-
-Remote 回调可以抛出携带 `RemoteFailure.code` 的 `Error`。`outcome_unknown` 保留业务结果不确定的语义，需要领域恢复，不能盲目重试；它不会隔离已正常结算的插件。资源清理未确认时由 Host 独立隔离。未分类异常映射为 `operation_unavailable`。
-
-每条流只允许一个在途读取。返回或取消会立即中断等待，不必等生产者响应；晚到的打开结果会清理，晚到的数据会丢弃。这只结束观察，不取消 Host 对已接受工作的结算。
-
-认证后的应用也可通过 `{ packageId, method, sessionId }` 绑定 `plugin.remote`，无需加载插件 UI。没有前端的 Rust 提供者使用 `Endpoint::standalone`，JS 提供者仍使用 `ctx.remote` 注册。包绑定固定后端注册，保留文档所有权、取消和授权检查，不获得前端身份，也不绕过 Host 授权。配对的 Client 绑定另外校验包内容，并随 UI 退休。
-
-接受调用者 Host 路径的 Rust endpoint 声明 `Endpoint::requiring_host_paths()`。Host 在绑定和调用时都检查路径授权，借用其他连接的注册目标也不能绕过。项目 ID 和已有 Session 查询不要求原始路径权限；插件通过显式注入的只读视图访问它们。
-
-`ctx.models.search({ query })` 返回已启用的聊天模型、支持的思考程度及默认值，每页最多 50 项／48 KiB；`complete` 为 false 时应缩小搜索范围。`ctx.models.resolve({ kind: 'named', connectionSlug, model })` 返回相同结构的精确模型选择，`{ kind: 'default' }` 解析当前默认模型。两者均不授予执行权限，也不保证提供商当前可用。
-
-`restoreRoot(operationId)` 按当前工作区和来源上限恢复本包／作用域创建的根会话，不依赖原模型；创建记录不会使普通根会话变成独占托管会话。`restoreChild` 要求原始子会话创建请求。两者均不创建资源；不存在的观察不能排除并发创建。`configure` 每次成功选择都会推进 Session revision，包括相同值，以阻止较早的配置 CAS 覆盖它，不修改事件历史。
+每条流只有一个在途读取。取消会停止观察并清理晚到结果，不撤销已接受的效果。`outcome_unknown` 需要领域恢复，资源清理未确认时由 Host 隔离。
 
 ## Composer 发现
 

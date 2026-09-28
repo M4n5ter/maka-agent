@@ -33,7 +33,6 @@ use crate::{
 };
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     fiber::Context,
@@ -44,11 +43,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub const ID: &str = "maka.scheduler";
-pub const CLIENT_SERVICE: &str = "maka.scheduler.client";
-pub struct Builtin {
-    pub client: Arc<Bundle>,
-}
-struct ClientSupport(Arc<Bundle>);
+pub struct Builtin;
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Config {
@@ -78,7 +73,7 @@ impl Config {
 }
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        matches!(scope, Scope::Profile | Scope::DesktopUi)
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         Config::parse(config.clone())
@@ -91,28 +86,10 @@ impl Plugin for Builtin {
         context: PluginContext,
         config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let bundle = self.client.clone();
         Box::pin(async move {
             let identity = context.lifecycle.identity().map_err(display)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                let provider = context
-                    .services
-                    .get::<ClientSupport>(CLIENT_SERVICE)
-                    .map_err(display)?
-                    .ok_or("Scheduler backend is unavailable")?;
-                let client = provider.acquire().map_err(display)?;
-                staged
-                    .insert(
-                        identity.entry_id,
-                        Client {
-                            bundle: client.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(display)?;
-                return Ok(staged);
-            }
+
             let config = Config::parse(config)?;
             let host = context.host.ok_or("Host capabilities are unavailable")?;
             let repository =
@@ -153,11 +130,7 @@ impl Plugin for Builtin {
                 .insert("ScheduledTask", tools::register(service.clone())?)
                 .map_err(display)?;
             terminal::publish(service.clone(), &mut staged)?;
-            remote::publish(service, &bundle, &mut staged)?;
-            context
-                .services
-                .provide(CLIENT_SERVICE, Arc::new(ClientSupport(bundle)))
-                .map_err(display)?;
+            remote::publish(service, &mut staged)?;
             Ok(staged)
         })
     }

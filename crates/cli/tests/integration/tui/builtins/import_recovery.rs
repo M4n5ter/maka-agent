@@ -308,7 +308,7 @@ fn real_host_import_uses_late_default_pages_models_and_searches_beyond_discovery
     assert_eq!(session.model, "choice-59");
     assert_eq!(
         serde_json::to_value(session).unwrap()["workspace"]["target"],
-        json!({"kind":"host_path","path":destination})
+        json!({"kind":"host_path","path":maka_fs_tools::workspace::project::host_path(&destination.canonicalize().unwrap()).unwrap()})
     );
     fixture.finish(tui);
 }

@@ -18,11 +18,11 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
-use maka_plugins::{client::Bundle, kernel::Definition};
+use maka_plugins::kernel::Definition;
 use maka_runtime_host::{
     plugins::Setup,
     server::{Host, HostOptions, local::LocalListener},
@@ -38,7 +38,7 @@ async fn renamed_workhub_uses_public_consent_and_recovers_exact_receipts() {
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-workhub-public-");
+    let fixture = HostFixture::new("maka-workhub-public-");
     let database_path = fixture
         .owner()
         .canonical_path()
@@ -160,20 +160,9 @@ async fn scenario() {
                 .unwrap()
                 .serve_with_websocket(websocket, host.clone(), stop.clone()),
         );
-        let mut peer = Peer::new(host.clone(), "public-workhub-client").await;
+        let mut peer = Peer::new(host.clone(), "public-workhub-package").await;
         super::javascript_plugins::ready(&mut peer).await;
-        let page = success(
-            peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                .await,
-        );
-        let entry = page["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["entryId"] == "public-workhub-ui")
-            .unwrap();
-        let client = json!({"entryId":entry["entryId"],"extensionId":entry["extensionId"],"activation":entry["activation"],
-            "contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]});
+        let package = json!("z.workhub");
         let document = success(
             peer.rpc("plugin.remote", json!({"kind":"open_document"}))
                 .await,
@@ -182,13 +171,13 @@ async fn scenario() {
         if !reopened {
             let workspace = approve(
                 &mut peer,
-                &client,
+                &package,
                 json!({"kind":"plugin_workspace","sandboxMode":"workspace-write"}),
             )
             .await;
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "authorize",
@@ -196,14 +185,14 @@ async fn scenario() {
             )
             .await;
             let missing =
-                remote_result(&mut peer, &client, &document, None, "resolve", Value::Null).await;
+                remote_result(&mut peer, &package, &document, None, "resolve", Value::Null).await;
             assert_eq!(
                 missing["ok"], false,
                 "an unconfigured default must require a choice"
             );
             let choices = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "models",
@@ -216,7 +205,7 @@ async fn scenario() {
             // creation intent. A later user choice must repair it at the same ID.
             let rejected = remote_result(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "select-coordinator-model",
@@ -226,7 +215,7 @@ async fn scenario() {
             assert_eq!(rejected["ok"], false);
             let view = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "select-coordinator-model",
@@ -240,7 +229,7 @@ async fn scenario() {
             assert_eq!(view["approvalPolicy"], json!({"kind":"on-request"}));
             restricted_selection(
                 address,
-                &client,
+                &package,
                 "select-coordinator-model",
                 json!({"kind":"model","model":model,"thinkingLevel":null}),
             )
@@ -251,7 +240,7 @@ async fn scenario() {
             })).await);
             let target = approve(
                 &mut peer,
-                &client,
+                &package,
                 json!({"kind":"session","sessionId":"workhub-target"}),
             )
             .await;
@@ -259,7 +248,7 @@ async fn scenario() {
             let answer = json!({"operationId":"user-answer","text":"Do the approved work","attachments":[attachment]});
             let source = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "answer",
@@ -269,7 +258,7 @@ async fn scenario() {
             loop {
                 let observed = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     Some(&coordinator),
                     "answer-receipt",
@@ -289,7 +278,7 @@ async fn scenario() {
             // Plugin intent is durable, but absent consent must not admit Host work.
             let denied = remote_result(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "route",
@@ -300,7 +289,7 @@ async fn scenario() {
             assert_eq!(provider.requests.lock().unwrap().len(), 1);
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "authorize",
@@ -311,7 +300,7 @@ async fn scenario() {
             loop {
                 let view = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     None,
                     "inspect",
@@ -325,7 +314,7 @@ async fn scenario() {
             }
             original = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "route",
@@ -333,10 +322,10 @@ async fn scenario() {
             )
             .await;
             assert_eq!(original["kind"], "submitted");
-            wait_assignment(&mut peer, &client, &document, "route-once").await;
+            wait_assignment(&mut peer, &package, &document, "route-once").await;
             let first = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "inspect",
@@ -350,7 +339,7 @@ async fn scenario() {
             while !answer["next"].is_null() {
                 let view = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     None,
                     "inspect",
@@ -366,7 +355,7 @@ async fn scenario() {
             foreign["invocationId"] = json!("another-execution");
             let rejected = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "inspect",
@@ -374,12 +363,13 @@ async fn scenario() {
             )
             .await;
             assert_eq!(rejected["observation"]["kind"], "unavailable");
-            let discovery = success(peer.rpc("plugin.authorization", json!({"client":client,"scope":"profile","command":{"kind":"approve","request":{
+            let consent = consent(&mut peer, &package).await;
+            let discovery = success(peer.rpc("plugin.authorization", json!({"binding":consent["binding"],"target":consent["target"],"command":{"kind":"approve","request":{
                 "operationId":uuid::Uuid::new_v4(),"title":"Discover work","target":{"kind":"profile"},"capabilities":["read_sessions"]
             }}})).await)["grant"].clone();
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "authorize",
@@ -388,7 +378,7 @@ async fn scenario() {
             .await;
             let candidates = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "candidates",
@@ -409,7 +399,7 @@ async fn scenario() {
                 json!({"operationId":"tool-answer","text":"Route this through the WorkHub tool"});
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "answer",
@@ -419,7 +409,7 @@ async fn scenario() {
             loop {
                 let observed = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     Some(&coordinator),
                     "answer-receipt",
@@ -433,7 +423,7 @@ async fn scenario() {
             }
             let history = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "assignments",
@@ -447,11 +437,11 @@ async fn scenario() {
                 .find(|entry| entry["operationId"] != "route-once")
                 .unwrap();
             let assignment = routed["operationId"].as_str().unwrap();
-            wait_assignment(&mut peer, &client, &document, assignment).await;
+            wait_assignment(&mut peer, &package, &document, assignment).await;
             let resume = json!({"operationId":"resume-tool-route","assignmentId":assignment,"action":{"kind":"resume"}});
             let resumed = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "control",
@@ -459,14 +449,14 @@ async fn scenario() {
             )
             .await;
             assert_eq!(resumed["kind"], "resumed");
-            wait_assignment(&mut peer, &client, &document, assignment).await;
+            wait_assignment(&mut peer, &package, &document, assignment).await;
             controls.push(resume);
             let mut replacement = intent.clone();
             replacement["operationId"] = json!("replacement-route");
             let correction = json!({"operationId":"correct-tool-route","assignmentId":assignment,"action":{"kind":"correct","replacement":replacement}});
             let corrected = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "control",
@@ -474,7 +464,7 @@ async fn scenario() {
             )
             .await;
             assert_eq!(corrected["kind"], "corrected");
-            wait_assignment(&mut peer, &client, &document, "replacement-route").await;
+            wait_assignment(&mut peer, &package, &document, "replacement-route").await;
             controls.push(correction);
             // Two assignments can share one Run. Retracting one pending input or
             // stopping consumed shared input must not stop the other owner's work.
@@ -484,7 +474,7 @@ async fn scenario() {
             owner["operationId"] = json!("shared-owner");
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "route",
@@ -497,7 +487,7 @@ async fn scenario() {
                 input["operationId"] = json!(id);
                 let queued = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     Some(&coordinator),
                     "route",
@@ -506,7 +496,7 @@ async fn scenario() {
                 .await;
                 assert_eq!(queued["kind"], "queued");
             }
-            let cancelled = remote(&mut peer, &client, &document, None, "control", json!({
+            let cancelled = remote(&mut peer, &package, &document, None, "control", json!({
                 "operationId":"withdraw-pending","assignmentId":"pending-input","action":{"kind":"stop"}
             })).await;
             assert_eq!(cancelled["disposition"], "cancelled");
@@ -526,7 +516,7 @@ async fn scenario() {
             let continued = receive.await.unwrap();
             success(peer.rpc("plugin.composition.apply", json!({"operations":[{"type":"update","entryId":"public-workhub","patch":{"disabled":false}}]})).await);
             super::javascript_plugins::ready(&mut peer).await;
-            let shared = remote(&mut peer, &client, &document, None, "control", json!({
+            let shared = remote(&mut peer, &package, &document, None, "control", json!({
                 "operationId":"stop-shared","assignmentId":"shared-input","action":{"kind":"stop"}
             })).await;
             assert_eq!(shared["disposition"], "shared");
@@ -535,14 +525,14 @@ async fn scenario() {
                 "plugin cancelled a Run it did not exclusively own"
             );
             continued.reply.send(json!({"index":0,"delta":{"content":"shared work completed"},"finish_reason":"stop"})).unwrap();
-            wait_assignment(&mut peer, &client, &document, "shared-owner").await;
+            wait_assignment(&mut peer, &package, &document, "shared-owner").await;
             success(peer.rpc("session.create", json!({
                 "sessionId":"alternative-target", "workspace":{"kind":"host_path","path":fixture.workspace},
                 "modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model}
             })).await);
             let candidates = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "candidates",
@@ -564,7 +554,7 @@ async fn scenario() {
                 json!({"operationId":"selection-answer","text":"Let me select existing work"});
             remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "answer",
@@ -598,7 +588,7 @@ async fn scenario() {
             })).await);
             let changed = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "candidates",
@@ -620,7 +610,7 @@ async fn scenario() {
             loop {
                 let observed = remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     Some(&coordinator),
                     "answer-receipt",
@@ -634,7 +624,7 @@ async fn scenario() {
             }
             let history = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "assignments",
@@ -653,19 +643,19 @@ async fn scenario() {
             );
             wait_assignment(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 selected["operationId"].as_str().unwrap(),
             )
             .await;
         } else {
-            let view = remote(&mut peer, &client, &document, None, "resolve", Value::Null).await;
+            let view = remote(&mut peer, &package, &document, None, "resolve", Value::Null).await;
             assert_eq!(view["sessionId"], coordinator);
         }
         for control in &controls {
             let result = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "control",
@@ -679,7 +669,7 @@ async fn scenario() {
         }
         let replay = remote(
             &mut peer,
-            &client,
+            &package,
             &document,
             Some(&coordinator),
             "route",
@@ -689,7 +679,7 @@ async fn scenario() {
         assert_eq!(replay, original);
         let stopped = remote(
             &mut peer,
-            &client,
+            &package,
             &document,
             None,
             "control",
@@ -715,7 +705,7 @@ async fn scenario() {
             });
             let failed = remote_result(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "route",
@@ -728,7 +718,7 @@ async fn scenario() {
             );
             let before = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "delegation-model",
@@ -738,10 +728,11 @@ async fn scenario() {
             assert_eq!(before["revision"], Value::Null);
             let choice = json!({"assignmentId":"repair-root", "expectedRevision":before["revision"],
                 "target":{"kind":"model","model":model,"thinkingLevel":null}});
-            restricted_selection(address, &client, "select-delegation-model", choice.clone()).await;
+            restricted_selection(address, &package, "select-delegation-model", choice.clone())
+                .await;
             let repaired_session = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "select-delegation-model",
@@ -751,7 +742,7 @@ async fn scenario() {
             assert_eq!(repaired_session["target"]["thinkingLevel"], Value::Null);
             let stale = remote_result(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 None,
                 "select-delegation-model",
@@ -764,20 +755,20 @@ async fn scenario() {
             );
             repaired = remote(
                 &mut peer,
-                &client,
+                &package,
                 &document,
                 Some(&coordinator),
                 "route",
                 repair_intent.clone(),
             )
             .await;
-            wait_assignment(&mut peer, &client, &document, "repair-root").await;
-            returned = wait_result(&mut peer, &client, &document, "repair-root").await;
+            wait_assignment(&mut peer, &package, &document, "repair-root").await;
+            returned = wait_result(&mut peer, &package, &document, "repair-root").await;
         } else {
             assert_eq!(
                 remote(
                     &mut peer,
-                    &client,
+                    &package,
                     &document,
                     Some(&coordinator),
                     "route",
@@ -787,7 +778,7 @@ async fn scenario() {
                 repaired
             );
             assert_eq!(
-                wait_result(&mut peer, &client, &document, "repair-root").await,
+                wait_result(&mut peer, &package, &document, "repair-root").await,
                 returned
             );
         }
@@ -874,11 +865,11 @@ fn result_notification(request: &Value) -> Option<&Value> {
         })
 }
 
-async fn wait_result(peer: &mut Peer, client: &Value, document: &Value, id: &str) -> Value {
+async fn wait_result(peer: &mut Peer, package: &Value, document: &Value, id: &str) -> Value {
     loop {
         let view = remote(
             peer,
-            client,
+            package,
             document,
             None,
             "inspect",
@@ -896,33 +887,39 @@ fn setup() -> Setup {
     Setup {
         builtins: [(id.into(), Arc::new(Definition {
             id:id.into(), revision:"binary".into(), dependencies:vec![], inject:vec![],
-            plugin: Arc::new(maka_workhub::Builtin {
-                bundle: Bundle::builtin(id, "binary", "export default function() {}").unwrap(),
-            }),
+            plugin: Arc::new(maka_workhub::Builtin),
         }))].into(),
         layers:[(id.into(), vec![
             serde_json::from_value(json!({"type":"insert","rootId":"profile","entry":{"id":"public-workhub","packageId":id}})).unwrap(),
-            serde_json::from_value(json!({"type":"insert","rootId":"desktop-ui","entry":{"id":"public-workhub-ui","packageId":id}})).unwrap(),
             serde_json::from_value(json!({"type":"update","entryId":"maka.workhub","patch":{"disabled":true}})).unwrap(),
         ])].into(),
         ..Default::default()
     }
 }
-async fn approve(peer: &mut Peer, client: &Value, target: Value) -> Value {
-    success(peer.rpc("plugin.authorization", json!({"client":client,"scope":"profile","command":{"kind":"approve","request":{
+async fn consent(peer: &mut Peer, package: &Value) -> Value {
+    let binding = json!({"packageId":package,"method":"authorize"});
+    let bound = success(
+        peer.rpc("plugin.remote", json!({"kind":"bind","binding":binding}))
+            .await,
+    );
+    json!({"binding":binding,"target":bound["target"]})
+}
+async fn approve(peer: &mut Peer, package: &Value, target: Value) -> Value {
+    let consent = consent(peer, package).await;
+    success(peer.rpc("plugin.authorization", json!({"binding":consent["binding"],"target":consent["target"],"command":{"kind":"approve","request":{
         "operationId":uuid::Uuid::new_v4(), "title":"Approve WorkHub work", "target":target, "capabilities":["executions"]
     }}})).await)["grant"].clone()
 }
 async fn remote(
     peer: &mut Peer,
-    client: &Value,
+    package: &Value,
     document: &Value,
     session: Option<&str>,
     method: &str,
     input: Value,
 ) -> Value {
     loop {
-        let reply = remote_result(peer, client, document, session, method, input.clone()).await;
+        let reply = remote_result(peer, package, document, session, method, input.clone()).await;
         // Background notifications are real coordinator Turns. A concurrent
         // user submission retries the same operation, never invents another ID.
         if method == "answer"
@@ -937,13 +934,13 @@ async fn remote(
 }
 async fn remote_result(
     peer: &mut Peer,
-    client: &Value,
+    package: &Value,
     document: &Value,
     session: Option<&str>,
     method: &str,
     input: Value,
 ) -> Value {
-    let binding = json!({"client":client,"method":method,"sessionId":session});
+    let binding = json!({"packageId":package,"method":method,"sessionId":session});
     let target = success(
         peer.rpc("plugin.remote", json!({"kind":"bind","binding":binding}))
             .await,
@@ -989,7 +986,7 @@ async fn upload(peer: &mut Peer, session: &str) -> Value {
 
 async fn restricted_selection(
     address: std::net::SocketAddr,
-    client: &Value,
+    package: &Value,
     method: &str,
     selection: Value,
 ) {
@@ -1017,7 +1014,7 @@ async fn restricted_selection(
     assert_eq!(hello["state"], "ready");
     let mut document = Value::Null;
     let mut target = Value::Null;
-    let binding = json!({"client":client,"method":method,"sessionId":null});
+    let binding = json!({"packageId":package,"method":method,"sessionId":null});
     for step in ["document", "bind", "call"] {
         let input = match step {
             "document" => json!({"kind":"open_document"}),
@@ -1060,11 +1057,11 @@ async fn restricted_selection(
     socket.close(None).await.unwrap();
 }
 
-async fn wait_assignment(peer: &mut Peer, client: &Value, document: &Value, id: &str) {
+async fn wait_assignment(peer: &mut Peer, package: &Value, document: &Value, id: &str) {
     loop {
         let view = remote(
             peer,
-            client,
+            package,
             document,
             None,
             "inspect",

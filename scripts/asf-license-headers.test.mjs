@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +36,7 @@ import {
   hasHeader,
   HeaderNotWritableError,
   licenseLines,
+  listSourceFiles,
   renderHeader,
 } from './asf-license-headers.mjs';
 
@@ -206,14 +208,12 @@ describe('ASF header detection is looser than acceptance', () => {
 describe('ASF header classification', () => {
   test('covers product, script, and documentation source', () => {
     for (const path of [
-      'packages/core/src/settings.ts',
-      'apps/desktop/src/renderer/app-shell.tsx',
+      'crates/config/src/lib.rs',
       'scripts/asf-source-release.mjs',
-      'apps/desktop/build/installer.nsh',
       'crates/tui/locales/zh-CN.ftl',
-      'experiments/windows-sandbox/launcher/src/main.rs',
-      'packages/eval/harbor/egress-proxy/Dockerfile',
-      'packages/eval/harbor/egress-proxy/network-policy',
+      'crates/cli/src/main.rs',
+      'Dockerfile',
+      'justfile',
       '.husky/pre-commit',
       '.github/workflows/ci.yml',
       'README.md',
@@ -227,20 +227,15 @@ describe('ASF header classification', () => {
     const excluded = {
       LICENSE: 'asf-release-documents',
       'package.json': 'no-comment-syntax',
-      'apps/desktop/assets/icon.png': 'binary-files',
       'patches/node-pty+1.2.0-beta.15.patch': 'third-party-source',
-      'packages/ui/src/astryx-chat-reasoning.tsx': 'third-party-source',
-      'packages/runtime/src/bundled-skill-catalog.generated.ts': 'generated-files',
-      'scripts/model-metadata/models-dev-api.snapshot.json': 'no-comment-syntax',
-      'packages/runtime/resources/bundled-skills/computer-use/SKILL.md':
-        'verbatim-runtime-payloads',
+      'Cargo.lock': 'generated-files',
+      'crates/providers/data/catalog-facts.json': 'no-comment-syntax',
       'crates/computer-use/skills/maka-cua/SKILL.md': 'verbatim-runtime-payloads',
       'crates/computer-use/src/api.md': 'verbatim-runtime-payloads',
       'crates/computer-use/THIRD_PARTY_NOTICES': 'third-party-license-texts',
       '.github/pull_request_template.md': 'verbatim-github-templates',
-      'packages/storage/test-fixtures/workflow-schema-v8.sql': 'byte-significant-fixtures',
+      'crates/cli/DEPENDENCIES.rust.tsv': 'third-party-license-texts',
       '.gitattributes': 'no-creative-content',
-      'apps/desktop/.gitignore': 'no-creative-content',
     };
     for (const [path, rule] of Object.entries(excluded)) {
       assert.deepEqual(classifyPath(path), { rule, status: 'excluded' }, path);
@@ -249,10 +244,10 @@ describe('ASF header classification', () => {
 
   test('excludes the mixed-origin files Maka adapted from upstream projects', () => {
     for (const path of [
-      'packages/runtime/src/edit-replace.ts',
-      'packages/runtime/src/model-protocol.ts',
-      'packages/runtime/src/tool-output.ts',
-      'packages/eval/harbor/deepseek-harness-profile/cordis.patch.yml',
+      'crates/apply-patch/src/lib.rs',
+      'crates/apply-patch/src/parser.rs',
+      'crates/apply-patch/src/update.rs',
+      'crates/js-runtime/third-party/deno-telemetry/telemetry.ts',
     ]) {
       assert.deepEqual(
         classifyPath(path),
@@ -264,10 +259,7 @@ describe('ASF header classification', () => {
 
   test('keeps Maka-authored files out of the third-party and fixture rules', () => {
     assert.equal(classifyPath('patches/README.md').status, 'covered');
-    assert.equal(
-      classifyPath('docs/eval/terminal-bench-2.1-maka-vs-kimi-code-v11.md').status,
-      'covered',
-    );
+    assert.equal(classifyPath('docs/README.md').status, 'covered');
   });
 
   /**
@@ -277,10 +269,8 @@ describe('ASF header classification', () => {
    */
   test('does not extend a reviewed exclusion to a directory', () => {
     for (const path of [
-      'apps/desktop/resources/licenses/renderer/helper.ts',
-      'apps/desktop/src/renderer/assets/provider-brands/README.md',
-      'packages/runtime/resources/bundled-skills/new-skill/SKILL.md',
-      'packages/runtime/resources/bundled-skills/README.md',
+      'crates/computer-use/skills/new-skill/SKILL.md',
+      'crates/computer-use/skills/README.md',
       'crates/computer-use/skills/another-skill/SKILL.md',
       'crates/computer-use/src/README.md',
       'crates/computer-use/src/session.rs',
@@ -313,14 +303,14 @@ describe('ASF header classification', () => {
     assert.equal(classifyPath('.claude/launch.json').status, 'excluded');
     assert.equal(classifyPath('.claude/launch.json').rule, 'no-comment-syntax');
     assert.equal(classifyPath('.claude/skills/local/SKILL.md').status, 'covered');
-    assert.equal(classifyPath('maka-proposal-zh-review.txt').status, 'unclassified');
+    assert.equal(classifyPath('local-review.txt').status, 'unclassified');
   });
 });
 
 describe('ASF header audit', () => {
   test('reports unclassified files separately from missing headers', () => {
     const result = auditSourceFiles({
-      files: ['LICENSE', 'packages/core/src/settings.ts', 'vendor/thing.kt'],
+      files: ['LICENSE', 'crates/config/src/lib.rs', 'vendor/thing.kt'],
       mode: 'archive',
     });
     assert.deepEqual(result.unclassified, ['vendor/thing.kt']);
@@ -367,10 +357,10 @@ describe('ASF header audit over an extracted candidate', () => {
     const root = fixtureTree({
       'README.md': renderHeader('html'),
       '.claude/skills/local/SKILL.md': '# Local\n',
-      'maka-proposal-zh-review.txt': 'notes\n',
+      'local-review.txt': 'notes\n',
     });
     const result = auditTree({ root });
-    assert.deepEqual(result.unclassified, ['maka-proposal-zh-review.txt']);
+    assert.deepEqual(result.unclassified, ['local-review.txt']);
     assert.deepEqual(result.missing, ['.claude/skills/local/SKILL.md']);
   });
 
@@ -423,4 +413,14 @@ describe('ASF header audit over an extracted candidate', () => {
     assert.deepEqual(result.unreviewedProvenance, []);
     assert.equal(result.covered, 2);
   });
+});
+
+test('checkout audits include new source files and omit unstaged deletions', () => {
+  const root = fixtureTree({ 'removed.rs': blockHeader, 'kept.rs': blockHeader });
+  const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+  git('init');
+  git('add', 'removed.rs', 'kept.rs');
+  rmSync(join(root, 'removed.rs'));
+  writeFileSync(join(root, 'new.rs'), blockHeader);
+  assert.deepEqual(listSourceFiles(root).files, ['kept.rs', 'new.rs']);
 });

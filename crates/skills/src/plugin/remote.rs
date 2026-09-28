@@ -23,7 +23,6 @@ use super::{ID, Skills};
 use crate::api::{ImportSourceInput, InvocableTarget, WorkspaceContext};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::Bundle,
     contributions::Staged,
     remote::{Caller, Endpoint, Error, Handler, Method, WorkspaceViewInput, key},
 };
@@ -31,13 +30,6 @@ use maka_runtime::execution::{CollaborationMode, SandboxMode, WorkspaceTarget};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-
-/// Plugin-local wiring assembled from public Host capabilities.
-#[derive(Clone)]
-pub(super) struct ClientSupport {
-    pub bundle: Arc<Bundle>,
-}
-pub const CLIENT_SERVICE: &str = "maka.skills.client";
 
 #[derive(Clone, Copy)]
 enum Source {
@@ -70,18 +62,13 @@ struct UserRequest {
     request: Request,
 }
 
-pub(super) fn publish(
-    skills: &Skills,
-    staged: &mut Staged,
-    support: ClientSupport,
-) -> Result<(), String> {
+pub(super) fn publish(skills: &Skills, staged: &mut Staged) -> Result<(), String> {
     staged
         .insert(
             key(ID, "changes").map_err(message)?,
-            Endpoint::new(
-                support.bundle.content_digest.clone(),
-                Handler::Stream(Arc::new(changes::Provider(skills.changed.clone()))),
-            ),
+            Endpoint::standalone(Handler::Stream(Arc::new(changes::Provider(
+                skills.changed.clone(),
+            )))),
         )
         .map_err(message)?;
     for (name, source) in [
@@ -90,13 +77,10 @@ pub(super) fn publish(
         ("project-request", Source::Project),
         ("path-request", Source::Path),
     ] {
-        let endpoint = Endpoint::new(
-            support.bundle.content_digest.clone(),
-            Handler::Method(Arc::new(Service {
-                skills: skills.clone(),
-                source,
-            })),
-        );
+        let endpoint = Endpoint::standalone(Handler::Method(Arc::new(Service {
+            skills: skills.clone(),
+            source,
+        })));
         let endpoint = if matches!(source, Source::Path | Source::User) {
             endpoint.requiring_host_paths()
         } else {
@@ -109,31 +93,22 @@ pub(super) fn publish(
     staged
         .insert(
             key(ID, "user-authorization").map_err(message)?,
-            Endpoint::new(
-                support.bundle.content_digest.clone(),
-                Handler::Method(Arc::new(UserAuthorization(skills.clone()))),
-            )
-            .requiring_host_paths(),
+            Endpoint::standalone(Handler::Method(Arc::new(UserAuthorization(skills.clone()))))
+                .requiring_host_paths(),
         )
         .map_err(message)?;
     staged
         .insert(
             key(ID, "locations").map_err(message)?,
-            Endpoint::new(
-                support.bundle.content_digest.clone(),
-                Handler::Method(Arc::new(Locations(skills.clone()))),
-            )
-            .requiring_host_paths(),
+            Endpoint::standalone(Handler::Method(Arc::new(Locations(skills.clone()))))
+                .requiring_host_paths(),
         )
         .map_err(message)?;
     staged
         .insert(
             key(ID, "import-source").map_err(message)?,
-            Endpoint::new(
-                support.bundle.content_digest.clone(),
-                Handler::Method(Arc::new(Import(skills.clone()))),
-            )
-            .requiring_host_paths(),
+            Endpoint::standalone(Handler::Method(Arc::new(Import(skills.clone()))))
+                .requiring_host_paths(),
         )
         .map_err(message)
 }

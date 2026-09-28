@@ -18,17 +18,9 @@
  * under the License.
  */
 
-// Applies patches/ during the root postinstall.
-//
-// patch-package is a root devDependency, so `npm ci --workspace <name>` and
-// `npm ci --omit=dev` install a tree without it while still running the root
-// postinstall. Failing there would break install modes that work on main, so a
-// missing patch-package is reported and skipped; a patch that exists but no
-// longer applies still fails the install via --error-on-fail.
-//
-// Skipping is safe because those trees are not what ships: every release and CI
-// lane runs a plain root `npm ci`, and an unpatched tree turns
-// packages/runtime/src/__tests__/model-factory-tool-call-index.test.ts red.
+// Apply the exact-version provider SDK patches used by native builds.
+// Release builds install the complete locked dependency tree. A types-only
+// workspace install may omit the root development tooling.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';

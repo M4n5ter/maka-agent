@@ -28,7 +28,6 @@ mod tools;
 use crate::{Mode, owner::Handle};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     fiber::Context,
@@ -47,12 +46,10 @@ use std::{
 
 pub const ID: &str = "maka.agent-graph";
 
-pub struct Builtin {
-    pub bundle: Arc<Bundle>,
-}
+pub struct Builtin;
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        matches!(scope, Scope::Profile | Scope::DesktopUi)
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|object| object.is_empty()) {
@@ -66,23 +63,8 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let bundle = self.bundle.clone();
-        if context
-            .lifecycle
-            .identity()
-            .is_ok_and(|identity| identity.scope == Scope::DesktopUi)
-        {
-            return Box::pin(async move {
-                let identity = context.lifecycle.identity().map_err(error)?;
-                let mut staged = Staged::default();
-                staged
-                    .insert(identity.entry_id, Client { bundle, config })
-                    .map_err(error)?;
-                Ok(staged)
-            });
-        }
         let repository = context
             .host
             .as_ref()
@@ -134,7 +116,7 @@ impl Plugin for Builtin {
                 })
                 .map_err(error)?;
             let mut staged = Staged::default();
-            remote::register(&mut staged, manager.clone(), &bundle.content_digest)?;
+            remote::register(&mut staged, manager.clone())?;
             tools::register(&mut staged, manager.clone())?;
             staged
                 .insert(

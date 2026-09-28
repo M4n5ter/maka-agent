@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{ModelRequest, Provider, configure},
     peer::Peer,
 };
@@ -41,7 +41,7 @@ const MARKER: &str = "boundary-granted-source";
 async fn managed_shell_approvals_enforce_exact_once_grants_and_never_prompt_policy() {
     use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-permissions-");
+        let fixture = HostFixture::new("maka-permissions-");
         let outside = fixture.workspace.parent().unwrap().canonicalize().unwrap().join("outside.txt");
         std::fs::write(&outside, "original").unwrap();
         let (provider, mut requests) = Provider::controlled().await;
@@ -124,7 +124,7 @@ async fn live_grants_preserve_calls_and_narrowing_drains_resources_before_reopen
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-boundary-");
+    let fixture = HostFixture::new("maka-boundary-");
     let private = fixture.owner().canonical_path().join("test-private");
     std::fs::create_dir(&private).unwrap();
     let outside = private.join("protected-source.txt");
@@ -329,7 +329,7 @@ async fn scenario() {
 async fn file_approvals_are_exact_call_scoped_and_refuse_partial_or_protected_mutations() {
     use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-file-permissions-");
+        let fixture = HostFixture::new("maka-file-permissions-");
         // System temporary directories may be writable by default (notably
         // Windows TEMP). Use an unrelated, privately owned project directory.
         let external = tempfile::Builder::new().prefix("maka-file-approval-")

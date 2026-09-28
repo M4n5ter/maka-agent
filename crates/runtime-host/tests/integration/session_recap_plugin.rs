@@ -20,7 +20,7 @@
 use super::{
     javascript_plugins::ready,
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{Provider, configure},
         peer::Peer,
     },
@@ -30,21 +30,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-async fn binding(peer: &mut Peer) -> Value {
-    let snapshot = peer
-        .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-        .await;
-    let entry = snapshot["result"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "maka.session-recap")
-        .unwrap();
-    json!({"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],
-        "activation":entry["activation"],"contentDigest":entry["contentDigest"],
-        "clientDigest":entry["clientDigest"]
-    },"method":"request","sessionId":"recap-session"})
+async fn binding(_peer: &mut Peer) -> Value {
+    json!({"packageId":"maka.session-recap","method":"manage","sessionId":"recap-session"})
 }
 
 async fn open(peer: &mut Peer) -> Value {
@@ -86,28 +73,7 @@ async fn disable(peer: &mut Peer, disabled: bool) {
         )
         .await;
     assert_eq!(result["ok"], true, "{result}");
-    if !disabled {
-        ready(peer).await;
-    } else {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let clients = peer
-                    .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                    .await;
-                if !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.session-recap")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
+    ready(peer).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
@@ -117,7 +83,7 @@ async fn recap_uses_authorized_history_and_model_and_persists_across_host_restar
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-session-recap-");
+    let fixture = HostFixture::new("maka-session-recap-");
     assert!(
         std::process::Command::new("git")
             .args(["init", "--quiet"])

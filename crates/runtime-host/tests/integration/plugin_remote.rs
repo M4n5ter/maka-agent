@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_plugins::{
     client::Bundle,
     kernel::Definition,
@@ -54,7 +54,7 @@ async fn remote_fences_backend_replacement_and_owns_reads_pending_opens_and_docu
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-remote-plugin-");
+    let fixture = HostFixture::new("maka-remote-plugin-");
     let model =
         super::support::message_recovery::configure(&fixture, "http://127.0.0.1:1/v1").await;
     let package = Package::new(BTreeMap::from([

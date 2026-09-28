@@ -47,7 +47,7 @@ export async function buildCli({
   // Zig is only used with an explicit target, including native Linux builds.
   // Cargo writes the output under the Rust triple, without the glibc suffix.
   const outputTarget = linuxRelease ? triple : target;
-  // Desktop dev launches the fixed repository target/debug path.
+  // Development builds use the repository target/debug path.
   const targetDirectory = resolve(repositoryRoot, (release && env.CARGO_TARGET_DIR) || 'target');
   const args = [
     linuxRelease ? 'zigbuild' : 'build',

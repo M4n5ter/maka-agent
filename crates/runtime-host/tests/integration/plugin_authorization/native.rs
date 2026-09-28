@@ -19,7 +19,7 @@
 
 mod scope;
 
-use super::{ClientFixture, Host, LocalListener, Peer, ready, success};
+use super::{Host, HostFixture, LocalListener, Peer, ready, success};
 use maka_client::{Client, Operations};
 use maka_plugins::authorization::{Capability, Request, Target};
 use maka_protocol::plugin::{
@@ -37,7 +37,7 @@ async fn native_consent_uses_exact_backend_without_frontend_and_preserves_durabl
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-native-consent-");
+    let fixture = HostFixture::new("maka-native-consent-");
     let mut saved = None;
     let mut old_target = None;
     for reopened in [false, true] {
@@ -62,18 +62,6 @@ async fn scenario() {
         );
         let (mut peer, hello) = Peer::handshake(host.clone(), "native-consent-admin").await;
         ready(&mut peer).await;
-        if !reopened {
-            success(
-                peer.rpc(
-                    "plugin.composition.apply",
-                    json!({"operations":[
-                        {"type":"update","entryId":"maka.scheduler.ui","patch":{"disabled":true}}
-                    ]}),
-                )
-                .await,
-            );
-            ready(&mut peer).await;
-        }
         let directory = success(
             peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
                 .await,
@@ -83,7 +71,7 @@ async fn scenario() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|entry| entry["entryId"] == "maka.scheduler.ui")
+                .any(|entry| entry["extensionId"] == "maka.scheduler")
         );
         let (client, mut notices) = Client::connect(
             maka_client::local::open_stream(&endpoint).await.unwrap(),

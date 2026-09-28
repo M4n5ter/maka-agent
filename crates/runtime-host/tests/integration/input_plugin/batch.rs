@@ -93,7 +93,7 @@ async fn atomic_batch_revalidates_all_sources_and_replays_once_across_revision_a
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-batch-");
+    let fixture = HostFixture::new("maka-batch-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let preparation = Preparation::default();

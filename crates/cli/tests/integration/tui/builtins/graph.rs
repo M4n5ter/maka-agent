@@ -144,7 +144,9 @@ fn real_host_graph_reads_every_work_and_unicode_page_through_public_routes() {
         assert!(model.await.unwrap_err().is_cancelled());
     });
     let mut tui = fixture.tui();
-    tui.resize(170, 40);
+    // Keep the work pager visible; the long detail below exercises its own
+    // scrolling without racing a second, outer inspector scroll.
+    tui.resize(170, 80);
     tui.wait_for("Graph reading");
     tui.click_text("Graph reading");
     tui.wait_until(|screen| {
@@ -166,9 +168,9 @@ fn real_host_graph_reads_every_work_and_unicode_page_through_public_routes() {
     }
     tui.session_view_action("Show panels");
     tui.wait_for("Give this session an objective");
-    reveal(&mut tui, "Next work items");
     tui.wait_for("Page 16/16");
     tui.wait_for("17 work items");
+    reveal(&mut tui, "Next work items");
     reading::click(&mut tui, "Next work items");
     tui.wait_for("Page 1/1");
     reading::click(&mut tui, "Graph reading instruction");

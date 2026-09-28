@@ -25,11 +25,4 @@
 
 API 提供商拥有随包模型事实、认证、有界模型发现和协议策略。ChatGPT 提供商复用原生 Responses 适配器；提供商认证和发现均不需要 V8。发现可用不代表所有推理协议都已支持。
 
-Cargo 直接嵌入已提交的数据，无需 Node。从仓库元数据快照及提供商定义刷新模型和计费数据时，在仓库根目录执行：
-
-```sh
-node scripts/rust/generate-catalog-facts.mjs crates/providers/data providers
-node scripts/rust/generate-catalog-facts.mjs crates/config/data pricing
-```
-
-结合提供商测试审查生成的数据变更；元数据更新不等于实现新的推理协议。
+Cargo 直接嵌入已提交的模型和计费数据，无需 Node。数据变更须结合提供商测试审查；元数据更新不等于实现新的推理协议。

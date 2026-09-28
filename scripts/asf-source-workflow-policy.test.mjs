@@ -19,63 +19,45 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, test } from 'node:test';
+import test from 'node:test';
+import { parse } from 'yaml';
 
-const workflowPath = join(import.meta.dirname, '../.github/workflows/asf-source-candidate.yml');
-const ciWorkflowPath = join(import.meta.dirname, '../.github/workflows/ci.yml');
+const workflow = parse(
+  readFileSync(new URL('../.github/workflows/asf-source-candidate.yml', import.meta.url), 'utf8'),
+);
+const steps = workflow.jobs.candidate.steps;
 
-describe('ASF source workflow policy', () => {
-  test('binds the candidate handoff to the dispatched commit and artifact', () => {
-    const workflow = readFileSync(workflowPath, 'utf8');
-    assert.doesNotMatch(workflow, /RELEASE_SHA/);
-    assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
-    assert.match(workflow, /--revision "\$GITHUB_SHA"/);
-    assert.match(workflow, /Commit: \\`\$GITHUB_SHA\\`/);
-    assert.match(workflow, /tar -xzf "\$CANDIDATE_PATH"/);
-    assert.match(workflow, /npm run check:third-party-notices/);
-    assert.match(workflow, /npm run check:cli-third-party-notices/);
-    assert.match(workflow, /npm run check:windows-cargo-notices/);
-    assert.doesNotMatch(workflow, /rc_number/);
-    assert.match(workflow, /name: apache-maka-.*-incubating-\$\{\{ github\.sha \}\}-unsigned/);
-    assert.match(workflow, /\$\{\{ env\.CANDIDATE_PATH \}\}\.sha512/);
-    assert.match(
-      workflow,
-      /RUNBOOK_URL: .*\/blob\/\$\{\{ github\.sha \}\}\/\.github\/ASF_SOURCE_RELEASE\.md/,
-    );
-  });
-
-  test('audits source headers in the extracted candidate before it is installed into', () => {
-    const workflow = readFileSync(workflowPath, 'utf8');
-    const auditIndex = workflow.indexOf('npm run check:asf-headers');
-    const installIndex = workflow.indexOf('npm ci');
-    assert.notEqual(auditIndex, -1);
-    assert.notEqual(installIndex, -1);
-    assert.ok(
-      auditIndex < installIndex,
-      'the header audit must read the extracted archive, not a built tree',
-    );
-    assert.match(
-      workflow,
-      /Audit source headers in the extracted candidate\n\s+working-directory: candidate-source\n/,
-    );
-  });
+test('source candidates bind their archive to the dispatched commit', () => {
+  assert.equal(workflow.permissions.contents, 'read');
+  const checkout = steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, '${{ github.sha }}');
+  assert.equal(checkout.with['persist-credentials'], false);
+  assert.equal(
+    steps.find((step) => step.name === 'Create source candidate').run,
+    'just source "$RELEASE_VERSION" "$GITHUB_SHA"',
+  );
+  assert.match(
+    steps.find((step) => step.name === 'Extract exact candidate').run,
+    /tar -xzf "\$CANDIDATE_PATH" --strip-components=1 -C candidate-source/,
+  );
+  assert.equal(
+    steps.find((step) => step.uses?.startsWith('actions/upload-artifact@')).with.path,
+    'release/asf/*',
+  );
 });
 
-describe('ASF source CI policy', () => {
-  test('keeps the header audit install-free and runs generation checks after installation', () => {
-    const workflow = readFileSync(ciWorkflowPath, 'utf8');
-    const headerIndex = workflow.indexOf('name: Check ASF source headers');
-    const installIndex = workflow.indexOf('name: Install dependencies');
-    const sourceGateIndex = workflow.indexOf('name: Verify ASF source release mechanics');
-    assert.notEqual(headerIndex, -1);
-    assert.notEqual(installIndex, -1);
-    assert.notEqual(sourceGateIndex, -1);
-    assert.ok(headerIndex < installIndex);
-    assert.ok(installIndex < sourceGateIndex);
-    assert.match(
-      workflow,
-      /name: Install dependencies\n\s+if: .*steps\.plan\.outputs\.asf_source == 'true'/,
-    );
-  });
+test('validation reads extracted source and audits it before installation', () => {
+  const names = steps.map((step) => step.name);
+  assert.ok(
+    names.indexOf('Audit extracted source') < names.indexOf('Install extracted dependencies'),
+  );
+  for (const name of [
+    'Audit extracted source',
+    'Install extracted dependencies',
+    'Verify extracted source',
+    'Verify website',
+  ]) {
+    assert.equal(steps.find((step) => step.name === name)['working-directory'], 'candidate-source');
+  }
+  assert.match(steps.find((step) => step.name === 'Verify extracted source').run, /just check/);
 });

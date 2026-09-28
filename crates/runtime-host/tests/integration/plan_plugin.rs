@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{ModelRequest, Provider, configure},
     peer::Peer,
 };
@@ -172,7 +172,7 @@ async fn plan_uses_public_controls_and_recovers_settlement_without_replaying_wor
         .unwrap();
 }
 async fn lifecycle() {
-    let fixture = ClientFixture::new("maka-plan-");
+    let fixture = HostFixture::new("maka-plan-");
     assert!(
         std::process::Command::new("git")
             .args(["init", "--quiet"])

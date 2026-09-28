@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -133,7 +133,7 @@ async fn third_party_behavior_and_prepared_input_survive_replay_without_host_bus
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-input-plugin-");
+    let fixture = HostFixture::new("maka-input-plugin-");
     let provider = Provider::start().await;
     let model = configure(&fixture, &provider.base_url).await;
     let business = Business::default();

@@ -213,7 +213,7 @@ impl Plugin for Example {
     }
 }
 pub(super) struct Scene {
-    _root: ClientFixture,
+    _root: HostFixture,
     pub host: Arc<Host>,
     pub peer: Peer,
     pub factory: Arc<Factory>,
@@ -223,7 +223,7 @@ pub(super) struct Scene {
 }
 impl Scene {
     pub async fn new() -> Self {
-        let root = ClientFixture::new("maka-page-document-");
+        let root = HostFixture::new("maka-page-document-");
         let factory = Factory::new();
         let mut setup = Setup::default();
         setup.builtins.insert(

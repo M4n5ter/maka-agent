@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::super::support::{client_probe::ClientFixture, peer::Peer};
+use super::super::support::{host_fixture::HostFixture, peer::Peer};
 use super::{rpc, success};
 use maka_runtime_host::session::SessionModel;
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ use std::path::Path;
 
 pub(super) async fn verify(
     peer: &mut Peer,
-    fixture: &ClientFixture,
+    fixture: &HostFixture,
     model: &SessionModel,
     database: &Path,
     client: &Value,

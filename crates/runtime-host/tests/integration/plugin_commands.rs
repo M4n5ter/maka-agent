@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -48,7 +48,7 @@ async fn plugin_retirement_stops_admission_not_accepted_work_and_reactivation_ke
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-plugin-commands-");
+    let fixture = HostFixture::new("maka-plugin-commands-");
     for args in [
         vec!["init", "--quiet"],
         vec![

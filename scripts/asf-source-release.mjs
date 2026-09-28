@@ -45,7 +45,6 @@ const versionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const requiredReleaseDocuments = ['DISCLAIMER-WIP', 'LICENSE', 'NOTICE'];
 const requiredRootFiles = [...requiredReleaseDocuments, 'package.json', 'package-lock.json'];
 const forbiddenSegments = new Set(['.agents', '.claude', '.git', '.maka-shots', 'node_modules']);
-const forbiddenRootFiles = new Set(['maka-proposal-zh-review.txt']);
 const knownNonCategoryXLicenses = new Set([
   '(AFL-2.1 OR BSD-3-Clause)',
   '(MIT OR CC0-1.0)',
@@ -73,6 +72,8 @@ const knownNonCategoryXLicenses = new Set([
 const categoryXLicensePattern = /(?:^|[^A-Za-z])(?:A?GPL|LGPL)-?\d/i;
 
 const textSourceExtensions = new Set([
+  '.ftl',
+  '.pem',
   '.astro',
   '.cjs',
   '.css',
@@ -94,6 +95,7 @@ const textSourceExtensions = new Set([
   '.ps1',
   '.py',
   '.rs',
+  '.sbpl',
   '.sh',
   '.sql',
   '.svg',
@@ -107,6 +109,9 @@ const textSourceExtensions = new Set([
   '.yml',
 ]);
 const textSourceBasenames = new Set([
+  'justfile',
+  'THIRD_PARTY_NOTICES',
+  'localhost.key',
   '.git-blame-ignore-revs',
   '.gitattributes',
   '.gitignore',
@@ -184,9 +189,6 @@ export function validateArchiveEntries(entries, rootDirectory) {
       throw new Error(`Archive entry is outside ${rootDirectory}: ${entry}`);
     }
     if (segments.some((segment) => forbiddenSegments.has(segment))) {
-      throw new Error(`Forbidden archive entry: ${entry}`);
-    }
-    if (segments.length === 2 && forbiddenRootFiles.has(segments[1])) {
       throw new Error(`Forbidden archive entry: ${entry}`);
     }
     if (segments.at(-1) === '.DS_Store') {

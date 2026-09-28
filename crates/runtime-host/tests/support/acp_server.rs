@@ -18,7 +18,7 @@
  */
 
 use super::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{ModelRequest, Provider, configure},
     peer::Peer,
 };
@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub struct Fixture {
-    pub _root: ClientFixture,
+    pub _root: HostFixture,
     pub workspace: PathBuf,
     pub database: PathBuf,
     pub provider: Provider,
@@ -48,7 +48,7 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn open() -> Self {
-        let root = ClientFixture::new("maka-sdk-acp-");
+        let root = HostFixture::new("maka-sdk-acp-");
         let (provider, model_requests) = Provider::controlled().await;
         let model = configure(&root, &provider.base_url).await;
         let owner = root.owner();

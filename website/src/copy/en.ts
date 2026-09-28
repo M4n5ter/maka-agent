@@ -18,10 +18,6 @@
  */
 
 import type { Copy } from './types';
-
-// The disclaimer is the first paragraph of DISCLAIMER-WIP word for word, so
-// the site, the READMEs and the release file all state it the same way. It
-// appears in English on every page, whatever the page language.
 export const incubatorDisclaimer =
   'Apache Maka is an effort undergoing incubation at The Apache Software Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is required of all newly accepted projects until a further review indicates that the infrastructure, communications, and decision-making process have stabilized in a manner consistent with other successful ASF projects. While incubation status is not necessarily a reflection of the completeness or stability of the code, it does indicate that the project has yet to be fully endorsed by the ASF.';
 
@@ -31,13 +27,15 @@ export const en: Copy = {
   siteName: 'Apache Maka (Incubating)',
   positioning:
     'Apache Maka (Incubating) is a high-performance agent workspace that keeps a complete record of everything it did.',
-  theme: { toDark: 'Switch to dark mode', toLight: 'Switch to light mode' },
+  theme: {
+    toDark: 'Switch to dark mode',
+    toLight: 'Switch to light mode',
+  },
   sceneAlt:
     'One turn of RuntimeEvents: the model speaks, runs a command, asks permission, you approve, it gets the result, edits a file, the turn ends.',
   nav: {
     docs: 'Docs',
     downloads: 'Downloads',
-    benchmarks: 'Benchmarks',
     community: 'Community',
     security: 'Security',
     asf: 'ASF',
@@ -50,16 +48,26 @@ export const en: Copy = {
       'keeps a complete record',
       ' of everything it did.',
     ],
-    lede: 'An agent harness exists to finish tasks. We hold it to one measure: how many it completes and at what cost. We publish every run: same model, same official verifier, full per-task record.',
-    nightly: 'Try Desktop Nightly',
+    lede: 'A native Rust CLI and TUI, with public plugin capabilities and recoverable records of model interactions and tool effects.',
+    nightly: 'CLI distribution',
     source: 'Build from source',
-    fine: 'Nightly is a developer build, not an ASF release',
+    fine: 'Native previews are not ASF releases',
     architecture: 'Read the architecture',
   },
   scene: {
     events: [
-      { tone: 'mut', name: 'Text', label: 'Model says', detail: '"I\'ll rerun the failing test."' },
-      { tone: '', name: 'FunctionCall', label: 'Runs a command', detail: 'Shell · npm test' },
+      {
+        tone: 'mut',
+        name: 'Text',
+        label: 'Model says',
+        detail: '"I\'ll rerun the failing test."',
+      },
+      {
+        tone: '',
+        name: 'FunctionCall',
+        label: 'Runs a command',
+        detail: 'Shell · just test',
+      },
       {
         tone: 'warn',
         name: 'permissionRequest',
@@ -78,35 +86,28 @@ export const en: Copy = {
         label: 'Gets the result',
         detail: 'exit 1 · pruned, kept',
       },
-      { tone: 'dim', name: 'FunctionCall', label: 'Edits a file', detail: 'resume.ts' },
-      { tone: 'dim ok', name: 'endInvocation', label: 'Turn ends', detail: 'run completed' },
+      {
+        tone: 'dim',
+        name: 'FunctionCall',
+        label: 'Edits a file',
+        detail: 'resume.rs',
+      },
+      {
+        tone: 'dim ok',
+        name: 'endInvocation',
+        label: 'Turn ends',
+        detail: 'run completed',
+      },
     ],
     highWater: 'confirmed up to here',
     caption: 'one turn · seven RuntimeEvents · append-only',
     formula: 'State(t) = Project(Log[0…t])',
   },
-  measured: {
-    h2: 'Measured, not claimed. Recorded, not remembered.',
-    p: 'Two things the site can prove today: where Maka stands against other harnesses on the same model, and what the runtime actually writes down while it works.',
-  },
-  leaderboard: {
-    h3: 'Nine harnesses, one model, the official verifier',
-    p: 'Terminal-Bench 2.1 on DeepSeek V4 Flash, every task, scored by the official verifier. The ranking is descriptive; the per-task CSV ships with the report.',
-    more: 'Read the report',
-    caption: 'pass@1 · reasoning max · Maka cost per pass $0.026',
-  },
-  paired: {
-    h3: 'Head to head, same suite',
-    p: 'A paired single run against OpenCode on the same tasks. The gap holds up under an exact McNemar test on this suite, and cost per accepted task came out about the same.',
-    more: 'Read the paired report',
-    stat: '+13.5',
-    statSmall: 'pp · 68.5% vs 55.1%',
-  },
   host: {
     h3: 'One Runtime Host',
-    p: 'Desktop, TUI, CLI and Eval are thin clients of one execution authority.',
+    p: 'The CLI, TUI and plugins share one execution and permission boundary.',
     more: 'How the host works',
-    clients: ['Desktop', 'TUI / CLI', 'Eval'],
+    clients: ['CLI / TUI', 'Plugins'],
     core: 'Runtime Host',
     coreSmall: 'owns execution',
   },
@@ -119,47 +120,19 @@ export const en: Copy = {
     h3: 'Get Maka',
     p: 'Three paths, kept separate on purpose.',
     nightly: {
-      title: 'Try Desktop Nightly',
-      body: 'Daily builds from main for developers and testers, published on GitHub Releases. macOS on Apple Silicon and Intel; Windows and Linux are unsigned previews.',
-      note: 'NOT AN ASF RELEASE · MAY BE UNSTABLE',
+      title: 'Native CLI distribution',
+      body: 'A thin npm launcher selects the matching Rust executable.',
+      note: 'Preview',
     },
     source: {
       title: 'Build from source',
-      body: 'Clone apache/maka, then npm ci and npm run build. Desktop, TUI and CLI share one Runtime Host.',
+      body: 'Clone the repository, then run just setup and just run.',
       note: 'APACHE-2.0',
     },
     releases: {
       title: 'Apache Releases',
       body: 'Maka has not made an Apache release yet. When one exists, the signed source archive is the release; installers are convenience artifacts.',
       note: 'KEYS · SHA-512 · .asc',
-    },
-  },
-  reads: {
-    h2: 'Reports and writing',
-    p: 'Everything the homepage claims links to a report or a document that owns the numbers.',
-    blogLog: {
-      cover: 'State(t) =\nProject(Log[0…t])',
-      small: 'docs/blogs',
-      h3: 'Log Is the Runtime',
-      meta: 'Kun Li · English / 中文',
-    },
-    blogTools: {
-      cover: 'Deferred\ntools',
-      small: 'docs/blogs',
-      h3: 'Beyond Function Calling: How Agents Reach the Real World',
-      meta: 'Kun Li · English / 中文',
-    },
-    nineArm: {
-      cover: '69 / 89',
-      small: 'docs/eval · nine-arm',
-      h3: 'Terminal-Bench 2.1, nine harnesses',
-      meta: 'Report and per-task CSV',
-    },
-    paired: {
-      cover: 'p = 0.0118',
-      small: 'docs/eval · paired',
-      h3: 'Maka vs OpenCode',
-      meta: 'Report and per-task CSV',
     },
   },
   footer: {
@@ -190,10 +163,9 @@ export const en: Copy = {
         note: 'NOT YET',
       },
       nightly: {
-        label: 'Desktop Nightly',
-        value:
-          'Daily from main. macOS arm64 and x64; Windows x64 and Linux x64 and arm64 as unsigned previews.',
-        note: 'NOT AN ASF RELEASE',
+        label: 'Native CLI',
+        value: 'Source-bound platform packages',
+        note: 'Preview',
       },
       source: {
         label: 'Source',
@@ -215,23 +187,24 @@ export const en: Copy = {
       checksum: 'Step 3: Check the checksum',
     },
     nightly: {
-      h2: 'Desktop Nightly',
-      note: 'NOT AN ASF RELEASE',
-      p: 'Desktop Nightly is built daily from main for developers and testers and published as a GitHub prerelease. Choose the newest Maka Desktop Nightly; after installation the app updates itself on the Nightly channel. It is not an ASF release and is not intended for production use. It ships for macOS on Apple Silicon and Intel, Windows x64, and Linux x64 and arm64.',
-      windows: 'The Windows and Linux builds are unsigned previews, not a supported release tier.',
+      h2: 'Native CLI distribution',
+      note: 'Preview software, not an ASF release',
+      p: 'The Rust CLI is distributed as exact-version native platform packages. The npm launcher only selects and runs the executable; see the CLI distribution documentation for building and publishing.',
+      windows: 'macOS arm64, Linux x64 (glibc), Windows x64.',
     },
     source: {
       h2: 'Build from source',
       prerequisites: [
-        'Node.js 22.19 or newer',
-        'npm 11',
-        'Git',
-        'ripgrep, which the Grep tool shells out to',
+        'Rust 1.98 or newer, Node.js 22.19 or newer, npm 11.19.0 and just.',
+        'macOS needs Xcode Command Line Tools; Linux Computer Use needs the X11 development libraries.',
       ],
       clone: 'Step 1: Clone the repository',
       build: 'Step 2: Install and build every workspace',
-      after:
-        'CONTRIBUTING covers the workspace layout and how to start Desktop, the TUI and the CLI from that build.',
+      after: 'The contribution guide covers builds, validation and plugin development.',
     },
+  },
+  features: {
+    h2: 'One native runtime',
+    p: 'Execution, permissions and durable state belong to one Rust Runtime Host.',
   },
 };

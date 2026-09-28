@@ -19,7 +19,7 @@
 
 use super::super::{
     javascript_plugins::{package, ready},
-    support::{client_probe::ClientFixture, message_recovery, peer::Peer},
+    support::{host_fixture::HostFixture, message_recovery, peer::Peer},
 };
 use maka_runtime::interaction::InteractionRequest;
 use maka_runtime_host::server::{Host, local::LocalListener};
@@ -41,7 +41,7 @@ async fn agent_http_requires_approval_and_preserves_grant_scope_and_filesystem_b
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-http-permissions-");
+    let fixture = HostFixture::new("maka-http-permissions-");
     let (provider, mut requests) = message_recovery::Provider::controlled().await;
     let model = message_recovery::configure(&fixture, &provider.base_url).await;
     let received = Arc::new(AtomicUsize::new(0));

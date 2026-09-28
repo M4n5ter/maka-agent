@@ -303,7 +303,7 @@ async fn verify_intent(
     }
 }
 
-pub(super) async fn tighten(fixture: &super::super::support::client_probe::ClientFixture) {
+pub(super) async fn tighten(fixture: &super::super::support::host_fixture::HostFixture) {
     // Only after the prior Host and all its capabilities have left scope.
     let log = maka_event_log::EventLog::for_root(Arc::new(fixture.owner()))
         .await

@@ -65,29 +65,20 @@ describe('unread paths', () => {
   it('excludes every lockfile format in the tree', () => {
     assert.equal(readable([file('pnpm-lock.yaml', 9000, 8000)]), 0);
     assert.equal(readable([file('package-lock.json', 9000)]), 0);
-    assert.equal(readable([file('native/runtime-host-peer/Cargo.lock', 3524, 100)]), 0);
+    assert.equal(readable([file('Cargo.lock', 3524, 100)]), 0);
     assert.equal(readable([file('uv.lock', 500)]), 0);
   });
 
   it('excludes both spellings the notice generator emits', () => {
-    assert.equal(
-      readable([file('apps/desktop/resources/licenses/npm/THIRD_PARTY_NOTICES.txt', 900)]),
-      0,
-    );
-    assert.equal(
-      readable([file('apps/desktop/src/renderer/public/THIRD_PARTY_LICENSES.txt', 900)]),
-      0,
-    );
+    assert.equal(readable([file('crates/cli/THIRD_PARTY_NOTICES.rust.txt', 900)]), 0);
+    assert.equal(readable([file('crates/computer-use/THIRD_PARTY_NOTICES.txt', 900)]), 0);
   });
 
   it('excludes generated sources, snapshots and binaries', () => {
-    assert.equal(
-      readable([file('packages/runtime/src/bundled-skill-catalog.generated.ts', 5000)]),
-      0,
-    );
+    assert.equal(readable([file('crates/example/src/catalog.generated.rs', 5000)]), 0);
     assert.equal(readable([file('scripts/model-metadata/models-dev-api.snapshot.json', 4000)]), 0);
-    assert.equal(readable([file('packages/storage/test-fixtures/v0.1.6/runtime.sqlite', 1)]), 0);
-    assert.equal(readable([file('apps/desktop/build/background@2x.png', 1)]), 0);
+    assert.equal(readable([file('crates/event-log/tests/fixtures/runtime.sqlite', 1)]), 0);
+    assert.equal(readable([file('assets/logo.png', 1)]), 0);
   });
 
   it('normalizes Windows separators', () => {
@@ -95,11 +86,11 @@ describe('unread paths', () => {
   });
 
   it('keeps hand-authored sources, including tests and locale copy', () => {
-    assert.equal(readable([file('packages/cli/src/main.ts', 20, 4)]), 24);
-    assert.equal(readable([file('packages/core/test/session.test.ts', 300)]), 300);
-    assert.equal(readable([file('apps/desktop/src/renderer/locales/mcp-copy.ts', 80)]), 80);
+    assert.equal(readable([file('crates/cli/src/main.rs', 20, 4)]), 24);
+    assert.equal(readable([file('crates/agent/tests/session.rs', 300)]), 300);
+    assert.equal(readable([file('crates/tui/src/i18n.rs', 80)]), 80);
     // Named for the notices but hand-written policy prose.
-    assert.equal(readable([file('docs/third-party-notices-policy.md', 40)]), 40);
+    assert.equal(readable([file('docs/README.md', 40)]), 40);
   });
 
   it('keeps a dependency bump at the tier its readable diff earns', () => {

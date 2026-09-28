@@ -213,24 +213,16 @@ pub(super) async fn body(socket: &mut WebSocketStream<TcpStream>) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn canonical_tool_confirmation_matches_ts_and_changed_properties_restore_full_input() {
+async fn canonical_tool_confirmation_and_changed_properties_restore_full_input() {
     tokio::time::timeout(Duration::from_secs(25), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/v1", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            let mut oracle = accept(&listener).await;
-            let first = wire(&mut oracle, "first").await;
-            call(&mut oracle).await;
-            let delta = body(&mut oracle).await;
-            assert_eq!(delta["previous_response_id"], "resp_1");
-            assert_eq!(delta["input"].as_array().unwrap().len(), 1);
-            assert_eq!(delta["input"][0]["type"], "function_call_output");
-            finish(&mut oracle, "resp_2").await;
-            let _ = oracle.next().await;
-
+            let result =
+                json!({"type":"function_call_output","call_id":"call_1","output":"result"});
             for mode in CONFIRMATION_CASES {
                 let mut socket = accept(&listener).await;
-                assert_eq!(wire(&mut socket, "first").await, first);
+                wire(&mut socket, "first").await;
                 call(&mut socket).await;
                 let next = body(&mut socket).await;
                 if mode == "properties" {
@@ -241,9 +233,10 @@ async fn canonical_tool_confirmation_matches_ts_and_changed_properties_restore_f
                         next["input"][1],
                         call_events().last().unwrap()["response"]["output"][0]
                     );
-                    assert_eq!(next["input"][2], delta["input"][0]);
+                    assert_eq!(next["input"][2], result);
                 } else if mode == "confirmed" {
-                    assert_eq!(next, delta);
+                    assert_eq!(next["previous_response_id"], "resp_1");
+                    assert_eq!(next["input"], json!([result]));
                 } else {
                     assert!(next.get("previous_response_id").is_none(), "{mode}");
                     assert_eq!(next["input"].as_array().unwrap().len(), 3, "{mode}");
@@ -251,28 +244,12 @@ async fn canonical_tool_confirmation_matches_ts_and_changed_properties_restore_f
                         next["input"][1].get("id").is_none(),
                         "full SDK projection, not raw cache"
                     );
-                    assert_eq!(next["input"][2], delta["input"][0]);
+                    assert_eq!(next["input"][2], result);
                 }
                 finish(&mut socket, "resp_2").await;
                 let _ = socket.next().await;
             }
         });
-        let oracle = tokio::process::Command::new("node")
-            .arg(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../tests/fixtures/responses-websocket-oracle.mjs"),
-            )
-            .arg(&base)
-            .arg("continuation")
-            .kill_on_drop(true)
-            .output()
-            .await
-            .unwrap();
-        assert!(
-            oracle.status.success(),
-            "{}",
-            String::from_utf8_lossy(&oracle.stderr)
-        );
         let executor = ModelExecutor::new(1, Duration::from_secs(10)).unwrap();
         for mode in CONFIRMATION_CASES {
             let lane = Conversation::default();

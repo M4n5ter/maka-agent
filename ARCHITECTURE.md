@@ -17,71 +17,19 @@
   under the License.
 -->
 
-[中文](./ARCHITECTURE.zh-CN.md)
+# Architecture
 
-# Maka Backend Architecture
+[简体中文](ARCHITECTURE.zh-CN.md)
 
-Each State Root has its own Runtime Host as execution and write authority. Desktop, TUI, CLI, bots, and evaluation clients execute work through that Host boundary rather than creating a second Runtime for the same state. Multiple Hosts may own different State Roots; Peer Mesh supplies endpoint membership and connections without combining their execution authorities.
+Maka has one Rust Runtime Host. The CLI and TUI connect through the public client protocol; neither owns agent execution or durable state.
 
-```mermaid
-flowchart LR
-    C["Desktop / TUI / CLI / Bot"] --> H["Runtime Host"]
-    H --> S["SessionManager"]
-    S --> R["AgentRun + RuntimeKernel"]
-    R --> T["Tool Runtime"]
-    R --> L["Runtime Event Log"]
-    S --> G["Agent Graph Control Plane"]
-    G --> R
-    L --> P["Context / Session / UI / Recovery projections"]
+- **Admission and settlement:** `crates/runtime-host` admits operations, captures execution boundaries and coordinates resource cleanup. `crates/event-log` owns durable execution facts and state-root ownership.
+- **Agent execution:** `crates/agent`, `crates/runtime` and `crates/model` build model requests and settle tool effects. `crates/providers` owns provider-specific authentication, discovery and policy; `crates/responses` owns native Responses transport.
+- **Capabilities:** business plugins use `crates/plugins` capabilities for storage, models, execution, credentials, HTTP and presentation. Host owns authority and lifetimes; each plugin owns its domain policy.
+- **JavaScript:** `crates/js-runtime` embeds V8 for Code Mode and JavaScript plugins. Provider SDKs are bundled at build time. Guest code reaches host capabilities through explicit bindings.
+- **Computer Use:** `crates/computer-use` owns its own REPL and session lifetime. It works independently of Code Mode and supports native application and browser surfaces.
+- **Presentation:** `crates/client` implements the client protocol. `crates/tui` renders native terminal views, while the plugin SDK describes capabilities and declarative views without owning host state.
 
-    E["@maka/eval\nExperiment → Cells → Attempts → Results"] --> H
-    X["External subjects"] --> E
-```
+The npm package in `packages/cli` only chooses and launches a matching executable. It does not add a second runtime, configuration store or tool implementation.
 
-Runtime Host owns Session and Turn identity, agent lifecycle, continuation, tools, permissions, and events. `@maka/eval` owns benchmark experiment semantics only: subjects, tasks, repetitions, cells, immutable attempts, result selection, budgets, and verifier configuration. A Maka subject always crosses the public Runtime Host client/protocol boundary; an external competitor is a generic external subject.
-
-## Runtime layers
-
-1. Runtime Event Log is the canonical source for model messages, tool calls, tool results, and termination facts. Context pruning and compaction change provider input projections, not history.
-2. SessionManager and AgentRun own execution lifecycle. Runtime Host owns admission, client capabilities, interactions, and the public protocol.
-3. Agent Graph schedules dependent work using child Sessions and sends every activation back through the same Runtime.
-4. Storage owns interactive Runtime state. It has no Eval-specific root, TaskRun ledger, or experiment result authority.
-
-## Eval boundary
-
-```text
-Experiment = benchmark + executor + subjects + tasks + repetitions
-Cell       = task × repetition × subject
-
-repetition   = a new experimental sample
-infra retry  = a replacement attempt for the same cell
-continuation = internal Runtime Host behavior within a Maka subject
-```
-
-One Experiment uses one fully expanded declarative spec. Every arm shares its executor, benchmark, tasks, budget, and verifier. A/B is simply a two-arm Experiment. Harbor and Pier are executor adapters, not independent workflows.
-
-The result kernel contains only score, normalized usage, attributable cost, duration, status or failure reason, and artifacts. When a cell has multiple attempts, the earliest valid attempt is authoritative; operators cannot choose a preferred outcome.
-
-## Code boundaries
-
-| Area | Responsibility |
-|---|---|
-| `packages/core` | Pure Session, Runtime Event, AgentRun, permission, and protocol contracts |
-| `packages/storage` | Interactive Runtime stores and SQLite control planes |
-| `packages/runtime` | SessionManager, AgentRun, model adapters, tools, context, recovery, and Graph reconciliation |
-| `packages/runtime-host` | Sole hosted execution authority and public client/protocol |
-| `packages/eval` | Experiment cells, attempts, result selection, and subject/executor adapters |
-| `packages/cli` | TUI, `maka run`, and the public `maka eval` route |
-| `apps/desktop/src/main` | Electron composition and product-entry adapters |
-
-## Reading paths
-
-- Host ownership, admission, observation, Client isolation and lifecycle: [Runtime Host architecture](./docs/architecture/runtime-host-architecture.md).
-- Proposed Desktop conversation projection design (Chinese; not yet implemented): [Host-owned conversation lifecycle](./docs/architecture/desktop-conversation-host-projection.zh-CN.md).
-- Network identity, membership, path selection and stream recovery: [Peer Mesh architecture](./docs/architecture/peer-mesh-architecture.md).
-- Runtime facts and projections: [Runtime core](./docs/architecture/runtime-core-architecture-draft.md) and [compaction](./docs/architecture/llm-compaction-events-log-projection-draft.md).
-- Crash recovery and continuation: [Runtime resume](./docs/architecture/runtime-resume-architecture.md).
-- Multi-agent scheduling: [Agent Graph](./docs/architecture/agent-graph-stream-scheduling-draft.md).
-- Evaluation behavior and public seams: [`packages/eval`](./packages/eval).
-
-Historical designs remain under [`docs/archive`](./docs/archive/README.md). Current GitHub issues and source take precedence over older drafts.
+See the owning crate READMEs for detailed contracts, and [the SDK](packages/plugin-sdk/README.md) for JavaScript plugin authoring.

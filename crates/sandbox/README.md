@@ -84,9 +84,8 @@ administrator consent through a one-shot helper. The Host stays unelevated;
 private recovery records remain owned by the invoking user. `status --root PATH`
 reads durable installation state without elevation. Setup/removal observation is
 bounded by `--timeout-ms` (180000 by default); cancellation does not undo accepted work.
-Desktop requests setup on first use, without exposing account or ACL settings.
-Cancelling either confirmation preserves the draft. Retrying setup repairs missing
-accounts or an interrupted removal under the same administrator consent.
+Retrying setup repairs missing accounts or an interrupted removal under the same
+administrator consent.
 
 This is an execution boundary for model-directed effects, not an isolation boundary
 against malicious trusted plugins.
@@ -94,9 +93,8 @@ against malicious trusted plugins.
 New Sessions default to `workspace-write` with `on-request` approvals: ordinary
 workspace writes are allowed; tool network access and writes outside the allowed
 roots need approval. `never` refuses escalation without disabling the sandbox.
-Desktop's composer permissions menu offers an explicitly confirmed full bypass
-for the current task. `maka code --dangerously-bypass-approvals-and-sandbox` selects
-the same `danger-full-access` + `never` combination. Neither changes future task defaults.
+`maka code --dangerously-bypass-approvals-and-sandbox` selects
+`danger-full-access` + `never` for the current task without changing future task defaults.
 Code cells use the production file tools; without an approval UI, denied operations fail.
 
 ## Diagnose a command

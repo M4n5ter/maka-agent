@@ -23,7 +23,7 @@ mod installed;
 mod observations;
 mod sources;
 
-use super::{ClientFixture, Host, HostOptions, LocalListener, Peer, Setup, ready, response, rpc};
+use super::{Host, HostFixture, HostOptions, LocalListener, Peer, Setup, ready, response, rpc};
 use maka_plugins::{contributions::Staged, remote::Endpoint};
 use serde_json::{Value, json};
 use std::{

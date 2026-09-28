@@ -31,12 +31,7 @@ const output = process.argv[2];
 if (!output) throw new Error('Cargo output directory is required');
 const locked = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
 const entry = resolve(root, 'crates/js-runtime/trusted/adapter.js');
-for (const name of [
-  '@ai-sdk/openai',
-  '@ai-sdk/anthropic',
-  '@ai-sdk/openai-compatible',
-  '@ai-sdk/open-responses',
-]) {
+for (const name of ['@ai-sdk/openai', '@ai-sdk/anthropic', '@ai-sdk/openai-compatible']) {
   if (
     require(`${name}/package.json`).version !== locked.packages[`node_modules/${name}`]?.version
   ) {

@@ -20,13 +20,113 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { previewVersion, releaseNativeCli } from './release-cli.mjs';
-import { withSourceModule } from '../../tests/support/source.mjs';
-import { previewTargets, readPreviewRelease } from './publish-cli.mjs';
+import { previewTargets, readNativePreviewRelease, readPreviewRelease } from './publish-cli.mjs';
+import { packLauncher } from './pack-launcher.mjs';
+
+test('launcher is packed from the native source archive and pins its complete platform set', async () => {
+  const stage = await mkdtemp(join(tmpdir(), 'maka-launcher-release-'));
+  try {
+    const version = '0.2.0-rust-preview.1';
+    const root = 'apache-maka-0.2.0-incubating';
+    const sourceRoot = join(stage, root);
+    await mkdir(join(sourceRoot, 'packages/cli/bin'), { recursive: true });
+    for (const file of ['package.json', 'README.md', 'README.zh-CN.md', 'bin/maka.mjs']) {
+      await copyFile(
+        join(import.meta.dirname, '../../packages/cli', file),
+        join(sourceRoot, 'packages/cli', file),
+      );
+    }
+    for (const [file, content] of Object.entries({
+      'package.json': JSON.stringify({ name: 'maka', version: '0.2.0', license: 'Apache-2.0' }),
+      'package-lock.json': JSON.stringify({
+        version: '0.2.0',
+        lockfileVersion: 3,
+        packages: { '': { version: '0.2.0' } },
+      }),
+      LICENSE: 'Apache License, Version 2.0\n',
+      NOTICE: 'Apache Maka\n',
+      'DISCLAIMER-WIP': 'Apache Maka is undergoing incubation.\n',
+    }))
+      await writeFile(join(sourceRoot, file), content);
+    const archive = root + '-src.tar.gz';
+    execFileSync('tar', ['-czf', join(stage, archive), '-C', stage, root]);
+    const sha512 = createHash('sha512')
+      .update(await readFile(join(stage, archive)))
+      .digest('hex');
+    await writeFile(join(stage, archive + '.sha512'), `${sha512}  ${archive}\n`);
+    const source = { archive, version: '0.2.0', sha512 };
+    await mkdir(join(stage, 'package'));
+    for (const target of previewTargets) {
+      const name = '@maka-agent/cli-' + target;
+      const archive = 'maka-agent-cli-' + target + '-' + version + '.tgz';
+      await writeFile(
+        join(stage, 'package/package.json'),
+        JSON.stringify({
+          name,
+          version,
+          makaSource: source,
+          publishConfig: { tag: 'rust-preview' },
+        }),
+      );
+      execFileSync('tar', ['-czf', join(stage, archive), '-C', stage, 'package']);
+      const integrity =
+        'sha512-' +
+        createHash('sha512')
+          .update(await readFile(join(stage, archive)))
+          .digest('base64');
+      await writeFile(
+        join(stage, target + '.json'),
+        JSON.stringify({ name, version, target, archive, integrity }),
+      );
+    }
+    await assert.rejects(readPreviewRelease(stage), /ENOENT/);
+    const receipt = await packLauncher(stage);
+    const packages = await readPreviewRelease(stage);
+    assert.deepEqual(
+      packages.map(({ name }) => name),
+      [...previewTargets.map((target) => '@maka-agent/cli-' + target), 'maka-agent'],
+    );
+    const packed = join(stage, receipt.archive);
+    const files = execFileSync('tar', ['-tzf', packed], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .sort();
+    assert.deepEqual(
+      files,
+      [
+        'package/LICENSE',
+        'package/NOTICE',
+        'package/README.md',
+        'package/README.zh-CN.md',
+        'package/bin/maka.mjs',
+        'package/package.json',
+      ].sort(),
+    );
+    assert.equal(
+      execFileSync('tar', ['-xOf', packed, 'package/bin/maka.mjs'], { encoding: 'utf8' }),
+      await readFile(join(sourceRoot, 'packages/cli/bin/maka.mjs'), 'utf8'),
+    );
+    const manifest = JSON.parse(
+      execFileSync('tar', ['-xOf', packed, 'package/package.json'], { encoding: 'utf8' }),
+    );
+    assert.deepEqual(
+      manifest.optionalDependencies,
+      Object.fromEntries(previewTargets.map((target) => ['@maka-agent/cli-' + target, version])),
+    );
+    assert.deepEqual(manifest.makaSource, source);
+    await writeFile(packed, 'tampered');
+    await assert.rejects(readPreviewRelease(stage), /integrity differs/);
+    await writeFile(join(stage, archive), 'tampered source');
+    await assert.rejects(packLauncher(stage), /SHA-512 mismatch/);
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+});
 
 test('publication rejects incomplete, mixed-source, or modified platform sets before writing npm', async () => {
   const stage = await mkdtemp(join(tmpdir(), 'maka-publication-'));
@@ -62,59 +162,17 @@ test('publication rejects incomplete, mixed-source, or modified platform sets be
       );
     }
     await pack(previewTargets[0]);
-    await assert.rejects(readPreviewRelease(stage), /ENOENT/);
+    await assert.rejects(readNativePreviewRelease(stage), /ENOENT/);
     for (const target of previewTargets.slice(1)) await pack(target);
-    assert.equal((await readPreviewRelease(stage)).length, 3);
+    assert.equal((await readNativePreviewRelease(stage)).length, 3);
     await pack(previewTargets[2], { ...source, sha512: 'b'.repeat(128) });
-    await assert.rejects(readPreviewRelease(stage), /same source archive/);
+    await assert.rejects(readNativePreviewRelease(stage), /same source archive/);
     await pack(previewTargets[2]);
     await writeFile(
       join(stage, 'maka-agent-cli-' + previewTargets[0] + '-' + version + '.tgz'),
       'changed',
     );
-    await assert.rejects(readPreviewRelease(stage), /integrity differs/);
-  } finally {
-    await rm(stage, { recursive: true, force: true });
-  }
-});
-
-test('Desktop uses its frozen native package version and isolates development overrides', async () => {
-  const stage = await mkdtemp(join(tmpdir(), 'maka-native-version-'));
-  try {
-    const appPath = join(stage, 'apps', 'desktop');
-    await mkdir(appPath, { recursive: true });
-    await writeFile(
-      join(stage, 'package.json'),
-      JSON.stringify({ nativeRuntimeHostVersion: '0.2.0-rust-preview.1' }),
-    );
-    await writeFile(
-      join(appPath, 'package.json'),
-      JSON.stringify({ version: '0.2.0', nativeRuntimeHostVersion: '0.2.0-rust-preview.2' }),
-    );
-    await withSourceModule(
-      'apps/desktop/src/main/native-runtime-host-setup.ts',
-      async ({ nativeRuntimeHostVersion }) => {
-        const input = { appPath, environment: {}, isPackaged: false };
-        assert.equal(await nativeRuntimeHostVersion(input), '0.2.0-rust-preview.1');
-        const environment = { MAKA_NATIVE_CLI_VERSION: '0.2.0-rust-preview.3' };
-        assert.equal(
-          await nativeRuntimeHostVersion({ ...input, environment }),
-          environment.MAKA_NATIVE_CLI_VERSION,
-        );
-        assert.equal(
-          await nativeRuntimeHostVersion({ ...input, environment, isPackaged: true }),
-          '0.2.0-rust-preview.2',
-        );
-        await assert.rejects(
-          nativeRuntimeHostVersion({
-            ...input,
-            environment: { MAKA_NATIVE_CLI_VERSION: 'rust-preview' },
-          }),
-        );
-        await writeFile(join(appPath, 'package.json'), JSON.stringify({ version: '0.2.0' }));
-        await assert.rejects(nativeRuntimeHostVersion({ ...input, isPackaged: true }));
-      },
-    );
+    await assert.rejects(readNativePreviewRelease(stage), /integrity differs/);
   } finally {
     await rm(stage, { recursive: true, force: true });
   }

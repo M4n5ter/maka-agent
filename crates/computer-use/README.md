@@ -192,7 +192,7 @@ a disposable native form. Linux native interaction coverage remains incomplete.
 Full cua_repl equivalence or superior latency/token usage is not claimed.
 
 Perception (`cua-perception`, `cua-som`, `parse_visual_regions`) and model downloads
-are absent. This does not require Desktop UI integration, Python or a cloud service.
+are absent. This requires neither Python nor a cloud service.
 
 ## Build and verification
 

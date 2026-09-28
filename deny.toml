@@ -55,10 +55,53 @@ exceptions = [
   { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
   { crate = "dtoa-short@0.3.5", allow = ["MPL-2.0"] },
   { crate = "selectors@0.38.0", allow = ["MPL-2.0"] },
+  { crate = "option-ext@0.2.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi@0.31.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi_core@0.31.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi_internal_macros@0.31.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi_macros@0.31.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi_meta@0.31.0", allow = ["MPL-2.0"] },
+  { crate = "uniffi_pipeline@0.31.0", allow = ["MPL-2.0"] },
 ]
 
+# These Cua crates omit license metadata; the pinned repository LICENSE.md covers them.
+[[licenses.clarify]]
+crate = "cua-driver-contract@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "cua-driver-core@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "cursor-overlay@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "pip-preview@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "platform-linux@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "platform-macos@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
+[[licenses.clarify]]
+crate = "platform-windows@0.29.1"
+expression = "MIT"
+license-files = [{ path = "../../../../../LICENSE.md", hash = 0xd83541a2 }]
+
 [sources]
-allow-git = ["https://github.com/webrtc-rs/webrtc"]
+allow-git = ["https://github.com/M4n5ter/cua"]
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 unknown-git = "deny"
 unknown-registry = "deny"

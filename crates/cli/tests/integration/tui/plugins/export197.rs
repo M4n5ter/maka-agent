@@ -22,7 +22,8 @@ use maka_protocol::plugin::PackageInstall;
 
 #[test]
 fn installed_package_export_uses_normal_pages_reviewed_bytes_and_preserves_unknown_target() {
-    let directory = tempfile::tempdir().unwrap();
+    // Keep reviewed Host paths fully visible in the fixed-width terminal.
+    let directory = tempfile::tempdir_in(std::fs::canonicalize("/tmp").unwrap()).unwrap();
     let source = package(
         directory.path(),
         "export.board",

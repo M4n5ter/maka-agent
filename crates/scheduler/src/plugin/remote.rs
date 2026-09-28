@@ -25,7 +25,6 @@ use crate::{
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     authorization::{Capability, Id, Request as Consent, Target},
-    client::Bundle,
     contributions::Staged,
     remote::{Caller, Endpoint, Error, Handler, Method, Stream, StreamProvider, key},
 };
@@ -59,27 +58,17 @@ enum Request {
     },
     Session,
 }
-pub(super) fn publish(
-    service: Service,
-    bundle: &Bundle,
-    staged: &mut Staged,
-) -> Result<(), String> {
+pub(super) fn publish(service: Service, staged: &mut Staged) -> Result<(), String> {
     staged
         .insert(
             key(ID, "request").map_err(super::display)?,
-            Endpoint::new(
-                bundle.content_digest.clone(),
-                Handler::Method(Arc::new(service.clone())),
-            ),
+            Endpoint::standalone(Handler::Method(Arc::new(service.clone()))),
         )
         .map_err(super::display)?;
     staged
         .insert(
             key(ID, "changes").map_err(super::display)?,
-            Endpoint::new(
-                bundle.content_digest.clone(),
-                Handler::Stream(Arc::new(ChangesProvider(service))),
-            ),
+            Endpoint::standalone(Handler::Stream(Arc::new(ChangesProvider(service)))),
         )
         .map_err(super::display)?;
     Ok(())

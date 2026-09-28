@@ -26,7 +26,7 @@ async fn swarm_handles_small_tasks_directly_and_wakes_only_after_the_batch_settl
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-swarm-");
+    let fixture = HostFixture::new("maka-swarm-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let host = Host::open(fixture.owner()).await.unwrap();

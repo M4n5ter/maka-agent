@@ -20,13 +20,12 @@
 use super::{
     javascript_plugins::ready,
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{Provider, configure},
         peer::Peer,
     },
 };
 use maka_plugins::{
-    client::Bundle,
     composition::Scope,
     execution::{Progress, Submit},
     fiber::Fiber,
@@ -49,7 +48,7 @@ async fn renamed_todo_keeps_session_documents_paged_live_and_durable_across_reti
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-todo-");
+    let fixture = HostFixture::new("maka-todo-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let config = maka_config::ConfigurationStore::for_root(Arc::new(fixture.owner()))
@@ -182,22 +181,7 @@ async fn scenario() {
         );
         if !reopened {
             success(peer.rpc("plugin.composition.apply", json!({"operations":[{"type":"update","entryId":"checklist-backend","patch":{"disabled":true}}]})).await);
-            // The dependent UI withdraws with the backend. Old streams never retarget.
-            loop {
-                let clients = success(
-                    peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                        .await,
-                );
-                if clients["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|entry| entry["extensionId"] != "z.checklist")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
+            ready(&mut peer).await;
             assert_eq!(
                 peer.rpc(
                     "plugin.remote",
@@ -244,31 +228,17 @@ fn setup() -> Setup {
     Setup {
         builtins: [(id.into(), Arc::new(Definition {
             id:id.into(), revision:"binary".into(), dependencies:vec![], inject:vec![],
-            plugin:Arc::new(maka_assistant::todo::Builtin { client:Some(Bundle::builtin(id, "binary", "export default function() {}").unwrap()) }),
+            plugin:Arc::new(maka_assistant::todo::Builtin),
         }))].into(),
         layers: [(id.into(), vec![
-            serde_json::from_value(json!({"type":"remove","entryId":"maka.todo.ui"})).unwrap(),
             serde_json::from_value(json!({"type":"remove","entryId":"maka.todo"})).unwrap(),
             serde_json::from_value(json!({"type":"insert","rootId":"profile","entry":{"id":"checklist-backend","packageId":id}})).unwrap(),
-            serde_json::from_value(json!({"type":"insert","rootId":"desktop-ui","entry":{"id":"checklist-ui","packageId":id,"inject":[maka_assistant::todo::client_service(id)]}})).unwrap(),
         ])].into(),
         ..Default::default()
     }
 }
 async fn watch(peer: &mut Peer, session: &str) -> (Value, Value) {
-    let clients = success(
-        peer.rpc("plugin.client.query", json!({"kind":"snapshot"}))
-            .await,
-    );
-    let entry = clients["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "z.checklist")
-        .unwrap();
-    let binding = json!({"method":"watch","sessionId":session,"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],"activation":entry["activation"],"contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]
-    }});
+    let binding = json!({"packageId":"z.checklist","method":"watch","sessionId":session});
     let target = success(
         peer.rpc("plugin.remote", json!({"kind":"bind","binding":binding}))
             .await,

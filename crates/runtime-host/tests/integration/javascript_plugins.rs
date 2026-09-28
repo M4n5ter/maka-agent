@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -121,7 +121,7 @@ async fn external_shared_and_dedicated_plugins_route_services_persist_data_and_d
         return;
     }
     tokio::time::timeout(Duration::from_secs(40), async {
-        let fixture = ClientFixture::new("maka-js-plugin-");
+        let fixture = HostFixture::new("maka-js-plugin-");
         std::fs::write(fixture.workspace.join("native-proof.txt"), "native and JS share authority\n").unwrap();
         std::fs::write(fixture.workspace.join("binary-page"), vec![255; 1024 * 1024]).unwrap();
         std::fs::write(fixture.workspace.join("unshared.txt"), "not granted").unwrap();

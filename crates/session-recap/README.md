@@ -21,11 +21,9 @@
 
 [简体中文](./README.zh-CN.md)
 
-`maka.session-recap` is a statically linked Profile plugin with a separate
-Desktop Client. The Client adds a manual recap to Session Inspector.
+`maka.session-recap` is a statically linked Profile plugin for manual Session recaps.
 
-The Session-bound Remote endpoints `request` (Client) and `manage` (standalone)
-accept `{ "kind": "read" }` and
+The Session-bound Remote endpoint `manage` accepts `{ "kind": "read" }` and
 `{ "kind": "generate", "operationId": "<UUID>" }`. The Session comes from the
 Host's binding, not a caller-supplied payload field. Reads require ReadHistory;
 generation additionally requires Models for that Session and uses its selected
@@ -52,9 +50,7 @@ the recap is a best-effort textual summary, not evidence of task completion.
 Generation has a 30-second timeout and a 1024-token output cap; incomplete or
 empty output is not published as a successful recap.
 
-This plugin provides manual generation and durable inspection. Automatic idle
-recaps, Daily review, and the old TS `session.recap.generate` protocol operation
-are not implemented by this plugin. No broad background model grant is created.
+This plugin provides manual generation and durable inspection under Session-scoped authority.
 
 ## Native terminal client
 
@@ -78,4 +74,4 @@ model, credential, or permission policy.
   generation order, unknown results, cached access refusal, privacy and bounded history.
 - `cargo test -p maka-runtime-host --test integration session_recap_plugin`:
   actual Session history and selected-model generation through the registered
-  Remote/Client binding, duplicate prevention, retirement and Host restart.
+  native Remote binding, duplicate prevention, retirement and Host restart.

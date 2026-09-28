@@ -44,7 +44,10 @@ impl Provider {
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             }
             loop {
-                let (mut stream, body, _) = model_http_request(&listener).await;
+                // This service outlives the UI workflows between requests.
+                // Bound each accepted request, not the user's idle interval.
+                let (stream, _) = listener.accept().await.unwrap();
+                let (mut stream, body, _) = model_http_connection(stream).await;
                 let chunk = response(&body, &runs, &routes);
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {chunk}\n\ndata: [DONE]\n\n").as_bytes()).await.unwrap();
             }

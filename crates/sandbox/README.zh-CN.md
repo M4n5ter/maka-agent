@@ -68,16 +68,14 @@ Windows 下，`maka sandbox setup --root PATH` 和 `remove --root PATH` 通过�
 助手请求管理员授权，Host 不常驻提权，私有恢复记录仍归发起用户所有。
 `status --root PATH` 无需提权即可查询持久化安装状态。安装／卸载的等待由
 `--timeout-ms` 限制（默认 180000）；取消等待不撤销已接受的工作。
-Desktop 首次使用时引导启用，不暴露账户或 ACL 设置；取消应用确认或系统 UAC 均保留草稿。
 再次启用会在同一次管理员授权下自动补齐缺失账户，或修复被中断的卸载。
 
 这是模型驱动操作的执行边界，不是针对恶意受信任插件的隔离边界。
 
 新会话默认使用 `workspace-write` 与 `on-request`：允许普通工作区写入；工具联网和
 超出允许根目录的写入需要审批。`never` 拒绝扩权，不会关闭沙箱。
-Desktop 输入框的权限菜单可经明确确认后，为当前任务完全绕过保护；
-`maka code --dangerously-bypass-approvals-and-sandbox` 使用相同的
-`danger-full-access + never` 组合。两者均不改变后续任务默认值。
+`maka code --dangerously-bypass-approvals-and-sandbox` 为当前任务选择
+`danger-full-access + never`，不改变后续任务默认值。
 Code cell 复用生产文件工具；没有审批界面时，被拒绝的操作直接失败。
 
 ## 命令诊断

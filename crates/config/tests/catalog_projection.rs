@@ -118,31 +118,6 @@ fn pages_preserve_items_profiles_and_resolved_facts() {
     assert_eq!(items[97]["model"]["contextWindow"], 8192);
     assert_eq!(items[98]["entry"]["isDefault"], true);
     assert_eq!(items[193]["entry"]["id"], "manual-95");
-    // Use the untouched client decoder and assembler, including the empty
-    // manual declaration that a later settings save must preserve.
-    let mut child = std::process::Command::new("node")
-        .arg(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/support/catalog_source.mjs"),
-        )
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    serde_json::to_writer(
-        child.stdin.take().unwrap(),
-        &json!({
-            "snapshot":snapshot, "pages":projected
-        }),
-    )
-    .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let encoded = serde_json::to_string(&items).unwrap();
     for private in [
         "modelsFetchedAt",

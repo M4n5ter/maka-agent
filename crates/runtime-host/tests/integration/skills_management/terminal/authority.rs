@@ -186,7 +186,7 @@ impl History {
 }
 
 pub(in crate::skills_management) async fn credential(
-    fixture: &crate::skills_management::ClientFixture,
+    fixture: &crate::skills_management::HostFixture,
 ) {
     use sha2::{Digest, Sha256};
     let configuration =

@@ -159,7 +159,13 @@ pub(super) fn delegate(tui: &mut Pty, name: &str) {
     tui.click_page_text("Coordinator conversation");
     tui.wait_for("Message…");
     tui.click_page_text("Message…");
-    tui.send(format!("Delegate {name}\r").as_bytes());
+    let message = format!("Delegate {name}");
+    tui.send(format!("\x1b[200~{message}\x1b[201~").as_bytes());
+    tui.wait_for(&message);
+    tui.send(b"\r");
+    tui.wait_until(|screen| {
+        screen.contains("Message…") || screen.contains("Not sent · Draft kept")
+    });
     tui.wait_until(|screen| {
         screen.contains("Coordinator checked the task") || screen.contains("Not sent · Draft kept")
     });
@@ -182,7 +188,12 @@ pub(super) fn delegate(tui: &mut Pty, name: &str) {
 
 #[track_caller]
 pub(super) fn open_task(tui: &mut Pty, title: &str) {
-    open(tui);
+    let current = tui.screen.snapshot().unwrap().screen;
+    if !page_contains(&current, "Coordinator conversation")
+        && !page_contains(&current, "Change task model")
+    {
+        open(tui);
+    }
     tui.wait_until(|s| {
         page_contains(s, "Coordinator conversation") || page_contains(s, "Change task model")
     });

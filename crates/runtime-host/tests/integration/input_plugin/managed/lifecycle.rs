@@ -27,7 +27,7 @@ async fn managed_native_input_tracks_paused_preparation_and_fences_reconfigurati
         .unwrap();
 }
 async fn lifecycle() {
-    let fixture = ClientFixture::new("maka-managed-lifecycle-");
+    let fixture = HostFixture::new("maka-managed-lifecycle-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     fixture::seed(&fixture, &model).await;

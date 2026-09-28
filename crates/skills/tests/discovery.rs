@@ -257,7 +257,7 @@ async fn snapshot_precedence_preferences_and_capabilities_preserve_selected_iden
     .await
     .unwrap();
     assert!(missing_library.managed.discovery.inventory.is_empty());
-    assert_eq!(missing_library.bundled[0].id, "computer-use");
+    assert_eq!(missing_library.bundled[0].id, "maka-cua");
     let cua = missing_library
         .bundled
         .iter()

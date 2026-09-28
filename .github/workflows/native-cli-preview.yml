@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish all three verified packages to rust-preview
+        description: Publish the verified native packages and npm launcher to rust-preview
         type: boolean
         default: false
 
@@ -156,6 +156,8 @@ jobs:
           pattern: native-preview-*
           merge-multiple: true
           path: native-preview
+      - name: Package the launcher from the verified source
+        run: node scripts/rust/pack-launcher.mjs native-preview
       - name: Publish the complete source-bound platform set
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

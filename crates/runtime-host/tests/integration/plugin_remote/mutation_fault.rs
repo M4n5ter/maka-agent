@@ -18,7 +18,7 @@
  */
 
 use super::{ready, response, rpc, success};
-use crate::support::{client_probe::ClientFixture, peer::Peer};
+use crate::support::{host_fixture::HostFixture, peer::Peer};
 use maka_runtime_host::server::{Host, local::LocalListener};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ async fn terminal_submit_preserves_unknown_outcomes_and_cleanup_fences() {
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-terminal-mutation-");
+    let fixture = HostFixture::new("maka-terminal-mutation-");
     let package = fixture.workspace.join("plugin");
     std::fs::create_dir(&package).unwrap();
     std::fs::write(

@@ -20,7 +20,6 @@
 use crate::owner::Owner;
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::{Bundle, Client},
     composition::Scope,
     contributions::Staged,
     kernel::{Plugin, PluginContext},
@@ -31,16 +30,11 @@ mod remote;
 mod terminal;
 mod tools;
 pub const ID: &str = "maka.goal";
-pub struct Builtin {
-    pub client: Option<Arc<Bundle>>,
-}
-struct ClientSupport(Arc<Bundle>);
-pub fn client_service(package: &str) -> String {
-    format!("{package}.client")
-}
+pub struct Builtin;
+
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        *scope == Scope::Profile || (*scope == Scope::DesktopUi && self.client.is_some())
+        *scope == Scope::Profile
     }
     fn validate(&self, _: &Scope, value: &Value) -> Result<(), maka_plugins::Error> {
         if value.is_null() || value.as_object().is_some_and(|v| v.is_empty()) {
@@ -54,57 +48,31 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        let client = self.client.clone();
         Box::pin(async move {
-            let identity = context.lifecycle.identity().map_err(message)?;
+            context.lifecycle.identity().map_err(message)?;
             let mut staged = Staged::default();
-            if identity.scope == Scope::DesktopUi {
-                let service = context
-                    .services
-                    .get::<ClientSupport>(&client_service(&identity.package_id))
-                    .map_err(message)?
-                    .ok_or("Goal backend is not active")?;
-                let bundle = service.acquire().map_err(message)?;
-                staged
-                    .insert(
-                        identity.entry_id,
-                        Client {
-                            bundle: bundle.0.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(message)?;
-            } else {
-                let host = context.host.ok_or("Goal requires Host capabilities")?;
-                let backend = Owner::new(host);
-                let stop = context.lifecycle.stopping().map_err(message)?;
-                context
-                    .lifecycle
-                    .spawn("goal continuation", backend.clone().run(stop))
-                    .map_err(message)?;
-                staged
-                    .insert(
-                        "goal-work",
-                        backend.clone() as Arc<dyn maka_plugins::background::BackgroundWork>,
-                    )
-                    .map_err(message)?;
-                staged
-                    .insert("GoalStatus", tools::register(backend.clone())?)
-                    .map_err(message)?;
-                remote::publish(backend.clone(), client.as_deref(), &mut staged)?;
-                terminal::publish(backend.clone(), &mut staged)?;
-                if let Some(client) = client {
-                    context
-                        .services
-                        .provide(
-                            &client_service(&identity.package_id),
-                            Arc::new(ClientSupport(client)),
-                        )
-                        .map_err(message)?;
-                }
-            }
+
+            let host = context.host.ok_or("Goal requires Host capabilities")?;
+            let backend = Owner::new(host);
+            let stop = context.lifecycle.stopping().map_err(message)?;
+            context
+                .lifecycle
+                .spawn("goal continuation", backend.clone().run(stop))
+                .map_err(message)?;
+            staged
+                .insert(
+                    "goal-work",
+                    backend.clone() as Arc<dyn maka_plugins::background::BackgroundWork>,
+                )
+                .map_err(message)?;
+            staged
+                .insert("GoalStatus", tools::register(backend.clone())?)
+                .map_err(message)?;
+            remote::publish(backend.clone(), &mut staged)?;
+            terminal::publish(backend.clone(), &mut staged)?;
+
             Ok(staged)
         })
     }

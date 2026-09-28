@@ -309,12 +309,12 @@ impl Session {
         session: &str,
         cancellation: &CancellationToken,
     ) -> Result<WindowInfo, ToolError> {
-        #[cfg(target_os = "macos")]
-        crate::macos::require_desktop()?;
         let target = self
             .targets
             .get(handle)
             .ok_or_else(|| failed("stale_target: bind the app again"))?;
+        #[cfg(target_os = "macos")]
+        crate::macos::require_desktop()?;
         let pid = target
             .window
             .pid

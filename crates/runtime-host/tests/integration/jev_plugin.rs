@@ -19,7 +19,7 @@
 
 use super::{
     javascript_plugins::ready,
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
@@ -78,21 +78,8 @@ fn consumer_setup(
     }
 }
 
-async fn binding(peer: &mut Peer) -> Value {
-    let snapshot = peer
-        .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-        .await;
-    let entry = snapshot["result"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "maka.jev")
-        .unwrap();
-    json!({"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],
-        "activation":entry["activation"],"contentDigest":entry["contentDigest"],
-        "clientDigest":entry["clientDigest"]
-    },"method":"request"})
+async fn binding(_peer: &mut Peer) -> Value {
+    json!({"packageId":"maka.jev","method":"manage"})
 }
 
 async fn open(peer: &mut Peer) -> Value {
@@ -136,31 +123,12 @@ async fn disable(peer: &mut Peer, disabled: bool) {
     assert_eq!(result["ok"], true, "{result}");
     if !disabled {
         ready(peer).await;
-    } else {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let clients = peer
-                    .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                    .await;
-                if !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.jev")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn endpoint_secrets_are_private_revisioned_and_survive_restart() {
-    let fixture = ClientFixture::new("maka-jev-plugin-");
+    let fixture = HostFixture::new("maka-jev-plugin-");
     let mut revision = Value::Null;
     let mut credential_revision = Value::Null;
     let url = "https://jev.example/custom/systemone";

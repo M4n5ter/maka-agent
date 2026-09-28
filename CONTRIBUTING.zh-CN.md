@@ -17,84 +17,36 @@
   under the License.
 -->
 
-# 为 Maka 贡献代码
+# 贡献 Maka
 
-[![docs](https://img.shields.io/badge/docs-English-blue?logo=googletranslate&logoColor=white)](./CONTRIBUTING.md)
+[English](CONTRIBUTING.md)
 
-## 从哪里开始
+贡献者对代码的正确性、来源和许可负责。最终评审与合并由人类决定；AI 评审不能替代独立的人类评审。实质性 AI 编写的提交需要保留 `Generated-by: <tool>` trailer。
 
-缺陷修复、模型供应商支持、测试、性能优化和文档最容易被合并。想找活干，从 [`help wanted`](https://github.com/apache/maka/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) · [`good first issue`](https://github.com/apache/maka/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) · [`bug`](https://github.com/apache/maka/issues?q=is%3Aissue+is%3Aopen+label%3Abug) · [`enhancement`](https://github.com/apache/maka/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement) 里挑一个，留言认领。提 issue 走 **Bug report** 或 **Feature request** 模板；安全问题走 [SECURITY.md](./SECURITY.md) 的私密流程，不要开公开 issue。提问、想法和还不成熟的提案发到 [Discussions](https://github.com/apache/maka/discussions)——它会自动进到大家的邮箱，比 issue 更容易被看到。
-
-若要自助认领一个尚未分配的 issue，请单独评论 `take`（评论正文只能是这个单词）；评论 `untake` 可以解除自己的认领。其他认领文字不会触发该工作流。
-
-项目方向、治理和重大产品决策在实施前于开发邮件列表 [`dev@maka.apache.org`](https://lists.apache.org/list.html?dev@maka.apache.org) 上公开讨论；实现层面的技术决策可以在 PR 中讨论。
-
-## 人类责任与 AI 归因
-
-每项贡献都有一名 human contributor of record：审阅工作、决定提交，并对准确性、来源和许可负责。Agent 可以自由 commit 和 push；最终的审查与合并决定始终由人做出。
-
-每个 PR 说明生成式工具是否有实质贡献，有则注明工具名称；翻译、措辞整理、自动补全和拼写修正不算。自动发送的消息必须表明身份。AI 创作了贡献中的实质部分时，在每个受影响的 commit 加上 `Generated-by: <tool>` trailer，并确保它在 squash 或 amend 后保留于最终 commit。
-
-## 审查
-
-向 `main` 提的每个 PR 都需要一位作者之外的 committer 给出 approval，且必需的 `test` 检查通过；[`.asf.yaml`](./.asf.yaml) 的分支保护强制执行这套机制。approval 在后续 push 后仍然有效——后续 commit 公开推送即可，改动超出已审查的范围时再请人重新看一遍。审查必须出自独立的人工判断——AI review 不算。一个改动是否重大、获得的审查是否足够，由维护者认定。
-
-## 来源与许可
-
-只提交你有权贡献的内容，记录第三方来源、许可和必要署名。贡献以 [Apache License 2.0](./LICENSE) 授权；AI 生成的实质内容遵循 [ASF 生成式工具指南](https://www.apache.org/legal/generative-tooling.html)。
-
-## 快速开始
-
-需要 Node `>=22.19.0` 和 npm `11.19.0`（见根 `package.json`）。开发 Desktop Direct Peer 或 Peer Mesh 还需要 Rust stable 1.98 或更高版本，以及 macOS 的 Xcode Command Line Tools 或 Windows 的 MSVC Build Tools。
-
-```sh
-git clone https://github.com/apache/maka.git
-cd maka
-npm install                 # 只在根目录装 —— 不要在某个 workspace 里跑
-npm run build               # 按依赖顺序构建全部 workspace
-npm --workspace @maka/core run test:dist
-```
+分支、提交和 PR 标题使用 Conventional Commits。向 `main` 合并需要其他 committer 的批准和通过的 `test` 检查。公开讨论与发布流程遵循[英文贡献指南](CONTRIBUTING.md)。
 
 ## 开发
 
-```sh
-npm run dev          # 带 HMR 的桌面应用
-npm run cli:dev      # Rust TUI；`npm run cli:dev -- --help` 查看原生命令
-npm test             # 全部 workspace，或：npm --workspace @maka/core run test:dist
-```
-
-只有依赖都已构建好时，单独构建某个 workspace 才会成功——拿不准就从根目录构建。测试跑的是 `dist/` 里的编译产物，`test:dist` 覆盖的是最近一次构建的结果，跑之前先重新构建。根目录的 `npm test` 会把两步都做掉。
-
-推送前先在本地对齐 CI：
+需要 Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0、just、cargo-nextest 和 Python 3。许可证清单检查还需要 cargo-deny。
 
 ```sh
-npm run lint
-npm run format:check
-npm run build
-npm run typecheck
-npx knip --workspace apps/desktop
-npx knip --workspace packages/ui
+just setup                 # 构建时使用的 JavaScript 依赖
+just run                   # 原生 TUI
+just run --help            # CLI 命令
+just check                 # 格式、Clippy、SDK、脚本和 Rust 测试
 ```
 
-架构说明见 [ARCHITECTURE.zh-CN.md](./ARCHITECTURE.zh-CN.md)；Eval 的命令与 contract 见 [`packages/eval`](./packages/eval)。
+通过 `just test -p maka-runtime-host` 运行单个 crate 的测试。向 `just build` 传递 Cargo 参数选择目标和构建模式，复用现有缓存，避免重复构建。
 
-## Rust workspace
+官网独立管理依赖：先运行 `just website-setup`，再使用 `just website-dev` 或 `just website-check`。官网依赖更新写入 `website/package-lock.json`，构建工具和插件依赖使用根锁文件。
 
-- 模块使用 `name.rs` 与 `name/` 子目录，不使用 `mod.rs`。单元测试放在对应实现文件末尾，
-  集成测试放在 `tests/`。
-- 测试持久行为与重要故障边界。优先扩充已有测试，避免重复 fixture、源码文本断言和真实时间睡眠。
-- 业务插件只消费公共插件能力。Host 拥有执行准入、规范事实与资源结算；插件拥有领域策略和数据。
-- 封闭操作和状态使用类型，schema 使用 `schemars` 生成。数据库结构通过 SQLx migration 修改，
-  不在启动路径中临时建表。
-- 协议码、诊断与 UI 文案分开。插件客户端使用类型化的 `en`、`zh-CN`、`zh-TW` 文案表，
-  传递完整 locale。新增 crate 文档提供简明的中英文版本。
-- 运行 `cargo fmt --all -- --check`、严格 Clippy、相关 `cargo nextest` 测试与插件 SDK 类型检查。
-  TypeScript（包括插件客户端）使用 Biome。
+## 代码约定
 
-## Pull Request
+- 使用 `name.rs` 配合 `name/`，不使用 `mod.rs`。单元测试放在实现文件末尾，集成测试放在 `tests/`。
+- 测试持久行为和重要失败边界，优先扩展已有测试，避免重复夹具、源码文本断言和固定延时。
+- 业务插件只使用公共能力；Host 管理准入、事实和资源结算，插件管理领域策略。
+- 用类型表达闭合状态，通过 `schemars` 生成 schema。数据库结构变更放入 SQLx migration。
+- 协议字段与本地化文案分离，保留完整的 `en`、`zh-CN`、`zh-TW` locale。
+- 运行 `just check`，保持中英文 crate 文档一致。
 
-开 PR 时会自动填充 [`pull_request_template.md`](./.github/pull_request_template.md)；请在它的基础上填写，不要整段替换。
-
-分支名和标题遵循 [Conventional Commits](https://www.conventionalcommits.org/)：分支是 `<type>/<描述>`，标题是 `<type>(<scope>): <summary>`。本仓库用 squash 合并，标题会成为落到 `main` 上的提交信息；`git log` 里能看到实际在用的 type 和 scope。
-
-界面改动请附改动前后的截图或录屏。描述写短，用你自己的话——如果需要很多段落，多半是这个 PR 太大了。
+架构见 [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)。

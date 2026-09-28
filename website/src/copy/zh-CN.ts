@@ -17,21 +17,23 @@
  * under the License.
  */
 
-import { en, incubatorDisclaimer } from './en';
 import type { Copy } from './types';
+import { incubatorDisclaimer } from './en';
 
 export const zhCN: Copy = {
   locale: 'zh-CN',
   langLabel: '中文',
   siteName: 'Apache Maka (Incubating)',
-  positioning: 'Apache Maka（孵化中）是一个高性能的 Agent 工作台，并完整记录它做过的每一件事。',
-  theme: { toDark: '切换到深色模式', toLight: '切换到浅色模式' },
+  positioning: 'Apache Maka (Incubating) 是一个高性能 Agent 工作台，完整记录它做过的每一件事。',
+  theme: {
+    toDark: '切换到深色模式',
+    toLight: '切换到浅色模式',
+  },
   sceneAlt:
     '一轮交互的运行时事件：模型说、执行命令、请求权限、你批准了、拿到结果、编辑文件、本轮结束。',
   nav: {
     docs: '文档',
     downloads: '下载',
-    benchmarks: '评测',
     community: '社区',
     security: '安全',
     asf: 'ASF',
@@ -40,53 +42,66 @@ export const zhCN: Copy = {
   },
   hero: {
     headline: ['一个高性能的 Agent 工作台，', '并完整记录', '它做过的每一件事。'],
-    lede: 'Agent harness 的本职就是把任务做完。衡量它的标准只有一条：完成了多少，花了多少。我们公开每一次运行：同一个模型，同一个官方验证器，逐任务的完整记录。',
-    nightly: '体验 Desktop Nightly',
+    lede: '原生 Rust CLI 和 TUI，通过公共插件能力运行任务，将模型交互和工具效果保存为可恢复的执行事实。',
+    nightly: 'CLI 分发',
     source: '从源码构建',
-    fine: 'Nightly 是开发者构建，不是 ASF release',
+    fine: '原生预览包不是 ASF release',
     architecture: '阅读架构文档',
   },
   scene: {
     events: [
-      { tone: 'mut', name: 'Text', label: '模型说', detail: '「我重新跑一下失败的测试。」' },
-      { tone: '', name: 'FunctionCall', label: '执行命令', detail: 'Shell · npm test' },
-      { tone: 'warn', name: 'permissionRequest', label: '请求权限', detail: '超出沙箱' },
-      { tone: 'ok', name: 'permissionDecision', label: '你批准了', detail: '已写进日志' },
+      {
+        tone: 'mut',
+        name: 'Text',
+        label: '模型说',
+        detail: '「我重新跑一下失败的测试。」',
+      },
+      {
+        tone: '',
+        name: 'FunctionCall',
+        label: '执行命令',
+        detail: 'Shell · just test',
+      },
+      {
+        tone: 'warn',
+        name: 'permissionRequest',
+        label: '请求权限',
+        detail: '超出沙箱',
+      },
+      {
+        tone: 'ok',
+        name: 'permissionDecision',
+        label: '你批准了',
+        detail: '已写进日志',
+      },
       {
         tone: '',
         name: 'FunctionResponse',
         label: '拿到结果',
         detail: 'exit 1 · 裁剪展示，全量保留',
       },
-      { tone: 'dim', name: 'FunctionCall', label: '编辑文件', detail: 'resume.ts' },
-      { tone: 'dim ok', name: 'endInvocation', label: '本轮结束', detail: '运行完成' },
+      {
+        tone: 'dim',
+        name: 'FunctionCall',
+        label: '编辑文件',
+        detail: 'resume.rs',
+      },
+      {
+        tone: 'dim ok',
+        name: 'endInvocation',
+        label: '本轮结束',
+        detail: '运行完成',
+      },
     ],
     highWater: '到这里已确认',
     caption: '一轮交互 · 7 条运行时事件 · 只追加写入',
     formula: 'State(t) = Project(Log[0…t])',
   },
-  measured: {
-    h2: '只认实测数据，只信落盘记录。',
-    p: '这个站点今天能证明两件事：在同一个模型上，Maka 比其他 harness 究竟表现如何；以及运行时工作时到底记下了什么。',
-  },
-  leaderboard: {
-    h3: '9 个 harness，同一个模型，官方验证器',
-    p: '在 DeepSeek V4 Flash 上跑完 Terminal-Bench 2.1 全部任务，由官方验证器统一判分。排名只描述结果，逐任务 CSV 随报告一并公开。',
-    more: '查看评测报告',
-    caption: 'pass@1 · reasoning max · Maka 单次通过成本 $0.026',
-  },
-  paired: {
-    h3: '同一套任务，正面对比',
-    p: '与 OpenCode 在同一批任务上做配对单次运行。差距经得起精确 McNemar 检验，每个通过任务的成本基本相同。',
-    more: '查看对比报告',
-    stat: '+13.5',
-    statSmall: 'pp · 68.5% 对 55.1%',
-  },
   host: {
     h3: '只有一个运行时宿主',
-    p: 'Desktop、TUI、CLI 和 Eval 都是瘦客户端，执行统一交给同一个运行时宿主（Runtime Host）。',
+    p: 'CLI、TUI 和插件共享同一个执行与权限边界。',
     more: '了解运行时宿主如何工作',
-    clients: ['Desktop', 'TUI / CLI', 'Eval'],
+    clients: ['CLI / TUI', '插件'],
     core: 'Runtime Host',
     coreSmall: '掌控执行',
   },
@@ -99,47 +114,19 @@ export const zhCN: Copy = {
     h3: '获取 Maka',
     p: '三条路径，边界分明。',
     nightly: {
-      title: '体验 Desktop Nightly',
-      body: '每天基于 main 构建，面向开发者和测试者，发布在 GitHub Releases。macOS 覆盖 Apple Silicon 与 Intel；Windows 和 Linux 是未签名预览。',
-      note: '不是 ASF RELEASE · 可能不稳定',
+      title: '原生 CLI 分发',
+      body: 'npm 薄封装选择对应平台的 Rust 可执行文件。',
+      note: '预览',
     },
     source: {
       title: '从源码构建',
-      body: '克隆 apache/maka，然后 npm ci 和 npm run build。Desktop、TUI 和 CLI 共用同一个运行时宿主。',
+      body: '克隆仓库，运行 just setup 和 just run。',
       note: 'APACHE-2.0',
     },
     releases: {
       title: 'Apache Releases',
       body: 'Maka 尚未发布过 Apache release。发布之后，带签名的源码包才是正式 release，安装包只是便利构建。',
       note: 'KEYS · SHA-512 · .asc',
-    },
-  },
-  reads: {
-    h2: '报告与文章',
-    p: '首页的每一条结论和数字，都能追溯到对应的完整报告或文档。',
-    blogLog: {
-      cover: 'State(t) =\nProject(Log[0…t])',
-      small: 'docs/blogs',
-      h3: 'Log Is the Runtime',
-      meta: '李坤 · English / 中文',
-    },
-    blogTools: {
-      cover: 'Deferred\ntools',
-      small: 'docs/blogs',
-      h3: 'Beyond Function Calling：Agent 如何触达真实世界',
-      meta: '李坤 · English / 中文',
-    },
-    nineArm: {
-      cover: '69 / 89',
-      small: 'docs/eval · nine-arm',
-      h3: 'Terminal-Bench 2.1：9 个 harness',
-      meta: '评测报告与逐任务 CSV',
-    },
-    paired: {
-      cover: 'p = 0.0118',
-      small: 'docs/eval · paired',
-      h3: 'Maka 对比 OpenCode',
-      meta: '对比报告与逐任务 CSV',
     },
   },
   footer: {
@@ -153,7 +140,8 @@ export const zhCN: Copy = {
     sponsorship: '赞助',
     thanks: '致谢',
     disclaimer: incubatorDisclaimer,
-    trademark: en.footer.trademark,
+    trademark:
+      'Copyright © 2026 The Apache Software Foundation, licensed under the Apache License, Version 2.0. Apache Maka, Apache Incubator, Apache and the Apache feather logo are trademarks of The Apache Software Foundation.',
   },
   downloads: {
     title: '下载',
@@ -169,10 +157,9 @@ export const zhCN: Copy = {
         note: '暂无',
       },
       nightly: {
-        label: 'Desktop Nightly',
-        value:
-          '每天基于 main 构建。macOS arm64 与 x64；Windows x64、Linux x64 与 arm64 为未签名预览。',
-        note: '不是 ASF RELEASE',
+        label: '原生 CLI',
+        value: '绑定源码的平台包',
+        note: '预览',
       },
       source: {
         label: '源码',
@@ -194,18 +181,24 @@ export const zhCN: Copy = {
       checksum: '第 3 步：核对校验和',
     },
     nightly: {
-      h2: 'Desktop Nightly',
-      note: '不是 ASF RELEASE',
-      p: 'Desktop Nightly 每天基于 main 构建，面向开发者和测试者，以 GitHub prerelease 形式发布。选择最新的 Maka Desktop Nightly；安装后应用会在 Nightly 渠道自动更新。它不是 ASF release，不适合生产环境。提供 macOS 的 Apple Silicon 与 Intel、Windows x64、Linux x64 与 arm64 构建。',
-      windows: 'Windows 和 Linux 构建是未签名预览，不属于受支持的发布层级。',
+      h2: '原生 CLI 分发',
+      note: '预览软件，不是 ASF release',
+      p: 'Rust CLI 使用精确版本的原生平台包分发。npm 启动器只选择并运行可执行文件；构建与发布流程见 CLI 分发文档。',
+      windows: 'macOS arm64、Linux x64（glibc）、Windows x64。',
     },
     source: {
       h2: '从源码构建',
-      prerequisites: ['Node.js 22.19 或更高版本', 'npm 11', 'Git', 'ripgrep，供 Grep 工具调用'],
+      prerequisites: [
+        'Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0 和 just。',
+        'macOS 需要 Xcode Command Line Tools，Linux Computer Use 需要 X11 开发库。',
+      ],
       clone: '第 1 步：克隆仓库',
       build: '第 2 步：安装依赖并构建全部 workspace',
-      after:
-        'CONTRIBUTING 介绍了 workspace 的目录结构，以及如何从这份构建启动 Desktop、TUI 和 CLI。',
+      after: '贡献指南介绍构建、验证和插件开发。',
     },
+  },
+  features: {
+    h2: '一个原生运行时',
+    p: '执行、权限与持久状态由同一个 Rust Runtime Host 管理。',
   },
 };

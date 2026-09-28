@@ -17,9 +17,7 @@
  * under the License.
  */
 
-/* Colour and radius tokens are the desktop app's defaults, copied by value
-   from apps/desktop/src/renderer/maka-tokens.css and astryx-theme/maka.css.
-   The scheme follows the OS until the viewer picks one with the toggle. */
+/* Website color, radius and surface tokens. */
 :root {
   color-scheme: light dark;
   --background: light-dark(oklch(1 0 0), oklch(0.205 0.004 286));

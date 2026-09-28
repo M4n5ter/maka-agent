@@ -103,7 +103,7 @@ impl Fixture {
                 revision: "fixture-v1".into(),
                 dependencies: vec![],
                 inject: vec![],
-                plugin: Arc::new(maka_external_agent::plugin::Builtin { client: None }),
+                plugin: Arc::new(maka_external_agent::plugin::Builtin),
             }),
         );
         plugins.layers.insert(

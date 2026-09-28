@@ -18,9 +18,7 @@
  */
 
 use super::{package, ready};
-use crate::support::{
-    client_probe::ClientFixture, message_recovery::configure_provider, peer::Peer,
-};
+use crate::support::{host_fixture::HostFixture, message_recovery::configure_provider, peer::Peer};
 use maka_plugins::{
     composition::Scope,
     execution::{Progress, Submit},
@@ -60,7 +58,7 @@ async fn external_provider_bindings_cross_both_vm_modes_without_local_handlers()
 
 async fn scenario() {
     for mode in ["shared", "dedicated"] {
-        let fixture = ClientFixture::new("maka-provider-plugin-");
+        let fixture = HostFixture::new("maka-provider-plugin-");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/", listener.local_addr().unwrap());
         let model = configure_provider(&fixture, &base_url, "anthropic-compatible").await;

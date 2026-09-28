@@ -1,30 +1,24 @@
 {
   "name": "maka-agent",
   "version": "0.2.0",
+  "description": "Maka native CLI launcher",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "exports": {},
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "bin": {
-    "maka": "./dist/cli.js"
+    "maka": "bin/maka.mjs"
   },
-  "maka": {
-    "managedRuntimeHostUpdateCompatibility": 1
-  },
-  "scripts": {
-    "clean": "node ../../scripts/clean-paths.mjs dist tsconfig.tsbuildinfo",
-    "build:workspace-deps": "npm --workspace @maka/core run build && npm --workspace @maka/storage run build && npm --workspace @maka/mcp run build && npm --workspace @maka/runtime run build && npm --workspace @maka/runtime-host run build && npm --workspace @maka/eval run build",
-    "build": "tsc -p tsconfig.json && node scripts/chmod-bin.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:dist": "node --test \"dist/**/*.test.js\""
-  },
-  "dependencies": {
-    "@agentclientprotocol/sdk": "1.4.0",
-    "@maka/core": "0.1.0",
-    "@maka/eval": "0.1.0",
-    "@maka/mcp": "0.1.0",
-    "@maka/runtime": "0.1.0",
-    "@maka/runtime-host": "0.1.0",
-    "@maka/storage": "0.1.0"
+  "files": [
+    "bin",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apache/maka.git"
   }
 }

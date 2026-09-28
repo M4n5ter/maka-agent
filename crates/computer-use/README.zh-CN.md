@@ -69,7 +69,7 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 光标生命周期验收；Linux 原生交互覆盖仍不完整。
 
 内置 `maka-cua` skill 可从原生 Skill library 安装，不自动写入用户库。
-不包含视觉识别扩展、模型下载、Python 或 Desktop UI 接入。
+不包含视觉识别扩展、模型下载或 Python。
 
 每个 Session 拥有独立的 Maka 标志合成光标，保留 A 形轮廓、菱形留白和上方横线，
 左上尖端表示准确位置。支持六种配色、标签、显示开关和减弱动画。

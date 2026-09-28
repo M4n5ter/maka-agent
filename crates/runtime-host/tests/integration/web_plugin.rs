@@ -19,28 +19,15 @@
 
 use super::{
     javascript_plugins::ready,
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-async fn binding(peer: &mut Peer) -> Value {
-    let snapshot = peer
-        .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-        .await;
-    let entry = snapshot["result"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "maka.web")
-        .unwrap();
-    json!({"client":{
-        "entryId":entry["entryId"],"extensionId":entry["extensionId"],
-        "activation":entry["activation"],"contentDigest":entry["contentDigest"],
-        "clientDigest":entry["clientDigest"]
-    },"method":"request"})
+async fn binding(_peer: &mut Peer) -> Value {
+    json!({"packageId":"maka.web","method":"request"})
 }
 
 async fn open(peer: &mut Peer) -> Value {
@@ -82,33 +69,12 @@ async fn disable(peer: &mut Peer, disabled: bool) {
         )
         .await;
     assert_eq!(result["ok"], true, "{result}");
-    if !disabled {
-        ready(peer).await;
-    } else {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let clients = peer
-                    .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-                    .await;
-                if !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.web")
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
+    ready(peer).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_settings_are_revisioned_private_and_survive_retirement_and_restart() {
-    let fixture = ClientFixture::new("maka-web-plugin-");
+    let fixture = HostFixture::new("maka-web-plugin-");
     let mut saved_revision = Value::Null;
     let mut credential_revision = Value::Null;
     for reopened in [false, true] {
@@ -130,16 +96,14 @@ async fn remote_settings_are_revisioned_private_and_survive_retirement_and_resta
             ready(&mut peer).await;
         }
         if reopened {
-            let clients = peer
-                .rpc("plugin.client.query", json!({"kind":"snapshot"}))
+            let unavailable = peer
+                .rpc(
+                    "plugin.remote",
+                    json!({"kind":"bind",
+                "binding":{"packageId":"maka.web","method":"request"}}),
+                )
                 .await;
-            assert!(
-                !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.web")
-            );
+            assert_eq!(unavailable["ok"], false, "{unavailable}");
             disable(&mut peer, false).await;
         }
         let envelope = open(&mut peer).await;
@@ -193,16 +157,14 @@ async fn remote_settings_are_revisioned_private_and_survive_retirement_and_resta
             disable(&mut peer, true).await;
             let retired = call(&mut peer, &envelope, json!({"kind":"read"})).await;
             assert_eq!(retired["ok"], false, "{retired}");
-            let clients = peer
-                .rpc("plugin.client.query", json!({"kind":"snapshot"}))
+            let unavailable = peer
+                .rpc(
+                    "plugin.remote",
+                    json!({"kind":"bind",
+                "binding":{"packageId":"maka.web","method":"request"}}),
+                )
                 .await;
-            assert!(
-                !clients["result"]["entries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry["extensionId"] == "maka.web")
-            );
+            assert_eq!(unavailable["ok"], false, "{unavailable}");
         }
         close(&mut peer, &envelope).await;
         peer.close().await;
@@ -219,7 +181,7 @@ async fn remote_settings_are_revisioned_private_and_survive_retirement_and_resta
 #[ignore = "requires an explicitly authorized TAVILY_API_KEY"]
 async fn live_tavily_search_uses_plugin_credentials_and_remote_network_authority() {
     let secret = std::env::var("TAVILY_API_KEY").expect("explicit search credential required");
-    let fixture = ClientFixture::new("maka-live-web-");
+    let fixture = HostFixture::new("maka-live-web-");
     let host = Host::open(fixture.owner()).await.unwrap();
     #[cfg(unix)]
     let endpoint = fixture.workspace.parent().unwrap().join("web.sock");

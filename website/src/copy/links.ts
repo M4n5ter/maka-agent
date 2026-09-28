@@ -27,12 +27,10 @@ export const links = {
   releases: `${repo}/releases`,
   discussions: `${repo}/discussions`,
   devList: 'https://lists.apache.org/list.html?dev@maka.apache.org',
+  cli: `${main}/packages/cli/README.md`,
+  eventLog: `${main}/crates/event-log/README.md`,
   docs: `${main}/docs/README.md`,
-  eval: `${repo}/tree/main/docs/eval`,
-  nineArm: `${main}/docs/eval/terminal-bench-2.1-deepseek-v4-flash-nine-arm.md`,
-  paired: `${main}/docs/eval/terminal-bench-2.1-deepseek-v4-flash-maka-vs-opencode.md`,
   security: `${main}/SECURITY.md`,
-  windows: `${main}/docs/windows-support.md`,
   asf: 'https://www.apache.org/',
   incubator: 'https://incubator.apache.org/',
   conduct: 'https://www.apache.org/foundation/policies/conduct.html',
@@ -55,7 +53,4 @@ const bilingual = (path: string) => ({
 export const localized = {
   architecture: bilingual('ARCHITECTURE'),
   contributing: bilingual('CONTRIBUTING'),
-  runtimeHost: bilingual('docs/architecture/runtime-host-architecture'),
-  blogLog: bilingual('docs/blogs/log-is-the-runtime'),
-  blogTools: bilingual('docs/blogs/beyond-function-calling'),
 };

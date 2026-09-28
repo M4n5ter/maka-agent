@@ -19,7 +19,7 @@
 
 use super::*;
 
-async fn archive(source: &ClientFixture) -> std::path::PathBuf {
+async fn archive(source: &HostFixture) -> std::path::PathBuf {
     let log = source.log().await;
     seed(&log, source).await;
     let expected = log.preview_bundle("source").await.unwrap().subtree_digest;
@@ -46,8 +46,8 @@ async fn empty(host: &Running) {
 
 #[tokio::test]
 async fn import_rejects_a_project_relinked_after_the_reviewed_destination() {
-    let source = ClientFixture::new("maka-bundle-review-source-");
-    let target = ClientFixture::new("maka-bundle-review-target-");
+    let source = HostFixture::new("maka-bundle-review-source-");
+    let target = HostFixture::new("maka-bundle-review-target-");
     let path = archive(&source).await;
     let destination = Running::open(&target).await;
     configure(&destination.client).await;
@@ -126,8 +126,8 @@ async fn import_rejects_a_project_relinked_after_the_reviewed_destination() {
 #[cfg(unix)]
 #[tokio::test]
 async fn import_rejects_a_host_path_alias_retargeted_after_preview() {
-    let source = ClientFixture::new("maka-bundle-alias-source-");
-    let target = ClientFixture::new("maka-bundle-alias-target-");
+    let source = HostFixture::new("maka-bundle-alias-source-");
+    let target = HostFixture::new("maka-bundle-alias-target-");
     let path = archive(&source).await;
     let first = target.workspace.join("first");
     let second = target.workspace.join("second");

@@ -22,7 +22,6 @@ use crate::{search, settings};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
     authorization::{Capability, Request as Authorization, Target},
-    client::Bundle,
     contributions::Staged,
     credentials,
     remote::{Caller, Endpoint, Error, Handler, Method, key},
@@ -73,19 +72,15 @@ enum Response {
 pub(super) fn publish(
     web: Arc<Web>,
     identity: &maka_plugins::fiber::Identity,
-    bundle: &Bundle,
     staged: &mut Staged,
 ) -> Result<(), String> {
     staged
         .insert(
             key(&identity.package_id, "request").map_err(message)?,
-            Endpoint::new(
-                bundle.content_digest.clone(),
-                Handler::Method(Arc::new(Service {
-                    web,
-                    scope: identity.scope.clone(),
-                })),
-            ),
+            Endpoint::standalone(Handler::Method(Arc::new(Service {
+                web,
+                scope: identity.scope.clone(),
+            }))),
         )
         .map_err(message)
 }

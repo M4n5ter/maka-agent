@@ -864,11 +864,17 @@ async fn model_request_with_headers(
 async fn model_http_request(
     listener: &tokio::net::TcpListener,
 ) -> (tokio::net::TcpStream, serde_json::Value, String) {
-    use tokio::io::AsyncReadExt;
-    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
         .await
         .unwrap()
         .unwrap();
+    model_http_connection(stream).await
+}
+
+async fn model_http_connection(
+    mut stream: tokio::net::TcpStream,
+) -> (tokio::net::TcpStream, serde_json::Value, String) {
+    use tokio::io::AsyncReadExt;
     let mut bytes = Vec::new();
     let mut buffer = [0; 4096];
     loop {

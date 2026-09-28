@@ -42,7 +42,7 @@ mod page;
 mod path;
 mod preferences;
 mod preview;
-pub mod remote;
+mod remote;
 mod snapshot;
 mod terminal;
 mod tools;
@@ -76,9 +76,7 @@ pub struct PreferenceSnapshot {
     pub entries: BTreeMap<String, crate::Preference>,
 }
 
-pub struct Builtin {
-    pub client: Option<Arc<maka_plugins::client::Bundle>>,
-}
+pub struct Builtin;
 
 #[derive(Clone)]
 pub struct Skills {
@@ -100,7 +98,7 @@ struct Basis {
 
 impl Plugin for Builtin {
     fn supports_scope(&self, scope: &Scope) -> bool {
-        *scope == Scope::Profile || (*scope == Scope::DesktopUi && self.client.is_some())
+        *scope == Scope::Profile
     }
 
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
@@ -116,41 +114,8 @@ impl Plugin for Builtin {
     fn activate(
         &self,
         context: PluginContext,
-        config: Value,
+        _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
-        if context
-            .lifecycle
-            .identity()
-            .is_ok_and(|identity| identity.scope == Scope::DesktopUi)
-        {
-            return Box::pin(async move {
-                let provider = context
-                    .services
-                    .get::<remote::ClientSupport>(remote::CLIENT_SERVICE)
-                    .map_err(|error| error.to_string())?
-                    .ok_or("Skills backend is not active")?;
-                let client = provider.acquire().map_err(|error| error.to_string())?;
-                let identity = context
-                    .lifecycle
-                    .identity()
-                    .map_err(|error| error.to_string())?;
-                let mut staged = Staged::default();
-                staged
-                    .insert(
-                        identity.entry_id,
-                        maka_plugins::client::Client {
-                            bundle: client.bundle.clone(),
-                            config,
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                Ok(staged)
-            });
-        }
-        let client = self.client.as_ref().map(|bundle| remote::ClientSupport {
-            bundle: bundle.clone(),
-        });
-        let services = context.services.clone();
         let Some(data) = context.data else {
             return Box::pin(async { Err("Skills requires plugin private files".into()) });
         };
@@ -209,12 +174,8 @@ impl Plugin for Builtin {
             let mut staged = Staged::default();
             tools::publish(&skills, &mut staged)?;
             terminal::publish(&skills, &mut staged)?;
-            if let Some(client) = client {
-                remote::publish(&skills, &mut staged, client.clone())?;
-                services
-                    .provide(remote::CLIENT_SERVICE, Arc::new(client))
-                    .map_err(|error| error.to_string())?;
-            }
+            remote::publish(&skills, &mut staged)?;
+
             staged
                 .insert(
                     ID,

@@ -34,7 +34,7 @@ skips them. Profile loading remains inside the same sandbox and timeout.
 `terminal::Screen` uses `alacritty_terminal` without its PTY event loop or renderer.
 The existing PTY worker owns the parser; no JavaScript runtime, extra thread or
 cross-runtime serialization is needed. The Host retains admission, canonical
-records, backpressure and final output drain. Desktop rendering remains xterm.
+records, backpressure and final output drain.
 
 Snapshots expose the viewport, 500 rows of history, cursor/input modes and the
 last alternate screen. History loss or text-budget clipping sets `truncated`.

@@ -17,9 +17,8 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
-use maka_runtime::execution::{SandboxMode, ToolMode};
-use maka_runtime_host::session::SessionConfiguration;
+use super::support::host_fixture::HostFixture;
+use maka_runtime::execution::ToolMode;
 use serde_json::Value;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -33,7 +32,7 @@ async fn model_tool_preferences_freeze_each_run_and_survive_reopen() {
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 
-    let fixture = ClientFixture::new("maka-model-tools-");
+    let fixture = HostFixture::new("maka-model-tools-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let mut expected = Vec::new();
@@ -51,6 +50,7 @@ async fn model_tool_preferences_freeze_each_run_and_survive_reopen() {
                 .serve(host.clone(), cancel.clone()),
         );
         let mut peer = Peer::new(host.clone(), "model-tools").await;
+        peer.wait_for_plugins().await;
         let created = peer
             .rpc(
                 "session.create",
@@ -200,6 +200,7 @@ async fn set_model_tools(
             "modelOverrides":{"fixture-model":{"contextWindow":200000,"codeMode":code,"applyPatch":patch}}}
     })).await;
     assert_eq!(updated["result"]["kind"], "committed", "{updated}");
+    peer.wait_for_plugins().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -210,7 +211,7 @@ async fn model_thinking_default_is_frozen_at_creation_not_replay() {
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 
-    let fixture = ClientFixture::new("maka-thinking-default-");
+    let fixture = HostFixture::new("maka-thinking-default-");
     let endpoint = "http://127.0.0.1:9/v1";
     let model = configure(&fixture, endpoint).await;
     for reopened in [false, true] {
@@ -294,53 +295,4 @@ async fn model_thinking_default_is_frozen_at_creation_not_replay() {
             .unwrap();
         drop(host);
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn original_client_settings_cas_preserves_session_defaults_and_exact_reopen() {
-    let fixture = ClientFixture::new("maka-runtime-policy-");
-    fixture
-        .run("--runtime-policy-workspace", false, "runtime-policy-passed")
-        .await;
-    let saved: Value = serde_json::from_slice(
-        &std::fs::read(fixture.workspace.join("runtime-policy-fixture.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(saved["finalSettings"]["policy"]["revision"], 4);
-    let log = fixture.log().await;
-    assert!(log.prefix(8, 4096).await.unwrap().events.is_empty());
-    let mut records = Vec::new();
-    for (id, permission) in [
-        ("runtime-policy-old", SandboxMode::WorkspaceWrite),
-        ("runtime-policy-inherited", SandboxMode::DangerFullAccess),
-        ("runtime-policy-explicit", SandboxMode::WorkspaceWrite),
-    ] {
-        let record = log
-            .get_session::<SessionConfiguration>(id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(record.configuration.sandbox_mode, permission);
-        assert_eq!(record.configuration.thinking_level, None);
-        records.push(record);
-    }
-    log.close().await.unwrap();
-    fixture
-        .run(
-            "--runtime-policy-workspace",
-            true,
-            "runtime-policy-reopened",
-        )
-        .await;
-    let reopened = fixture.log().await;
-    assert!(reopened.prefix(8, 4096).await.unwrap().events.is_empty());
-    for record in records {
-        let after = reopened
-            .get_session::<SessionConfiguration>(&record.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(after, record);
-    }
-    reopened.close().await.unwrap();
 }

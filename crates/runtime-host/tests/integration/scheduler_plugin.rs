@@ -17,32 +17,4 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
 mod execution;
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn original_client_scheduler_pages_native_admission_disable_and_restart() {
-    let fixture = ClientFixture::new("maka-scheduler-plugin-");
-    // An existing root knows only the older built-in layer; upgrade must add
-    // Scheduler defaults without replacing the stored composition.
-    let log = fixture.log().await;
-    log.commit_plugin_state(
-        maka_plugins::composition::Ledger {
-            package_layers: vec!["maka.agent-graph".into()],
-            ..Default::default()
-        },
-        None,
-    )
-    .await
-    .unwrap();
-    log.close().await.unwrap();
-    for reopened in [false, true] {
-        fixture
-            .run(
-                "--scheduler-workspace",
-                reopened,
-                "original-client-scheduler",
-            )
-            .await;
-    }
-}

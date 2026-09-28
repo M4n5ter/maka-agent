@@ -18,7 +18,7 @@
  */
 
 use super::super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -40,7 +40,7 @@ const CONTENT: &str = "written 😀 中文\n";
 const EDITED: &str = "edited $& 😀\n";
 const SESSIONS: [&str; 2] = ["write-ask", "write-explore"];
 
-pub(super) async fn run(fixture: &ClientFixture, reopened: bool) -> (Vec<Value>, Vec<Value>) {
+pub(super) async fn run(fixture: &HostFixture, reopened: bool) -> (Vec<Value>, Vec<Value>) {
     let (provider, mut requests) = Provider::controlled().await;
     let model = if reopened {
         None
@@ -231,7 +231,7 @@ pub(super) async fn run(fixture: &ClientFixture, reopened: bool) -> (Vec<Value>,
     (rows, events)
 }
 
-fn results(fixture: &ClientFixture) -> Vec<Value> {
+fn results(fixture: &HostFixture) -> Vec<Value> {
     let path = fixture
         .workspace
         .canonicalize()

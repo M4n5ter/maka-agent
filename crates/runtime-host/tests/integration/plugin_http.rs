@@ -22,7 +22,7 @@ mod proxy;
 
 use super::{
     javascript_plugins::{package, ready},
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_config::ConfigurationStore;
 use maka_plugins::{composition::Scope, fiber::Fiber};
@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn http_streams_follow_proxy_permissions_and_invocation_settlement() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-http-plugin-");
+        let fixture = HostFixture::new("maka-http-plugin-");
         let proxy = proxy::Proxy::start().await;
         let configuration = ConfigurationStore::for_root(Arc::new(fixture.owner())).await.unwrap();
         let policy = configuration.runtime_policy().await.unwrap();

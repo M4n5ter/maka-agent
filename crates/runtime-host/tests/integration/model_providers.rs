@@ -19,7 +19,7 @@
 
 use super::{
     javascript_plugins::{package, ready},
-    support::{client_probe::ClientFixture, message_recovery::Provider, peer::Peer},
+    support::{host_fixture::HostFixture, message_recovery::Provider, peer::Peer},
 };
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
@@ -61,7 +61,7 @@ async fn external_provider_authentication_execution_retirement_and_recovery_shar
 {
     tokio::time::timeout(Duration::from_secs(60), async {
         for mode in ["shared", "dedicated"] {
-            let fixture = ClientFixture::new("maka-provider-directory-");
+            let fixture = HostFixture::new("maka-provider-directory-");
             let model = Provider::start().await;
             let source = package(&fixture.workspace, "example.account", mode, PROVIDER, false);
             let host = Host::open(fixture.owner()).await.unwrap();

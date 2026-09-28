@@ -59,7 +59,7 @@ async fn installed_javascript_resources_use_readonly_context_cancel_and_bounded_
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-js-context-");
+    let fixture = HostFixture::new("maka-js-context-");
     std::fs::write(
         fixture.workspace.join("proof.txt"),
         "Immutable workspace proof",

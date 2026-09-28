@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -44,7 +44,7 @@ async fn resource_pages_survive_reopen_without_cross_session_access() {
 }
 
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-read-page-");
+    let fixture = HostFixture::new("maka-read-page-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let source = "中😀A".repeat(2500);

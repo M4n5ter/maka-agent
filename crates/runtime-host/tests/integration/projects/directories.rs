@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::super::support::{client_probe::ClientFixture, peer::Peer};
+use super::super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_client::{Client, ClientError, RequestFailure};
 use maka_protocol::{
     OperationErrorCode,
@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resolves_selected_directory_without_registration_or_root_escape() {
-    let fixture = ClientFixture::new("maka-directory-reference-");
+    let fixture = HostFixture::new("maka-directory-reference-");
     let nested = fixture.workspace.join("实际目录");
     std::fs::create_dir(&nested).unwrap();
     std::fs::write(fixture.workspace.join("not-directory"), b"file").unwrap();

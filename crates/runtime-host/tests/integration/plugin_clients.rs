@@ -19,7 +19,7 @@
 
 use super::{
     javascript_plugins::{package, ready},
-    support::{client_probe::ClientFixture, peer::Peer},
+    support::{host_fixture::HostFixture, peer::Peer},
 };
 use maka_plugins::{
     composition::Scope,
@@ -40,7 +40,7 @@ async fn sdk_clients_freeze_executor_authority_and_settle_before_delivery() {
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-plugin-clients-");
+    let fixture = HostFixture::new("maka-plugin-clients-");
     let (provider, mut requests) = super::support::message_recovery::Provider::controlled().await;
     let model = super::support::message_recovery::configure(&fixture, &provider.base_url).await;
     let source = package(

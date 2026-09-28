@@ -20,7 +20,7 @@
 use crate::{
     javascript_plugins::{package, ready},
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{Provider, configure},
         peer::Peer,
     },
@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn caught_service_error_cannot_hide_file_settlement_failure() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-plugin-files-fault-");
+        let fixture = HostFixture::new("maka-plugin-files-fault-");
         let (provider, mut requests) = Provider::controlled().await;
         let model = configure(&fixture, &provider.base_url).await;
         let source = package(&fixture.workspace, "example.files", "shared", include_str!("../../fixtures/files-plugin.mjs"), false);

@@ -8,7 +8,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "test:dist": "astro build && node --test test/site.test.mjs",
-    "readme-hero": "astro build && node scripts/readme-hero.mjs"
+    "social-preview": "astro build && node scripts/social-preview.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

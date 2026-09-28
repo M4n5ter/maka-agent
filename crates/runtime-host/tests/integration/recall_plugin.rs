@@ -20,7 +20,7 @@
 use super::{
     javascript_plugins::ready,
     support::{
-        client_probe::ClientFixture,
+        host_fixture::HostFixture,
         message_recovery::{ModelRequest, Provider, configure},
         peer::Peer,
     },
@@ -48,7 +48,7 @@ async fn renamed_recall_finds_archived_unicode_suffix_and_expands_without_echoin
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-recall-");
+    let fixture = HostFixture::new("maka-recall-");
     let (provider, mut requests) = Provider::controlled().await;
     let model = configure(&fixture, &provider.base_url).await;
     let config = maka_config::ConfigurationStore::for_root(Arc::new(fixture.owner()))

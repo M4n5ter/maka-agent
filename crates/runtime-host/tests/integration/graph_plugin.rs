@@ -18,7 +18,7 @@
  */
 
 use super::support::{
-    client_probe::ClientFixture,
+    host_fixture::HostFixture,
     message_recovery::{Provider, configure},
     peer::Peer,
 };
@@ -54,7 +54,7 @@ async fn scenario(implementation: bool) {
     );
     let mut original_result = Value::Null;
     let mut graph_grant = Value::Null;
-    let fixture = ClientFixture::new("maka-graph-plugin-");
+    let fixture = HostFixture::new("maka-graph-plugin-");
     if implementation {
         for args in [
             vec!["init", "--quiet"],
@@ -270,12 +270,13 @@ async fn scenario(implementation: bool) {
                 .is_err(),
                 "unrelated commits must not refresh Graph history"
             );
-            let (grant_binding, _, grant_document) = bind_remote(&mut peer, "authorize").await;
+            let (grant_binding, grant_target, grant_document) =
+                bind_remote(&mut peer, "authorize").await;
             let revoked = peer
                 .rpc(
                     "plugin.authorization",
                     json!({
-                        "client":grant_binding["client"], "scope":"profile",
+                        "binding":grant_binding, "target":grant_target,
                         "command":{"kind":"revoke", "id":graph_grant}
                     }),
                 )
@@ -683,7 +684,7 @@ async fn presets(peer: &mut Peer, presets: Value) {
     );
 }
 
-// Every call crosses the same document, identity and registration checks as a Client SDK handle.
+// Native package bindings retain document ownership and registration checks.
 async fn bind_remote(peer: &mut Peer, method: &str) -> (Value, Value, Value) {
     bind_remote_session(
         peer,
@@ -701,19 +702,7 @@ async fn bind_remote_session(
     method: &str,
     session: Option<&str>,
 ) -> (Value, Value, Value) {
-    let catalog = peer
-        .rpc("plugin.client.query", json!({"kind":"snapshot"}))
-        .await;
-    assert_eq!(catalog["ok"], true, "{catalog}");
-    let entry = catalog["result"]["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["extensionId"] == "maka.agent-graph")
-        .unwrap();
-    let client = json!({"entryId":entry["entryId"],"extensionId":entry["extensionId"],
-        "activation":entry["activation"],"contentDigest":entry["contentDigest"],"clientDigest":entry["clientDigest"]});
-    let binding = json!({"client":client,"method":method,"sessionId":session});
+    let binding = json!({"packageId":"maka.agent-graph","method":method,"sessionId":session});
     let bound = peer
         .rpc("plugin.remote", json!({"kind":"bind","binding":binding}))
         .await;
@@ -787,7 +776,7 @@ fn answer(text: &str) -> Value {
 async fn approve(peer: &mut Peer, session: &str) -> Value {
     let (binding, target, document) = bind_remote_session(peer, "authorize", Some(session)).await;
     let consent = peer.rpc("plugin.authorization", json!({
-        "client": binding["client"], "scope": "profile", "command": {
+        "binding": binding, "target": target, "command": {
             "kind": "approve", "request": {
                 "operationId": uuid::Uuid::new_v4(), "title": "Agent Graph background execution",
                 "target": {"kind":"session", "sessionId":session}, "capabilities": ["executions"]

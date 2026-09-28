@@ -26,8 +26,8 @@ use maka_protocol::{
     plugin::{RemoteRequest, RemoteResult},
 };
 
-async fn fixture() -> (ClientFixture, Arc<Host>, Arc<State>, String) {
-    let fixture = ClientFixture::new("maka-observation-lane-");
+async fn fixture() -> (HostFixture, Arc<Host>, Arc<State>, String) {
+    let fixture = HostFixture::new("maka-observation-lane-");
     let package = Package::new(BTreeMap::from([
         (MANIFEST_FILE.into(), serde_json::to_vec(&json!({"schemaVersion":1,"id":"example.remote","client":{"entry":"client.js","sdkVersion":1}})).unwrap()),
         ("client.js".into(), b"immutable fixture".to_vec()),
@@ -71,7 +71,7 @@ async fn fixture() -> (ClientFixture, Arc<Host>, Arc<State>, String) {
     )
 }
 
-async fn drain(fixture: &ClientFixture, host: Arc<Host>) {
+async fn drain(fixture: &HostFixture, host: Arc<Host>) {
     #[cfg(unix)]
     let endpoint = fixture.workspace.parent().unwrap().join("drain.sock");
     #[cfg(windows)]

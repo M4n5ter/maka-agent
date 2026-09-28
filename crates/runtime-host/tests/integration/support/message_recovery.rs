@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::client_probe::ClientFixture;
+use super::host_fixture::HostFixture;
 use http_body_util::{BodyExt, Full};
 use hyper::{
     Request, Response,
@@ -137,12 +137,12 @@ impl Provider {
     }
 }
 
-pub async fn configure(fixture: &ClientFixture, base_url: &str) -> SessionModel {
+pub async fn configure(fixture: &HostFixture, base_url: &str) -> SessionModel {
     configure_provider(fixture, base_url, "openai-compatible").await
 }
 
 pub async fn configure_provider(
-    fixture: &ClientFixture,
+    fixture: &HostFixture,
     base_url: &str,
     provider_name: &str,
 ) -> SessionModel {
@@ -190,77 +190,5 @@ pub async fn configure_provider(
         connection_id: connection.connection_id,
         connection_slug: "recovery".into(),
         model: "fixture-model".into(),
-    }
-}
-
-pub async fn unknown_dispatch(
-    log: &maka_event_log::EventLog,
-    owner: &maka_runtime::event::Invocation,
-    path: &std::path::Path,
-) {
-    use maka_runtime::{
-        event::{EventWrite, Fact, LogScope, RuntimeEvent},
-        model::{ModelEvent, ModelFinishReason, ModelPart, ModelStep, ModelToolCall, ModelUsage},
-        tool_call::ToolCallIdentity,
-    };
-    let source = log
-        .scoped_prefix(
-            LogScope::Session {
-                id: owner.session_id.clone(),
-            },
-            100,
-            1024 * 1024,
-        )
-        .await
-        .unwrap();
-    let input = json!({"path":path, "content":"wrong"});
-    let call = ModelToolCall {
-        id: "write".into(),
-        name: "Write".into(),
-        input: input.clone(),
-        provider_options: None,
-        provider_executed: false,
-    };
-    let facts = [
-        Fact::ModelRequested {
-            effective_source_digest: None,
-            purpose: maka_runtime::context::ModelPurpose::Main,
-            context: None,
-            checkpoint_event_id: None,
-            step_id: "step".into(),
-            model_id: "fixture-model".into(),
-            source_scope: source.scope,
-            source_high_water: source.high_water,
-            source_digest: source.digest,
-            input_digest: "fixture".into(),
-            route_identity: "fixture".into(),
-        },
-        Fact::ModelObserved {
-            step_id: "step".into(),
-            event: ModelEvent::ToolCall(call.clone()),
-        },
-        Fact::ModelCompleted {
-            step_id: "step".into(),
-            output: ModelStep {
-                parts: vec![ModelPart::ToolCall { call }],
-                finish_reason: ModelFinishReason::ToolCalls,
-                usage: ModelUsage::default(),
-                provider_options: None,
-                response_id: None,
-                model: None,
-                timestamp: None,
-            },
-        },
-        Fact::ToolDispatched {
-            operation_id: "step:write".into(),
-            call: ToolCallIdentity::provider("step".into(), "write".into()),
-            name: "Write".into(),
-            input,
-        },
-    ];
-    for fact in facts {
-        log.append(&EventWrite::plain(RuntimeEvent::new(owner.clone(), fact)).unwrap())
-            .await
-            .unwrap();
     }
 }

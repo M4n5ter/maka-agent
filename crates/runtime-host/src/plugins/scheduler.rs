@@ -19,18 +19,17 @@
 
 use super::Setup;
 use maka_plugins::{
-    client::Bundle,
-    composition::{Entry, Injection, Operation, Scope},
+    composition::{Entry, Operation, Scope},
     kernel::Definition,
 };
-use maka_scheduler::plugin::{Builtin, CLIENT_SERVICE, ID};
+use maka_scheduler::plugin::{Builtin, ID};
 use std::sync::Arc;
 
 pub(crate) fn install(setup: &mut Setup) -> Result<(), maka_plugins::Error> {
     if setup.builtins.contains_key(ID) || setup.layers.contains_key(ID) {
-        return Err(maka_plugins::Error::Invalid(
-            "built-in Scheduler identity is reserved".into(),
-        ));
+        return Err(maka_plugins::Error::Invalid(format!(
+            "built-in {ID} identity is reserved"
+        )));
     }
     setup.builtins.insert(
         ID.into(),
@@ -39,36 +38,19 @@ pub(crate) fn install(setup: &mut Setup) -> Result<(), maka_plugins::Error> {
             revision: env!("CARGO_PKG_VERSION").into(),
             dependencies: vec![],
             inject: vec![],
-            plugin: Arc::new(Builtin {
-                client: Bundle::builtin(
-                    ID,
-                    env!("CARGO_PKG_VERSION"),
-                    include_str!(concat!(env!("OUT_DIR"), "/scheduler-client.js")),
-                )?,
-            }),
+            plugin: Arc::new(Builtin),
         }),
     );
     let mut entry = Entry::new(ID)?;
     entry.package_id = Some(ID.into());
-    let mut client = Entry::new("maka.scheduler.ui")?;
-    client.package_id = Some(ID.into());
-    client.inject = Injection::Names(vec![CLIENT_SERVICE.into()]);
     setup.layers.insert(
         ID.into(),
-        vec![
-            Operation::Insert {
-                root_id: Some(Scope::Profile),
-                parent_id: None,
-                position: None,
-                entry,
-            },
-            Operation::Insert {
-                root_id: Some(Scope::DesktopUi),
-                parent_id: None,
-                position: None,
-                entry: client,
-            },
-        ],
+        vec![Operation::Insert {
+            root_id: Some(Scope::Profile),
+            parent_id: None,
+            position: None,
+            entry,
+        }],
     );
     Ok(())
 }

@@ -18,12 +18,12 @@
  */
 
 use super::*;
-use crate::support::client_probe::ClientFixture;
+use crate::support::host_fixture::HostFixture;
 use maka_runtime_host::server::{Host, local::LocalListener};
 use tokio_util::sync::CancellationToken;
 
 pub(super) struct Scene {
-    pub fixture: ClientFixture,
+    pub fixture: HostFixture,
     pub host: Arc<Host>,
     pub peer: Peer,
     stop: CancellationToken,
@@ -32,7 +32,7 @@ pub(super) struct Scene {
 }
 impl Scene {
     pub async fn new() -> Self {
-        let fixture = ClientFixture::new("maka-installed-presenter-");
+        let fixture = HostFixture::new("maka-installed-presenter-");
         let package = fixture.workspace.join("plugin");
         std::fs::create_dir(&package).unwrap();
         std::fs::write(

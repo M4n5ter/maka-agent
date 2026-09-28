@@ -20,7 +20,6 @@
 use super::{Item, Repository, message};
 use futures_util::future::BoxFuture;
 use maka_plugins::{
-    client::Bundle,
     contributions::Staged,
     remote::{Caller, Endpoint, Error, Handler, Stream, StreamProvider, key},
 };
@@ -33,16 +32,12 @@ use tokio_util::sync::CancellationToken;
 pub(super) fn publish(
     repository: Arc<Repository>,
     package: &str,
-    bundle: &Bundle,
     staged: &mut Staged,
 ) -> Result<(), String> {
     staged
         .insert(
             key(package, "watch").map_err(message)?,
-            Endpoint::new(
-                bundle.content_digest.clone(),
-                Handler::Stream(Arc::new(Provider(repository))),
-            ),
+            Endpoint::standalone(Handler::Stream(Arc::new(Provider(repository)))),
         )
         .map_err(message)
 }

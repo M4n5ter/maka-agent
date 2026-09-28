@@ -209,7 +209,7 @@ async fn resource_queue_edit_promotion_and_restart_preserve_canonical_sources_wi
         .unwrap();
 }
 async fn scenario() {
-    let fixture = ClientFixture::new("maka-resource-steering-");
+    let fixture = HostFixture::new("maka-resource-steering-");
     std::fs::write(
         fixture.workspace.join("boundary.txt"),
         "settled model boundary",

@@ -21,18 +21,13 @@ use maka_presentation::{InvocationView, tool_message_id};
 use maka_runtime::event::{EventWrite, Fact, InvocationOutcome, StoredEvent, ToolOutcome};
 use maka_runtime::tool_call::{ToolCallIdentity, ToolOrigin, ToolRejection};
 use serde_json::{Value, json};
-use std::{
-    io::Write,
-    path::Path,
-    process::{Command, Stdio},
-};
 #[path = "tools/fixtures.rs"]
 mod fixtures;
 use fixtures::{opening, step, stored};
 #[path = "tools/payloads.rs"]
 mod payloads;
 #[test]
-fn accepted_tools_replay_with_distinct_ids_parentage_rejections_and_original_client_contract() {
+fn accepted_tools_replay_with_distinct_ids_parentage_rejections() {
     let mut facts = vec![opening()];
     step(&mut facts, "first", true, false);
     facts.push(Fact::ToolDispatched {
@@ -178,25 +173,6 @@ fn accepted_tools_replay_with_distinct_ids_parentage_rejections_and_original_cli
         assert_eq!(result["ts"], 999 + fact.sequence);
     }
     assert_eq!(results[3]["toolUseId"], calls[3]["id"]);
-    let mut child = Command::new("node")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/support/source.mjs"))
-        .arg("crates/presentation/tests/fixtures/messages.mjs")
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&serde_json::to_vec(&messages).unwrap())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 fn success(output: &maka_runtime::tool_output::ToolOutput) -> ToolOutcome {

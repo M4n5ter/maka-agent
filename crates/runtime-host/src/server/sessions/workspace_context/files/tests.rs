@@ -23,6 +23,7 @@ use maka_protocol::session::{WorkspaceProjection, WorkspaceTarget};
 use serde_json::json;
 
 fn scope(workspace: &Path, parent: &Path) -> Scope {
+    let parent = parent.canonicalize().unwrap();
     let cwd = maka_fs_tools::workspace::project::host_path(&workspace.canonicalize().unwrap())
         .unwrap()
         .to_owned();
@@ -164,7 +165,8 @@ fn unrestricted_sessions_still_cannot_capture_host_state_or_control_directories(
     assert_eq!(captured.directory_reference.unwrap().host_id, "root");
 }
 
-#[cfg(unix)]
+// macOS filesystems reject invalid UTF-8 names at creation.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn non_utf8_names_do_not_hide_valid_files_or_create_lossy_aliases() {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};

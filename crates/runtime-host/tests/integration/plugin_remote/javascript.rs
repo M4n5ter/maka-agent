@@ -18,7 +18,7 @@
  */
 
 use super::{ready, rpc, success};
-use crate::support::{client_probe::ClientFixture, peer::Peer};
+use crate::support::{host_fixture::HostFixture, peer::Peer};
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -37,7 +37,7 @@ async fn javascript_remote_replaces_exact_registration_and_closes_late_vm_stream
     .unwrap();
 }
 async fn scenario(vm: &str) {
-    let fixture = ClientFixture::new("maka-js-remote-");
+    let fixture = HostFixture::new("maka-js-remote-");
     let database_path = fixture.workspace.join("source.sqlite");
     let source = rusqlite::Connection::open(&database_path).unwrap();
     source.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE source(value INTEGER); INSERT INTO source VALUES(7)").unwrap();

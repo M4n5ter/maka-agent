@@ -176,9 +176,17 @@ fn edit(tui: &mut Pty, label: &str, value: &str, longest_label: &str) {
 }
 
 fn reveal(tui: &mut Pty, label: &str) {
+    let inspector = |screen: &str| {
+        screen
+            .lines()
+            .map(|line| line.rsplit_once('│').map_or("", |(_, content)| content))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     // One price page has at most 128 two-line entries; each wheel tick moves
     // three rows. This input budget covers the page without batching events.
     for _ in 0..128 {
+        tui.wait_until(|screen| screen.contains(label) || screen.contains('┃'));
         let previous = tui.screen.snapshot().unwrap().screen;
         if previous.contains(label) {
             return;
@@ -195,7 +203,9 @@ fn reveal(tui: &mut Pty, label: &str) {
         // move the discovered link between reveal returning and its click.
         let wheel = format!("\x1b[<65;{};{}M", column + 1, row + 1);
         tui.send(wheel.as_bytes());
-        tui.wait_until(|screen| screen != previous || screen.contains(label));
+        tui.wait_until(|screen| {
+            inspector(screen) != inspector(&previous) || screen.contains(label)
+        });
     }
     tui.wait_for(label);
 }

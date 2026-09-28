@@ -22,11 +22,7 @@ use maka_runtime::tools::ToolExecutor;
 use serde_json::json;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-use std::{
-    fs,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{fs, path::Path};
 use tokio_util::sync::CancellationToken;
 
 fn reader(root: &Path) -> ReadExecutor {
@@ -38,84 +34,6 @@ fn reader(root: &Path) -> ReadExecutor {
         ReadLimits::default(),
     )
     .unwrap()
-}
-
-#[tokio::test]
-async fn glob_matches_node_paths_hidden_names_directory_suffix_and_result_cap() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    fs::create_dir_all(root.join("src/deep")).unwrap();
-    fs::create_dir_all(root.join(".hidden")).unwrap();
-    for (path, text) in [
-        ("src/a.ts", "a"),
-        ("src/B.ts", "b"),
-        ("src/deep/z.txt", "z"),
-        ("src/.local", "hidden"),
-        (".hidden/file.txt", "hidden"),
-        ("root.txt", "r"),
-    ] {
-        fs::write(root.join(path), text).unwrap();
-    }
-    let executor = reader(&root);
-    let mut cases = Vec::new();
-    for pattern in [
-        "*",
-        "**",
-        "**/*.ts",
-        "src/?.ts",
-        "src/[a-z].ts",
-        "src/*.TS",
-        "src/b.ts",
-        "**/.local",
-        ".hidden/*",
-        "*/",
-        "src/**/",
-        "missing/*",
-        ".",
-        "./",
-        "./src/*.ts",
-    ] {
-        let result = executor
-            .invoke(
-                "Glob".into(),
-                json!({"pattern":pattern}),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        cases.push(json!({"pattern":pattern,"files":result["files"]}));
-        assert_eq!(result["complete"], true, "{pattern}");
-    }
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/glob_source.mjs");
-    let mut child = Command::new("node")
-        .arg(script)
-        .arg(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    serde_json::to_writer(child.stdin.take().unwrap(), &cases).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    for n in 0..210 {
-        fs::write(root.join(format!("cap{n:03}.txt")), "").unwrap();
-    }
-    let result = executor
-        .invoke(
-            "Glob".into(),
-            json!({"pattern":"cap*.txt"}),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-    let expected: Vec<String> = (0..200).map(|n| format!("cap{n:03}.txt")).collect();
-    assert_eq!(result, json!({"files":expected,"complete":false}));
 }
 
 #[tokio::test]

@@ -17,70 +17,7 @@
  * under the License.
  */
 
-use super::support::client_probe::ClientFixture;
-use maka_runtime::{event::Fact, input::InvocationInput};
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn original_client_resumes_selected_lineage_streams_and_reopens_exact_admission() {
-    let fixture = ClientFixture::new("maka-resume-");
-    let mut original = None;
-    for reopened in [false, true] {
-        fixture
-            .run(
-                "--resume-workspace",
-                reopened,
-                if reopened {
-                    "resume-reopened"
-                } else {
-                    "resume-passed"
-                },
-            )
-            .await;
-        let log = fixture.log().await;
-        let prefix = log.prefix(500, 4 * 1024 * 1024).await.unwrap();
-        assert_eq!(
-            prefix
-                .events
-                .iter()
-                .filter(|s| matches!(s.event.fact, Fact::InvocationOpened { .. }))
-                .count(),
-            3
-        );
-        assert_eq!(
-            prefix
-                .events
-                .iter()
-                .filter(|s| matches!(
-                    s.event.fact,
-                    Fact::InvocationOpened {
-                        input: InvocationInput::Continuation { .. },
-                        ..
-                    }
-                ))
-                .count(),
-            1
-        );
-        let facts = serde_json::to_value(&prefix.events).unwrap();
-        for stored in &prefix.events {
-            if let Fact::InvocationOpened {
-                configuration: Some(configuration),
-                ..
-            } = &stored.event.fact
-            {
-                configuration
-                    .tool_composition
-                    .as_ref()
-                    .expect("Message and manual resume must freeze admitted Host handlers");
-            }
-        }
-        if let Some(original) = &original {
-            assert_eq!(&facts, original);
-        } else {
-            original = Some(facts);
-        }
-        log.close().await.unwrap();
-    }
-}
+use super::support::host_fixture::HostFixture;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_resume_replays_admission_after_lost_reply_and_restart() {
@@ -103,7 +40,7 @@ async fn public_resume() {
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 
-    let fixture = ClientFixture::new("maka-public-resume-");
+    let fixture = HostFixture::new("maka-public-resume-");
     let provider = Provider::start().await;
     let model = configure(&fixture, &provider.base_url).await;
     let mut saved: Option<(Resume, maka_runtime::event::Invocation)> = None;

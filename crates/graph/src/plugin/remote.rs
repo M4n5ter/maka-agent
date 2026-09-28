@@ -30,11 +30,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 
-pub(super) fn register(
-    staged: &mut Staged,
-    manager: Arc<super::Manager>,
-    digest: &str,
-) -> Result<(), String> {
+pub(super) fn register(staged: &mut Staged, manager: Arc<super::Manager>) -> Result<(), String> {
     let package = manager.parent.identity().map_err(message)?.package_id;
     let service = Arc::new(Service {
         manager,
@@ -78,7 +74,7 @@ pub(super) fn register(
         staged
             .insert(
                 key(&package, name).map_err(message)?,
-                Endpoint::new(digest.into(), handler),
+                Endpoint::standalone(handler),
             )
             .map_err(message)?;
     }

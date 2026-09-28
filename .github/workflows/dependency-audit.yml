@@ -25,8 +25,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/dependency-audit.yml
-      - scripts/audit-shipped-dependencies.mjs
-      - scripts/third-party-closure.mjs
       - scripts/rust/dependencies.mjs
       - deny.toml
       - Cargo.toml
@@ -35,14 +33,11 @@ on:
       - crates/cli/DEPENDENCIES.rust.tsv
       - package.json
       - package-lock.json
-      - 'apps/*/package.json'
       - 'packages/*/package.json'
   push:
     branches: [main]
     paths:
       - .github/workflows/dependency-audit.yml
-      - scripts/audit-shipped-dependencies.mjs
-      - scripts/third-party-closure.mjs
       - scripts/rust/dependencies.mjs
       - deny.toml
       - Cargo.toml
@@ -51,7 +46,6 @@ on:
       - crates/cli/DEPENDENCIES.rust.tsv
       - package.json
       - package-lock.json
-      - 'apps/*/package.json'
       - 'packages/*/package.json'
 
 permissions:
@@ -95,20 +89,9 @@ jobs:
           node-version: '24'
           cache: npm
 
-      - name: Install dependencies
-        # The full tree, not --omit=dev: the shipped-closure audit below walks
-        # the renderer roots, which npm labels dev even though they ship.
+      - name: Install build dependencies
         run: npm ci --ignore-scripts
-
-      - name: Audit shipped product closure
-        # A valid moderate+ advisory still fails. Registry availability must
-        # not lock every pull request out of the repository.
-        run: node scripts/audit-shipped-dependencies.mjs --allow-unavailable
-
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
       - name: Verify registry signatures
-        # The full tree, not `--omit=dev`. Two reasons it has to be both:
-        # the renderer roots live in devDependencies while their code ships
-        # inside `dist-renderer`, and signature verification also protects
-        # everything that *executes* during the build — a tampered vite or
-        # biome can pollute the artifact without ever being packaged.
         run: npm audit signatures

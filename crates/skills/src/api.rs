@@ -26,9 +26,7 @@ pub const MAX_ITEMS: usize = 128;
 mod catalog;
 mod governance;
 mod import;
-mod locations;
 pub use import::*;
-pub use locations::*;
 mod mutation;
 mod path;
 mod preview;
@@ -124,3 +122,6 @@ pub enum InvocableResult {
         actual_revision: String,
     },
 }
+
+mod locations;
+pub use locations::*;

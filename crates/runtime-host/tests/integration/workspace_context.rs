@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::support::{client_probe::ClientFixture, peer::Peer};
+use super::support::{host_fixture::HostFixture, peer::Peer};
 use maka_protocol::session::{
     SandboxMode, WorkspaceProjection, WorkspaceTarget, workspace_context as api,
 };
@@ -34,7 +34,7 @@ fn success(reply: Value) -> Value {
 
 #[tokio::test]
 async fn native_workspace_capture_contains_actual_context_and_rejects_retired_boundaries() {
-    let fixture = ClientFixture::new("maka-context-capture-");
+    let fixture = HostFixture::new("maka-context-capture-");
     let cwd =
         maka_fs_tools::workspace::project::host_path(&fixture.workspace.canonicalize().unwrap())
             .unwrap()

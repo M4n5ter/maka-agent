@@ -1,8 +1,4 @@
-# Git on Windows converts LF to CRLF in the working tree by default. That breaks
-# every byte comparison against a generated file — `npm run check:third-party-notices`
-# fails on a checkout it has not touched — and it would ship license text whose
-# bytes differ from the macOS build of the same release. Nothing in this
-# repository needs CRLF, so the working tree stays LF everywhere.
+# Preserve deterministic source and license bytes on every platform.
 * text=auto eol=lf
 
 # Unified diffs require a leading space for context, including empty and tab-indented lines.
@@ -15,10 +11,3 @@
 # working notes are not source-release inputs.
 /.claude export-ignore
 /.maka-shots export-ignore
-/.github/assets/workhub-turn-admission export-ignore
-/maka-proposal-zh-review.txt export-ignore
-
-# DeepSeek Harness remains available to repository development and benchmarks,
-# but its external runtime dependency closure is not an ASF source-release input.
-/packages/eval/harbor/deepseek-harness-toolchain/package.json export-ignore
-/packages/eval/harbor/deepseek-harness-toolchain/package-lock.json export-ignore

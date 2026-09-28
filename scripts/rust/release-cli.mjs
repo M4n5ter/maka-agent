@@ -105,8 +105,7 @@ export async function releaseNativeCli({
     if (cli?.version !== candidate.version) {
       throw new Error('Native CLI version does not match the source archive');
     }
-    // Only the dependency patches needed by the Rust JS bundles; no Electron,
-    // Git hooks or unrelated workspace lifecycle scripts.
+    // Apply build-time dependency patches without running package lifecycle hooks.
     await execute(
       'npm',
       ['ci', '--include=dev', '--include=optional', '--ignore-scripts', '--no-audit', '--no-fund'],

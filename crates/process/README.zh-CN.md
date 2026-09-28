@@ -31,7 +31,7 @@ bash → zsh → sh 回退。Windows 优先 PowerShell 7 → Windows PowerShell 
 
 `terminal::Screen` 使用 `alacritty_terminal`，不启用其 PTY 事件循环或渲染器。
 解析器归现有 PTY worker 所有，不需要 JavaScript runtime、额外线程或跨 runtime 序列化。
-Host 保留执行准入、规范日志、背压和最终输出排空；Desktop 仍用 xterm 渲染。
+Host 保留执行准入、规范日志、背压和最终输出排空。
 
 快照提供可见屏幕、500 行历史、光标／输入模式和最后一次备用屏幕。
 历史丢失或文本超限会设置 `truncated`。写入、转义序列扩展、组合字符、OSC 存储和

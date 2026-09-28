@@ -18,8 +18,7 @@
  */
 
 use super::{
-    ClientFixture, Host, LocalListener, Peer, Provider, Value, answer, configure, next, ready,
-    toggle,
+    Host, HostFixture, LocalListener, Peer, Provider, Value, answer, configure, next, ready, toggle,
 };
 use maka_graph::Mode;
 use serde_json::json;
@@ -29,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn closed_history_releases_capacity_and_evicted_root_reopens_its_durable_epoch() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let fixture = ClientFixture::new("maka-graph-capacity-");
+        let fixture = HostFixture::new("maka-graph-capacity-");
         let (provider, mut requests) = Provider::controlled().await;
         let model = configure(&fixture, &provider.base_url).await;
         let host = Host::open(fixture.owner()).await.unwrap();

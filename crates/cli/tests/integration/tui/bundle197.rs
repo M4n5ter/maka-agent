@@ -75,7 +75,8 @@ fn open_import(tui: &mut Pty) {
 /// a success. No command palette participates in this workflow.
 #[test]
 fn native_bundle_pages_export_import_and_recover_original_receipt_without_replay() {
-    let directory = tempfile::tempdir().unwrap();
+    // Keep reviewed Host paths fully visible in the fixed-width terminal.
+    let directory = tempfile::tempdir_in(std::fs::canonicalize("/tmp").unwrap()).unwrap();
     let source_work = directory.path().join("source-work");
     let target_work = directory.path().join("target-work");
     let project_work = directory.path().join("project-work");
