@@ -51,6 +51,7 @@ pub enum Action {
     Forward,
     Palette,
     ClosePalette,
+    PaletteMoreSessions,
     Help,
     CloseHelp,
     Host,
@@ -190,6 +191,7 @@ pub struct App {
     // Local to this Root/client instance. Reconnects must not discard drafts.
     pub drafts: HashMap<String, crate::editor::Editor>,
     pub palette: Option<usize>,
+    palette_sequence: u64,
     pub command_palette: crate::pages::commands::State,
     pub hits: Vec<Hit>,
     pub hover: Option<Action>,
@@ -291,6 +293,7 @@ impl App {
             sending: HashMap::new(),
             drafts: HashMap::new(),
             palette: None,
+            palette_sequence: 0,
             command_palette: Default::default(),
             hits: Vec::new(),
             hover: None,
@@ -857,13 +860,25 @@ impl App {
             Action::Back => self.navigate(crate::navigation::Intent::Back),
             Action::Forward => self.navigate(crate::navigation::Intent::Forward),
             Action::ClosePalette => self.palette = None,
+            Action::PaletteMoreSessions => {
+                if self.palette.is_some() && self.command_palette.can_more_sessions() {
+                    self.command_palette.more_sessions();
+                    let last = self.commands().len().saturating_sub(1);
+                    if let Some(selected) = self.palette.as_mut() {
+                        *selected = (*selected).min(last);
+                    }
+                    self.layer.retire();
+                }
+            }
             Action::Palette => {
                 // A new palette session: nothing of the last one carries over.
                 self.layer.close();
                 self.invalidate_editor_geometry();
                 self.hover = None;
+                self.palette_sequence = self.palette_sequence.wrapping_add(1);
                 // Background updates may disable an action, never move its hit target.
-                self.command_palette = crate::pages::commands::State::new(self.commands());
+                self.command_palette =
+                    crate::pages::commands::State::new(self.commands(), self.palette_sequence);
                 self.palette = Some(0);
             }
             Action::ToggleTheme => self.theme.cycle(),
@@ -1037,6 +1052,9 @@ impl App {
         None
     }
     pub fn enabled(&self, action: &Action) -> bool {
+        if *action == Action::PaletteMoreSessions {
+            return self.palette.is_some() && self.command_palette.can_more_sessions();
+        }
         if *action == Action::ConfirmQuit {
             return matches!(self.shutdown.prompt, Some(crate::shutdown::Prompt::Busy))
                 && !self.shutdown.stopping;

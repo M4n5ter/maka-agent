@@ -173,6 +173,10 @@ enum Completed {
     Connected(Result<(Client, mpsc::Receiver<Notification>), Error>),
     Status(Result<Value, String>),
     Catalog(Result<maka_protocol::session::SessionCatalogQueryResult, String>),
+    PaletteSessions(
+        pages::commands::SessionSearchRequest,
+        Result<maka_protocol::session::SessionCatalogQueryResult, String>,
+    ),
     Inbox(Result<maka_protocol::session::SessionCatalogQueryResult, String>),
     Projects(Result<maka_protocol::project::QueryResult, String>),
     Connections(Result<Value, String>),
@@ -598,6 +602,19 @@ where
                             .await
                             .map_err(|e| e.to_string()),
                     )
+                });
+            }
+            if app.palette.is_some()
+                && let ConnectionState::Connected { root_id, epoch } = &app.connection
+                && let Some(request) = app.command_palette.session_request(root_id, epoch)
+            {
+                let client = client.clone();
+                jobs.spawn(async move {
+                    let result = client
+                        .session_catalog(request.query.clone())
+                        .await
+                        .map_err(|error| error.to_string());
+                    Completed::PaletteSessions(request, result)
                 });
             }
             if let Some(input) = app.inbox.query() {
@@ -1567,6 +1584,23 @@ where
                     }
                     Some(Ok(Completed::Connected(Err(error)))) => app.connection = ConnectionState::Failed(error.to_string()),
                     Some(Ok(Completed::Catalog(result))) => app.sessions.complete(result),
+                    Some(Ok(Completed::PaletteSessions(request, result))) => {
+                        if app.palette.is_some() {
+                            let host = match &app.connection {
+                                ConnectionState::Connected { root_id, epoch } => {
+                                    Some((root_id.as_str(), epoch.as_str()))
+                                }
+                                _ => None,
+                            };
+                            if app.command_palette.session_completed(&request, result, host) {
+                                let last = app.commands().len().saturating_sub(1);
+                                if let Some(selected) = app.palette.as_mut() {
+                                    *selected = (*selected).min(last);
+                                }
+                                app.layer.retire();
+                            }
+                        }
+                    },
                     Some(Ok(Completed::Inbox(result))) => app.inbox.complete(result),
                     Some(Ok(Completed::Projects(result))) => app.projects.complete(result),
                     Some(Ok(Completed::Connections(result))) => {
