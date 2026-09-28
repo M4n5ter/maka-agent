@@ -19,10 +19,20 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  lstat,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
-async function digest(path) {
+export async function digest(path) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
@@ -32,38 +42,56 @@ async function digest(path) {
 export async function v8CacheKey({ source, target, features }) {
   const recipe = {};
   // Hash the executed producer, which may differ from an older source candidate.
-  for (const file of ['build-v8.mjs', 'v8-cache.mjs', 'v8-notices.mjs', 'notices.mjs'])
+  for (const file of ['compile-v8.mjs', 'v8-notices.mjs', 'license-files.mjs'])
     recipe[file] = await digest(new URL(file, import.meta.url));
   return createHash('sha256')
     .update(JSON.stringify({ source, target, features: [...new Set(features)].sort(), recipe }))
     .digest('hex');
 }
 
+/** Fixed regular files; limits apply before reading or extracting their contents. */
+export function v8Files(target) {
+  return {
+    [target.includes('windows') ? 'rusty_v8.lib' : 'librusty_v8.a']: 512 * 1024 * 1024,
+    'src_binding.rs': 4 * 1024 * 1024,
+    'THIRD_PARTY_NOTICES.txt': 16 * 1024 * 1024,
+    'receipt.json': 16 * 1024,
+  };
+}
+
+export async function readV8Entry(directory, key, target) {
+  try {
+    for (const [name, limit] of Object.entries(v8Files(target))) {
+      const file = await lstat(join(directory, name));
+      if (!file.isFile() || file.size === 0 || file.size > limit)
+        throw new Error('Invalid V8 bundle file: ' + name);
+    }
+    const receipt = JSON.parse(await readFile(join(directory, 'receipt.json'), 'utf8'));
+    if (receipt.key !== key) throw new Error('identity differs');
+    const [archive, bindings, notices] = Object.keys(v8Files(target));
+    for (const name of [archive, bindings, notices]) {
+      if (receipt.files?.[name] !== (await digest(join(directory, name))))
+        throw new Error(name + ' digest differs');
+    }
+    return {
+      environment: {
+        RUSTY_V8_ARCHIVE: join(directory, archive),
+        RUSTY_V8_SRC_BINDING_PATH: join(directory, bindings),
+      },
+      notices: await readFile(join(directory, notices), 'utf8'),
+    };
+  } catch (cause) {
+    throw new Error('Invalid V8 cache entry; remove it and retry: ' + directory, { cause });
+  }
+}
+
 /** A trusted build cache always keeps the library, bindings and notices together. */
 export async function cachedV8({ directory, key, target, build }) {
   if (!/^[0-9a-f]{64}$/.test(key)) throw new Error('Invalid V8 cache key');
   const entry = join(directory, key);
-  const archive = target.includes('windows') ? 'rusty_v8.lib' : 'librusty_v8.a';
-  const files = [archive, 'src_binding.rs', 'THIRD_PARTY_NOTICES.txt'];
-  async function read(path) {
-    try {
-      const receipt = JSON.parse(await readFile(join(path, 'receipt.json'), 'utf8'));
-      if (receipt.key !== key) throw new Error('identity differs');
-      for (const file of files) {
-        if (receipt.files?.[file] !== (await digest(join(path, file))))
-          throw new Error(file + ' digest differs');
-      }
-      return {
-        environment: {
-          RUSTY_V8_ARCHIVE: join(path, archive),
-          RUSTY_V8_SRC_BINDING_PATH: join(path, 'src_binding.rs'),
-        },
-        notices: await readFile(join(path, 'THIRD_PARTY_NOTICES.txt'), 'utf8'),
-      };
-    } catch (cause) {
-      throw new Error('Invalid V8 cache entry; remove it and retry: ' + path, { cause });
-    }
-  }
+  const [archive, ...rest] = Object.keys(v8Files(target));
+  const files = [archive, ...rest.filter((name) => name !== 'receipt.json')];
+  const read = (path) => readV8Entry(path, key, target);
   const existing = await stat(entry).catch((error) => {
     if (error.code !== 'ENOENT') throw error;
   });
@@ -72,7 +100,7 @@ export async function cachedV8({ directory, key, target, build }) {
     console.error('Reusing verified V8 cache: ' + key);
     return result;
   }
-  console.error('Building V8 cache: ' + key);
+  console.error('Preparing V8 cache: ' + key);
   const built = await build();
   await mkdir(directory, { recursive: true });
   const stage = await mkdtemp(join(directory, '.building-'));

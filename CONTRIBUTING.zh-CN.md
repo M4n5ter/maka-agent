@@ -29,6 +29,8 @@
 
 需要 Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0、just、cargo-nextest 和 Python 3。许可证清单检查还需要 cargo-deny。
 
+常用任务统一使用 [just](https://github.com/casey/just)。推荐通过包管理器安装（macOS：`brew install just`），也可运行 `cargo install --locked just`。Windows 还需将 Git for Windows 的 `sh` 加入 `PATH`。
+
 ```sh
 just setup                 # 构建时使用的 JavaScript 依赖
 just run                   # 原生 TUI
@@ -37,6 +39,8 @@ just check                 # 格式、Clippy、SDK、脚本和 Rust 测试
 ```
 
 通过 `just test -p maka-runtime-host` 运行单个 crate 的测试。向 `just build` 传递 Cargo 参数选择目标和构建模式，复用现有缓存，避免重复构建。
+
+日常开发使用 Cargo 的 V8 预构建。`just package` 复用我们固定的、不含 LGPL glibc 数学实现的 V8 产物；只有缺少匹配预构建和本地缓存时才源码编译。构建要求见 [CLI 打包说明](packages/cli/README.zh-CN.md)。
 
 官网独立管理依赖：先运行 `just website-setup`，再使用 `just website-dev` 或 `just website-check`。官网依赖更新写入 `website/package-lock.json`，构建工具和插件依赖使用根锁文件。
 

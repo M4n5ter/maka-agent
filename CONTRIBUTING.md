@@ -47,6 +47,8 @@ Submit only work you have the right to contribute, and record third-party source
 
 Use Rust 1.98 or newer, Node.js 22.19 or newer, npm 11.19.0, just, cargo-nextest and Python 3. The license inventory check also uses cargo-deny.
 
+Use [just](https://github.com/casey/just) for common tasks. Install it with your package manager (`brew install just` on macOS), or `cargo install --locked just`. On Windows, put Git for Windows' `sh` on `PATH`.
+
 ```sh
 just setup                 # build-time JavaScript dependencies
 just run                   # native TUI
@@ -55,6 +57,8 @@ just check                 # formatting, Clippy, SDK, scripts and Rust tests
 ```
 
 `just test -p maka-runtime-host` runs one crate's tests. Add build targets or release profiles through `just build` arguments. Use the existing Cargo cache and avoid redundant build profiles.
+
+Development builds use Cargo's V8 prebuilts. `just package` reuses our pinned V8 build without LGPL glibc math; source compilation is needed only when no matching prebuilt or local cache exists. See [CLI packaging](packages/cli/README.md) for build requirements.
 
 The website is independent: `just website-setup`, then `just website-dev` or `just website-check`. Its dependency changes update `website/package-lock.json`; build tooling and plugin dependencies use the root lockfile.
 

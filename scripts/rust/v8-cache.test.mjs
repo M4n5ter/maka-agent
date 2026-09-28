@@ -45,11 +45,15 @@ test('V8 cache identity follows compatibility inputs and the executed producer',
     assert.notEqual(await v8CacheKey(changed), key);
   const stage = await mkdtemp(join(tmpdir(), 'maka-v8-recipe-'));
   try {
-    for (const name of ['build-v8.mjs', 'v8-cache.mjs', 'v8-notices.mjs', 'notices.mjs'])
+    for (const name of ['v8-cache.mjs', 'compile-v8.mjs', 'v8-notices.mjs', 'license-files.mjs'])
       await copyFile(new URL(name, import.meta.url), join(stage, name));
     const copied = await import(pathToFileURL(join(stage, 'v8-cache.mjs')).href);
     assert.equal(await copied.v8CacheKey(input), key);
-    await writeFile(join(stage, 'build-v8.mjs'), 'changed producer');
+    await writeFile(join(stage, 'build-v8.mjs'), 'changed transport');
+    await writeFile(join(stage, 'notices.mjs'), 'changed unrelated notice tooling');
+    await writeFile(join(stage, 'v8-prebuilts.json'), '{}');
+    assert.equal(await copied.v8CacheKey(input), key);
+    await writeFile(join(stage, 'compile-v8.mjs'), 'changed producer');
     assert.notEqual(await copied.v8CacheKey(input), key);
     assert.equal(await v8CacheKey(input), key);
   } finally {

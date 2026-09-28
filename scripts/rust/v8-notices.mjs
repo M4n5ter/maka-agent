@@ -20,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { licenseFiles } from './notices.mjs';
+import { licenseFiles } from './license-files.mjs';
 
 /** Collect from the same checkout and GN graph that produced the static library. */
 export async function v8Notices(checkout, generated, source, env) {

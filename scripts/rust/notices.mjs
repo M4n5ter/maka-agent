@@ -25,15 +25,12 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { nativeCliTargets } from './pack-cli.mjs';
 import { rustTarget } from './build-cli.mjs';
+import { licenseFiles, licenseName } from './license-files.mjs';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const documentPath = 'crates/cli/THIRD_PARTY_NOTICES.txt';
 const manifestPath = 'crates/cli/notices.json';
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const licenseName = (name) =>
-  (/^(?:licen[cs]e|copying|copyright|notice|credits)(?:$|[-_.])/i.test(name) ||
-    /[-_]licen[cs]e(?:$|\.)/i.test(name)) &&
-  !/\.(?:rs|py|h|cc|c|json|toml|sh|js)$/i.test(name);
 
 async function inputs(root) {
   const names = [
@@ -48,6 +45,10 @@ async function inputs(root) {
     'crates/computer-use/THIRD_PARTY_NOTICES',
     'scripts/rust/v8-source.json',
     'scripts/rust/build-v8.mjs',
+    'scripts/rust/compile-v8.mjs',
+    'scripts/rust/license-files.mjs',
+    'scripts/rust/v8-prebuilt.mjs',
+    'scripts/rust/v8-prebuilts.json',
     'scripts/rust/v8-cache.mjs',
     'scripts/rust/v8-notices.mjs',
   ];
@@ -91,20 +92,6 @@ export async function verifyNotices(root = repository) {
     );
   }
   return join(root, documentPath);
-}
-
-export async function licenseFiles(directory, licenseDirectory = false) {
-  const found = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === 'target') continue;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory())
-      found.push(
-        ...(await licenseFiles(path, licenseDirectory || /^licen[cs]es?$/i.test(entry.name))),
-      );
-    else if (entry.isFile() && (licenseName(entry.name) || licenseDirectory)) found.push(path);
-  }
-  return found.sort();
 }
 
 function run(command, args, cwd) {

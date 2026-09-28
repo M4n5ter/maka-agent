@@ -129,15 +129,29 @@ jobs:
           path: target/v8/${{ steps.v8-key.outputs.key }}
           key: maka-v8-${{ matrix.target }}-${{ steps.v8-key.outputs.key }}
       - name: Build verified source and exercise the native executables
+        env:
+          V8_CACHE_KEY: ${{ steps.v8-key.outputs.key }}
         shell: bash
         run: |
           node --input-type=module <<'JS'
           import { releaseNativeCli } from './scripts/rust/release-cli.mjs';
+          import { rustTarget } from './scripts/rust/build-cli.mjs';
+          import { packV8 } from './scripts/rust/v8-prebuilt.mjs';
+          import { readFileSync } from 'node:fs';
           const target = process.env.NATIVE_TARGET;
           await releaseNativeCli({
             source: 'source/apache-maka-' + process.env.SOURCE_VERSION + '-incubating-src.tar.gz',
             target, buildId: process.env.BUILD_ID, output: 'native-preview',
           });
+          const pins = JSON.parse(readFileSync('scripts/rust/v8-prebuilts.json', 'utf8'));
+          if (!Object.hasOwn(pins, process.env.V8_CACHE_KEY)) {
+            await packV8({
+              directory: process.env.CARGO_TARGET_DIR + '/v8',
+              key: process.env.V8_CACHE_KEY, target: rustTarget(), output: 'v8-preview',
+              verifiedBy: { commit: process.env.GITHUB_SHA,
+                run: 'https://github.com/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID },
+            });
+          }
           JS
       # A later Maka build failure does not invalidate a completed V8 dependency.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -149,6 +163,12 @@ jobs:
         with:
           name: native-preview-${{ matrix.target }}
           path: native-preview/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ hashFiles('v8-preview/*.json') != '' }}
+        with:
+          name: v8-prebuilt-${{ matrix.target }}
+          path: v8-preview/*
           if-no-files-found: error
 
   prepare:
