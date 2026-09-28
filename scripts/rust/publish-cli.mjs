@@ -26,6 +26,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { compareProductReleaseVersions, parseProductReleaseVersion } from '../release-version.mjs';
 import { npmSpawnOptions } from '../npm-spawn.mjs';
+import { execTar } from '../asf-source-release.mjs';
 
 // Publish the Windows component before Linux can expose it to WSL users.
 export const previewTargets = ['win32-x64', 'darwin-arm64', 'linux-x64-gnu'];
@@ -51,7 +52,7 @@ export async function readNativePreviewRelease(directory) {
     if (integrity !== 'sha512-' + hash.digest('base64'))
       throw new Error('Native archive integrity differs');
     const manifest = JSON.parse(
-      execFileSync('tar', ['-xOf', archive, 'package/package.json'], {
+      execTar(archive, ['-xOf', 'package/package.json'], {
         encoding: 'utf8',
         maxBuffer: 64 * 1024,
         timeout: 30_000,
@@ -96,7 +97,7 @@ export async function readPreviewRelease(directory) {
     throw new Error('Launcher archive integrity differs');
   }
   const manifest = JSON.parse(
-    execFileSync('tar', ['-xOf', archive, 'package/package.json'], {
+    execTar(archive, ['-xOf', 'package/package.json'], {
       encoding: 'utf8',
       maxBuffer: 64 * 1024,
       timeout: 30_000,

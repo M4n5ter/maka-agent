@@ -24,7 +24,11 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
-import { controlledProcessEnvironment, verifySourceCandidate } from '../asf-source-release.mjs';
+import {
+  controlledProcessEnvironment,
+  execTar,
+  verifySourceCandidate,
+} from '../asf-source-release.mjs';
 import { npmSpawnOptions } from '../npm-spawn.mjs';
 import { parseProductReleaseVersion } from '../release-version.mjs';
 import { buildCli, rustTarget } from './build-cli.mjs';
@@ -70,10 +74,7 @@ export async function releaseNativeCli({ source, keys, target, validator, output
     const version = previewVersion(candidate.version, buildId);
     const extraction = join(stage, 'source');
     await mkdir(extraction);
-    await run('tar', ['-xzf', archivePath, '-C', extraction], {
-      env: controlledProcessEnvironment({
-        excludedNames: ['GZIP', 'TAR_OPTIONS', 'TAR_READER_OPTIONS'],
-      }),
+    execTar(archivePath, ['-xzf', '-C', extraction], {
       timeout: 180_000,
       windowsHide: true,
     });

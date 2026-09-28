@@ -760,7 +760,8 @@ function validateAsciiArmoredSignature(signaturePath) {
   }
 }
 
-function execTar(archivePath, arguments_, options) {
+// GNU tar treats a Windows drive prefix as a remote host; use cwd + basename.
+export function execTar(archivePath, arguments_, options) {
   return execFileSync('tar', [arguments_[0], basename(archivePath), ...arguments_.slice(1)], {
     cwd: dirname(archivePath),
     ...options,

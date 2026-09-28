@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { controlledProcessEnvironment, verifySourceCandidate } from '../asf-source-release.mjs';
+import { execTar, verifySourceCandidate } from '../asf-source-release.mjs';
 import { npmSpawnOptions } from '../npm-spawn.mjs';
 import { readNativePreviewRelease } from './publish-cli.mjs';
 
@@ -41,11 +41,10 @@ export async function packLauncher(directory) {
   }
   const stage = await mkdtemp(join(tmpdir(), 'maka-launcher-'));
   try {
-    await run(
-      'tar',
+    execTar(
+      archivePath,
       [
         '-xzf',
-        archivePath,
         '-C',
         stage,
         `${candidate.rootDirectory}/packages/cli`,
@@ -53,7 +52,6 @@ export async function packLauncher(directory) {
         `${candidate.rootDirectory}/NOTICE`,
       ],
       {
-        env: controlledProcessEnvironment({ excludedNames: ['TAR_OPTIONS', 'TAR_READER_OPTIONS'] }),
         timeout: 30_000,
       },
     );
