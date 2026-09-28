@@ -56,7 +56,7 @@
     "patches/@ai-sdk+provider-utils+5.0.40.patch": "6b9ce7e55994e83f788073c67a21e6b60d615c20a9aa2014f99a9e937ddbb501",
     "patches/zod+4.6.5.patch": "5a6cbff1b31ca2a5d2b7c006abb7b1002241dbf4ae42c315c27940201f52b081",
     "scripts/apply-dependency-patches.mjs": "67e548835b0de28e3753be559abb5cb2efbe94a46d72e0b756c23f944896d4bd",
-    "scripts/rust/build-v8.mjs": "808d7264bf1aaca264c67c72d8c3b31491c3b5593da4a4ed6e1e9c374325c012",
+    "scripts/rust/build-v8.mjs": "fa9ca2f7d672e481a293c64944f0f09ba58ebe5d811c7821abb3af1e1ebee9ab",
     "scripts/rust/bundle-providers.mjs": "0ea3fa0c574a9489ed7ad59a18a11d9a6840aa0c89499d2147663454d30d8c0c",
     "scripts/rust/licenses/declared-mit.txt": "64b7f750f9d400b9635353034dbc015638ded8dbdeb2c79ae555e1a6ef9cf314",
     "scripts/rust/licenses/selectors-0.38.0.txt": "d040d92f5deb344505a902a2442a75e99c7a2057f836d96150664c9310ceeed4",

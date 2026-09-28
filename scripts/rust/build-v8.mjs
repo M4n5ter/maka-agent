@@ -18,7 +18,8 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { v8Notices } from './v8-notices.mjs';
 
@@ -62,6 +63,12 @@ export async function buildV8({ root, directory, target, env, metadata }) {
   // Select the tools pinned by this checkout, even when PATH contains GN/Ninja.
   const tools = join(buildDirectory, 'ninja_gn_binaries');
   await run(python, ['tools/ninja_gn_binaries.py', '--dir', tools]);
+  const clang = join(buildDirectory, 'clang');
+  await run(python, ['tools/clang/scripts/update.py', '--output-dir', clang]);
+  const windows = process.platform === 'win32';
+  // Chromium ships its Windows librarian through lld-link /lib, not llvm-ar.
+  const archiver = join(clang, 'bin', windows ? 'lld-link.exe' : 'llvm-ar');
+  await access(archiver, constants.X_OK);
   let gnArgs = source.gnArgs;
   const bindingEnvironment = {};
   if (target === 'x86_64-unknown-linux-gnu') {
@@ -71,7 +78,7 @@ export async function buildV8({ root, directory, target, env, metadata }) {
     bindingEnvironment.BINDGEN_EXTRA_CLANG_ARGS =
       '--sysroot=' + JSON.stringify(join(checkout, 'build/linux/debian_bullseye_amd64-sysroot'));
   }
-  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const suffix = windows ? '.exe' : '';
   const buildEnvironment = {
     ...env,
     ...bindingEnvironment,
@@ -106,13 +113,7 @@ export async function buildV8({ root, directory, target, env, metadata }) {
     'obj',
     target.includes('windows') ? 'rusty_v8.lib' : 'librusty_v8.a',
   );
-  const ar = join(
-    output,
-    target,
-    'release/clang/bin',
-    target.includes('windows') ? 'llvm-ar.exe' : 'llvm-ar',
-  );
-  const members = execFileSync(ar, ['t', archive], {
+  const members = execFileSync(archiver, [...(windows ? ['/lib', '/list'] : ['t']), archive], {
     encoding: 'utf8',
     maxBuffer: 4 * 1024 * 1024,
   });
