@@ -457,6 +457,104 @@ mod tests {
     }
 
     #[test]
+    fn new_session_setup_returns_home_only_after_the_catalog_confirms_readiness() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(json!({
+            "kind":"page", "revision":1, "connectionCount":0,
+            "defaultTarget":null, "items":[], "nextCursor":null
+        })));
+        app.apply(Action::CreateSession);
+        assert_eq!(app.navigation.current(), Route::Connections);
+        assert!(app.setup_return_home);
+
+        app.connections.refresh();
+        app.connections.query();
+        let mut without_default = page(2, 0, 1, 1);
+        without_default["defaultTarget"] = Value::Null;
+        app.connections.complete(Ok(without_default));
+        app.return_from_model_setup();
+        assert_eq!(app.navigation.current(), Route::Connections);
+        assert!(!app.creating);
+
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(page(3, 0, 1, 1)));
+        app.return_from_model_setup();
+        assert_eq!(app.navigation.current(), Route::Workspace);
+        assert!(!app.setup_return_home);
+        assert!(!app.creating);
+        assert!(matches!(
+            app.apply(Action::CreateSession),
+            Some(Action::CreateSession)
+        ));
+    }
+
+    #[test]
+    fn opening_or_cancelling_default_model_settings_does_not_create_a_session() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.connections.refresh();
+        app.connections.query();
+        let mut without_default = page(1, 0, 1, 1);
+        without_default["defaultTarget"] = Value::Null;
+        app.connections.complete(Ok(without_default));
+        app.apply(app.default_model_action().unwrap());
+        assert!(!app.setup_return_home);
+        app.apply(Action::Manage(crate::pages::manage::Command::Close));
+        app.apply(Action::CreateSession);
+        assert!(app.setup_return_home);
+        assert!(app.management.dialog.is_some());
+        app.apply(Action::Manage(crate::pages::manage::Command::Close));
+        assert!(!app.setup_return_home);
+        assert!(!app.creating);
+    }
+
+    #[test]
+    fn cancelling_connection_setup_retires_the_return_to_home() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(json!({
+            "kind":"page", "revision":1, "connectionCount":0,
+            "defaultTarget":null, "items":[], "nextCursor":null
+        })));
+        app.apply(Action::CreateSession);
+        app.apply(Action::Onboard(crate::pages::onboarding::Command::Open));
+        assert!(app.onboarding.dialog.is_some());
+        assert!(app.setup_return_home);
+        app.apply(Action::Onboard(crate::pages::onboarding::Command::Close));
+        assert!(!app.setup_return_home);
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(page(2, 0, 1, 1)));
+        app.return_from_model_setup();
+        assert_eq!(app.navigation.current(), Route::Connections);
+        assert!(!app.creating);
+    }
+
+    #[test]
     fn connection_overview_skips_inventory_bounds_pages_and_preserves_nested_navigation() {
         let mut app = App::new(
             "/unused".into(),

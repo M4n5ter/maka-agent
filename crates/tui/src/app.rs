@@ -206,6 +206,8 @@ pub struct App {
     pub theme: crate::theme::Theme,
     pub refreshing: bool,
     pub creating: bool,
+    /// A New-session request is waiting for model setup, never for replay.
+    pub(crate) setup_return_home: bool,
     pub(crate) frame_size: Option<(u16, u16)>,
 }
 
@@ -215,10 +217,12 @@ impl App {
         match self.connections.setup() {
             Setup::NeedsConnection => {
                 self.apply(Action::Visit(Route::Connections));
+                self.setup_return_home = self.navigation.current() == Route::Connections;
             }
             Setup::NeedsDefault => {
                 if let Some(action) = self.default_model_action() {
                     self.apply(action);
+                    self.setup_return_home = self.management.dialog.is_some();
                 }
             }
             Setup::Loading => self.notice = Some(Notice::Local("connections-loading")),
@@ -229,6 +233,18 @@ impl App {
             Setup::Ready => return false,
         }
         true
+    }
+
+    pub(crate) fn return_from_model_setup(&mut self) {
+        if self.setup_return_home
+            && matches!(self.connection, ConnectionState::Connected { .. })
+            && self.connections.setup() == crate::pages::connections::Setup::Ready
+            && self.management.dialog.is_none()
+            && self.onboarding.dialog.is_none()
+        {
+            self.setup_return_home = false;
+            self.apply(Action::Visit(Route::Workspace));
+        }
     }
 
     pub fn new(root: PathBuf, i18n: I18n) -> Self {
@@ -291,6 +307,7 @@ impl App {
             theme: crate::theme::Theme::default(),
             refreshing: false,
             creating: false,
+            setup_return_home: false,
             frame_size: None,
         }
     }
@@ -979,11 +996,13 @@ impl App {
                 if self.route_missing_model_setup() {
                     return None;
                 }
+                self.setup_return_home = false;
                 self.creating = true;
                 self.notice = None;
                 return Some(action);
             }
             Action::Connect if !matches!(self.connection, ConnectionState::Connecting) => {
+                self.setup_return_home = false;
                 self.connection = ConnectionState::Connecting;
                 self.status = None;
                 self.notice = None;
@@ -1328,6 +1347,9 @@ impl App {
         self.leave_page();
         self.hover = None;
         self.navigation = navigation;
+        if self.setup_return_home && target.route != Route::Connections {
+            self.setup_return_home = false;
+        }
         self.sync_route();
         self.enter_page_focused(view_focus);
         // Applied refreshes the destination before discovering its children.

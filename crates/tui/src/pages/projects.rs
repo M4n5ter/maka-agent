@@ -306,6 +306,7 @@ impl App {
                 if self.route_missing_model_setup() {
                     return None;
                 }
+                self.setup_return_home = false;
                 self.creating = true;
                 self.notice = None;
                 return Some(Action::Project(Command::Create(id)));
