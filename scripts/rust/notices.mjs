@@ -131,10 +131,16 @@ export async function generateNotices(root = repository) {
       downloaded.set(
         url,
         (async () => {
-          const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-          if (!response.ok)
-            throw new Error('License source failed: ' + url + ' (' + response.status + ')');
-          return response.text();
+          for (let attempt = 0; ; attempt++) {
+            try {
+              const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+              if (!response.ok) throw new Error('HTTP ' + response.status);
+              return await response.text();
+            } catch (cause) {
+              if (attempt === 2) throw new Error('License source failed: ' + url, { cause });
+              await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+            }
+          }
         })(),
       );
     return downloaded.get(url);

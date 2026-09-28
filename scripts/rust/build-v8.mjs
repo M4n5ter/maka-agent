@@ -43,25 +43,13 @@ export async function buildV8({ root, directory, target, env, metadata }) {
           : reject(new Error(`V8 source build failed: ${command} (${signal ?? code})`)),
       );
     });
-  await run('git', ['init', '--quiet']);
-  await run('git', [
-    '-c',
-    'core.symlinks=true',
-    'fetch',
-    '--depth=1',
-    source.repository,
-    source.revision,
-  ]);
-  await run('git', ['-c', 'core.symlinks=true', 'checkout', '--quiet', '--detach', 'FETCH_HEAD']);
-  await run('git', [
-    '-c',
-    'core.symlinks=true',
-    'submodule',
-    'update',
-    '--init',
-    '--recursive',
-    '--depth=1',
-  ]);
+  // These options also reach recursive submodule checkouts on Windows.
+  const git = (...args) =>
+    run('git', ['-c', 'core.symlinks=true', '-c', 'core.longpaths=true', ...args]);
+  await git('init', '--quiet');
+  await git('fetch', '--depth=1', source.repository, source.revision);
+  await git('checkout', '--quiet', '--detach', 'FETCH_HEAD');
+  await git('submodule', 'update', '--init', '--recursive', '--depth=1');
   const buildDirectory = join(output, target, 'release');
   const python = execFileSync(
     env.PYTHON || 'python3',
