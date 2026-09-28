@@ -134,6 +134,7 @@ pub enum Notice {
     Local(&'static str),
     Clipboard { key: &'static str, until: Instant },
     Diagnostic(String),
+    CreateFailed(String),
     Catalog { kind: String, revision: String },
 }
 
@@ -209,6 +210,27 @@ pub struct App {
 }
 
 impl App {
+    pub(crate) fn route_missing_model_setup(&mut self) -> bool {
+        use crate::pages::connections::Setup;
+        match self.connections.setup() {
+            Setup::NeedsConnection => {
+                self.apply(Action::Visit(Route::Connections));
+            }
+            Setup::NeedsDefault => {
+                if let Some(action) = self.default_model_action() {
+                    self.apply(action);
+                }
+            }
+            Setup::Loading => self.notice = Some(Notice::Local("connections-loading")),
+            Setup::Failed => {
+                self.connections.refresh();
+                self.notice = Some(Notice::Local("connections-failed"));
+            }
+            Setup::Ready => return false,
+        }
+        true
+    }
+
     pub fn new(root: PathBuf, i18n: I18n) -> Self {
         let locale = i18n.locale().id();
         Self {
@@ -761,7 +783,10 @@ impl App {
                     ),
                 ));
                 self.settings.host_details |= self.state_error.is_some()
-                    || matches!(self.notice, Some(Notice::Diagnostic(_)))
+                    || matches!(
+                        self.notice,
+                        Some(Notice::Diagnostic(_) | Notice::CreateFailed(_))
+                    )
                     || matches!(
                         self.connection,
                         ConnectionState::Failed(_) | ConnectionState::WrongEpoch
@@ -951,6 +976,9 @@ impl App {
                 return Some(action);
             }
             Action::CreateSession => {
+                if self.route_missing_model_setup() {
+                    return None;
+                }
                 self.creating = true;
                 self.notice = None;
                 return Some(action);

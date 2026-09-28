@@ -239,7 +239,10 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 pub(super) fn footer(frame: &mut Frame<'_>, app: &mut App, area: Rect, hint: String) {
-    let diagnostic = matches!(&app.notice, Some(Notice::Diagnostic(_)));
+    let diagnostic = matches!(
+        &app.notice,
+        Some(Notice::Diagnostic(_) | Notice::CreateFailed(_))
+    );
     let mut tree = Node::text(
         "footer",
         vec![(

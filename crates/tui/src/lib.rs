@@ -623,7 +623,8 @@ where
                     )
                 });
             }
-            if app.navigation.current() == navigation::Route::Connections
+            if (app.navigation.current() == navigation::Route::Connections
+                || app.connections.setup() == pages::connections::Setup::Loading)
                 && let Some(input) = app.connections.query()
             {
                 let client = client.clone();
@@ -1496,7 +1497,7 @@ where
                                 }
                                 if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                             }
-                            Err(error) => app.notice = Some(Notice::Diagnostic(error)),
+                            Err(error) => app.notice = Some(Notice::CreateFailed(error)),
                         }
                     }
                     Some(Ok(Completed::Submitted(request, result))) => {
@@ -1568,7 +1569,16 @@ where
                     Some(Ok(Completed::Catalog(result))) => app.sessions.complete(result),
                     Some(Ok(Completed::Inbox(result))) => app.inbox.complete(result),
                     Some(Ok(Completed::Projects(result))) => app.projects.complete(result),
-                    Some(Ok(Completed::Connections(result))) => app.connections.complete(result),
+                    Some(Ok(Completed::Connections(result))) => {
+                        app.connections.complete(result);
+                        if matches!(app.notice, Some(Notice::Local("connections-loading" | "connections-failed"))) {
+                            app.notice = match app.connections.setup() {
+                                pages::connections::Setup::Loading => Some(Notice::Local("connections-loading")),
+                                pages::connections::Setup::Failed => Some(Notice::Local("connections-failed")),
+                                _ => None,
+                            };
+                        }
+                    },
                     Some(Ok(Completed::Providers(generation, result))) => {
                         app.providers.complete(generation, result);
                         app.provider_commands_loaded();

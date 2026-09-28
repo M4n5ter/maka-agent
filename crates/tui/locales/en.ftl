@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-oauth-title = Sign in to a provider
+oauth-title = Connect with an account or API key
 oauth-identity = Connection details
 oauth-name = Display name
 oauth-slug = Connection ID
@@ -285,6 +285,7 @@ chat-send-unconfirmed = Not yet confirmed · Draft kept; Ctrl+R to check again �
 chat-send-cancelled = Host confirms cancellation · Draft kept; Enter to send as a new message
 chat-send-not-admitted = Not delivered · Draft kept; Enter to send
 session-create = New session in current directory · Ctrl+N
+session-create-failed = Couldn’t create session · View details
 session-new = New conversation
 shell-error = Error · { $error }
 interaction-open = Review pending request · Ctrl+A outside editor
@@ -944,6 +945,9 @@ sidebar-host-disconnected = Not connected
 sidebar-host-hint = Show Host details
 sidebar-project = Project
 home-recent = Recent
+home-needs-connection = Add a model connection to start a session.
+home-needs-default = Choose a default model to start a session.
+home-setup-failed = Couldn’t load model connections.
 home-host-failed = The Host couldn’t start
 home-retry = Try again
 list-retry = Try again

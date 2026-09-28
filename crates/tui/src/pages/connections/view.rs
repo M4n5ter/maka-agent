@@ -121,6 +121,27 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             })
             .collect()
     };
+    let mut rows = rows;
+    if state.setup() == super::Setup::NeedsConnection {
+        rows.push(
+            Node::text(
+                "add-anonymous",
+                vec![(app.i18n.text("onboard-title"), Tone::Accent)],
+            )
+            .on(On::Activate(Action::Onboard(
+                crate::pages::onboarding::Command::Open,
+            ))),
+        );
+        if let Some((action, _)) = app.oauth_commands().into_iter().next() {
+            rows.push(
+                Node::text(
+                    "add-authenticated",
+                    vec![(app.i18n.text("oauth-title"), Tone::Accent)],
+                )
+                .on(On::Activate(action)),
+            );
+        }
+    }
     let tree = Node::scroll(
         "connections",
         Node::column("rows", rows).gap(1).focus_group(),

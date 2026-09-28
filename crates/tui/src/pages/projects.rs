@@ -303,6 +303,9 @@ impl App {
                 self.focus = Focus::List;
             }
             Command::Create(id) => {
+                if self.route_missing_model_setup() {
+                    return None;
+                }
                 self.creating = true;
                 self.notice = None;
                 return Some(Action::Project(Command::Create(id)));
@@ -345,6 +348,23 @@ mod tests {
                 .collect(),
             next_cursor: next.map(str::to_owned),
         }
+    }
+
+    fn model_catalog(default: bool) -> serde_json::Value {
+        serde_json::json!({
+            "kind":"page", "revision":1, "connectionCount":1,
+            "defaultTarget":default.then_some(serde_json::json!({
+                "connectionId":"connection", "modelId":"model"
+            })),
+            "nextCursor":null,
+            "items":[
+                {"kind":"connection", "connectionIndex":0,
+                 "connectionId":"connection", "revision":1, "slug":"provider",
+                 "name":"Provider", "provider":crate::providers::fixtures::entry("openai-compatible", false).identity,
+                 "configuration":{}, "enabled":true, "enabledModelIdCount":1},
+                {"kind":"enabled_model_id", "connectionIndex":0, "itemIndex":0, "modelId":"model"}
+            ]
+        })
     }
 
     #[test]
@@ -465,6 +485,9 @@ mod tests {
                 .unwrap();
         }
         app.apply(Action::Project(Command::Select("a".into())));
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(model_catalog(true)));
         assert!(
             matches!(app.apply(Action::Project(Command::Create("a".into()))),
             Some(Action::Project(Command::Create(id))) if id == "a")
@@ -475,5 +498,30 @@ mod tests {
         );
         app.apply(Action::Visit(Route::Settings));
         assert!(!app.project_enabled(&Command::Select("a".into())));
+    }
+
+    #[test]
+    fn project_session_creation_requires_the_same_model_setup_as_workspace_creation() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.apply(Action::Visit(Route::Projects));
+        app.projects.refresh();
+        app.projects.query();
+        app.projects.complete(Ok(page(&["a"], None)));
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(model_catalog(false)));
+        assert!(
+            app.apply(Action::Project(Command::Create("a".into())))
+                .is_none()
+        );
+        assert!(app.management.dialog.is_some());
+        assert!(!app.creating);
     }
 }
