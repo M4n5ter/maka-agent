@@ -48,6 +48,7 @@ async function inputs(root) {
     'crates/computer-use/THIRD_PARTY_NOTICES',
     'scripts/rust/v8-source.json',
     'scripts/rust/build-v8.mjs',
+    'scripts/rust/v8-cache.mjs',
     'scripts/rust/v8-notices.mjs',
   ];
   for await (const entry of glob(

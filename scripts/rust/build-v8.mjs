@@ -20,17 +20,35 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { rustTarget } from './build-cli.mjs';
+import { cachedV8, v8CacheKey } from './v8-cache.mjs';
 import { v8Notices } from './v8-notices.mjs';
 
 /** Build the locked V8 without its optional LGPL glibc implementation. */
-export async function buildV8({ root, directory, target, env, metadata }) {
+export async function buildV8({ root, directory, cache, target, env, metadata }) {
+  const configuration = await v8Configuration(root, target, metadata);
+  return cachedV8({
+    directory: cache,
+    key: configuration.key,
+    target,
+    build: () => compileV8({ ...configuration, directory, target, env }),
+  });
+}
+
+async function v8Configuration(root, target, metadata) {
   const source = JSON.parse(await readFile(join(root, 'scripts/rust/v8-source.json'), 'utf8'));
   const pkg = metadata.packages.find((pkg) => pkg.name === 'v8');
   if (pkg?.version !== source.version) throw new Error('V8 source pin differs from Cargo.lock');
   const features = metadata.resolve.nodes
     .find((node) => node.id === pkg.id)
-    .features.filter((name) => name !== 'default');
+    .features.filter((name) => name !== 'default')
+    .sort();
+  return { source, features, key: await v8CacheKey({ source, target, features }) };
+}
+
+async function compileV8({ source, features, directory, target, env }) {
   const checkout = join(directory, 'source');
   const output = join(directory, 'target');
   await mkdir(checkout, { recursive: true });
@@ -82,6 +100,8 @@ export async function buildV8({ root, directory, target, env, metadata }) {
   const buildEnvironment = {
     ...env,
     ...bindingEnvironment,
+    // This cache contains ordinary release V8, never an ambient ASAN variant.
+    CARGO_ENCODED_RUSTFLAGS: '',
     PYTHON: python,
     GN: join(tools, 'gn', 'gn' + suffix),
     NINJA: join(tools, 'ninja', 'ninja' + suffix),
@@ -126,4 +146,19 @@ export async function buildV8({ root, directory, target, env, metadata }) {
     },
     notices: await v8Notices(checkout, generated, source, buildEnvironment),
   };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  if (process.argv.length !== 3 || process.argv[2] !== '--cache-key')
+    throw new Error('Usage: build-v8.mjs --cache-key');
+  const root = resolve(import.meta.dirname, '../..');
+  const target = rustTarget();
+  const metadata = JSON.parse(
+    execFileSync(
+      'cargo',
+      ['metadata', '--locked', '--format-version', '1', '--filter-platform', target],
+      { cwd: root, maxBuffer: 16 * 1024 * 1024, timeout: 180_000 },
+    ),
+  );
+  console.log((await v8Configuration(root, target, metadata)).key);
 }

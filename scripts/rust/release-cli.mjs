@@ -135,6 +135,7 @@ export async function releaseNativeCli({ source, keys, target, validator, output
     const v8 = await buildV8({
       root: repositoryRoot,
       directory: join(stage, 'v8'),
+      cache: resolve(env.CARGO_TARGET_DIR || 'target', 'v8'),
       target: rustTarget(platform.os, platform.cpu),
       env,
       metadata: JSON.parse(

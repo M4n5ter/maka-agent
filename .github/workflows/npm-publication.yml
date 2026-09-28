@@ -117,6 +117,17 @@ jobs:
         with:
           name: native-preview-source
           path: source
+      - id: v8-key
+        name: Identify the V8 build inputs
+        shell: bash
+        run: |
+          v8_key=$(node scripts/rust/build-v8.mjs --cache-key)
+          echo "key=$v8_key" >> "$GITHUB_OUTPUT"
+      - id: v8-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/v8/${{ steps.v8-key.outputs.key }}
+          key: maka-v8-${{ matrix.target }}-${{ steps.v8-key.outputs.key }}
       - name: Build verified source and exercise the native executables
         shell: bash
         run: |
@@ -128,6 +139,12 @@ jobs:
             target, buildId: process.env.BUILD_ID, output: 'native-preview',
           });
           JS
+      # A later Maka build failure does not invalidate a completed V8 dependency.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ !cancelled() && steps.v8-cache.outputs.cache-hit != 'true' && hashFiles(format('target/v8/{0}/receipt.json', steps.v8-key.outputs.key)) != '' }}
+        with:
+          path: target/v8/${{ steps.v8-key.outputs.key }}
+          key: maka-v8-${{ matrix.target }}-${{ steps.v8-key.outputs.key }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-preview-${{ matrix.target }}

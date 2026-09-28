@@ -45,7 +45,9 @@ just publish native-preview
 
 GitHub 使用已登记的 `npm-publication.yml`。在功能分支可运行 `gh workflow run npm-publication.yml --ref <branch> -f publish=false`，得到完整产物与三平台验收结果。实际发布须显式选择 `publish=true`，且仅在 `main`、现有 `npm-publication` 环境中执行。
 
-正式打包会从固定的上游提交构建 V8，关闭其可选的 LGPL glibc 数学实现，再使用匹配的静态库和 Rust bindings。需要 Python 3、Git、可用的 Clang/libclang（19 或更新）及原生 C++ 工具链。macOS 构建需要 Xcode 26 或更新版本，以编译 Computer Use 的 Swift 绑定；CI 使用 macOS 26 构建，并在 macOS 15 验证安装。Linux 还需要 glib 开发包和 cargo-zigbuild/Zig。首次构建会下载 Chromium 工具链，可能耗时超过 30 分钟，请预留数十 GiB 临时空间。构建完成后临时目录自动清理。
+正式打包会从固定的上游提交构建 V8，关闭其可选的 LGPL glibc 数学实现，再使用匹配的静态库和 Rust bindings。需要 Python 3、Git、可用的 Clang/libclang（19 或更新）及原生 C++ 工具链。macOS 构建需要 Xcode 26 或更新版本，以编译 Computer Use 的 Swift 绑定；CI 使用 macOS 26 构建，并在 macOS 15 验证安装。Linux 还需要 glib 开发包和 cargo-zigbuild/Zig。首次构建会下载 Chromium 工具链，可能耗时超过一小时，请预留数十 GiB 临时空间。构建完成后临时目录自动清理。
+
+完成的 V8 静态库、bindings 和声明保存在 `target/v8`（或 `$CARGO_TARGET_DIR/v8`）供后续复用。缓存 key 绑定 V8 源码、平台、功能选项和生成脚本；普通 Maka 代码改动不会重编 V8。CI 通过 GitHub Actions 缓存复用同一组精简产物。每次使用都校验文件摘要，每次发布仍执行实际链接和原生冒烟测试。这些目录属于可信构建缓存，不用于认证第三方二进制。损坏条目会报错并显示路径；删除本地条目，CI 还需删除对应的 Actions 缓存，再重试。删除缓存目录即可强制冷构建或回收空间。
 
 依赖变化后运行 `node scripts/rust/notices.mjs generate` 并审查许可证快照。它从固定依赖版本收集全文和嵌套声明，少数上游缺少独立许可文件的例外记录在 `notices-sources.json`。发布校验快照与源码输入的绑定，并追加实际 V8 构建图和 Rust 标准库声明；许可证 TSV 仅用作清单，不能代替全文。
 
