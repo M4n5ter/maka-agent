@@ -115,6 +115,13 @@ export async function releaseNativeCli({ source, keys, target, validator, output
       throw new Error('Native CLI version does not match the source archive');
     }
     const reviewedNotices = await verifyNotices(repositoryRoot);
+    if (platform.os === 'darwin') {
+      const sdk = (
+        await run('xcrun', ['--sdk', 'macosx', '--show-sdk-version'], { env })
+      ).stdout.trim();
+      if (!(Number.parseInt(sdk, 10) >= 26))
+        throw new Error('Native macOS packaging requires Xcode 26 or newer; selected SDK: ' + sdk);
+    }
     // Apply build-time dependency patches without running package lifecycle hooks.
     await execute(
       'npm',

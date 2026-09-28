@@ -71,7 +71,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          # Computer Use's Swift bindings require the macOS 26 SDK.
+          - runner: macos-26
             target: darwin-arm64
           - runner: ubuntu-24.04
             target: linux-x64-gnu
