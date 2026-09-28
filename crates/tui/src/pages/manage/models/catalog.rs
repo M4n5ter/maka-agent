@@ -58,11 +58,25 @@ pub struct Catalog {
     restart: bool,
     revision: Option<u64>,
     pub has_default: bool,
+    search: String,
     basis: Basis,
     next: Option<Basis>,
     previous: VecDeque<Basis>,
 }
 impl Catalog {
+    pub fn search(&mut self, query: &str) {
+        let query = query.to_lowercase();
+        if self.search == query {
+            return;
+        }
+        self.search = query;
+        self.rows.clear();
+        self.selected = None;
+        self.refresh();
+    }
+    pub fn searching(&self) -> bool {
+        !self.search.is_empty()
+    }
     pub fn revision(&self) -> Option<u64> {
         self.ready().then_some(self.revision).flatten()
     }
@@ -187,6 +201,14 @@ impl Catalog {
                 }
                 _ => {} // Raw discovery models and overrides are not additional selectable identities.
             }
+        }
+        if !self.search.is_empty() {
+            rows.retain(|row| {
+                row.name.to_lowercase().contains(&self.search)
+                    || row.connection.to_lowercase().contains(&self.search)
+                    || row.choice.model.to_lowercase().contains(&self.search)
+                    || row.choice.slug.to_lowercase().contains(&self.search)
+            });
         }
         self.next = if page["nextCursor"].is_null() {
             None
@@ -362,5 +384,32 @@ mod tests {
             catalog.error && catalog.query().is_none(),
             "errors do not create a retry loop"
         );
+    }
+
+    #[test]
+    fn search_scans_past_nonmatching_pages_without_reusing_an_old_choice() {
+        let mut catalog = Catalog::default();
+        catalog.search("TARGET");
+        assert_eq!(catalog.query(), Some(Query::Start));
+        catalog.complete(Ok(page(
+            vec![header(0, true), enabled(0), entry(0, "same-model", true)],
+            json!({"part":"connection","connectionIndex":1}),
+        )));
+        assert!(!catalog.ready());
+        assert!(matches!(catalog.query(), Some(Query::Continue { .. })));
+        let mut target = entry(1, "same-model", true);
+        target["entry"]["displayName"] = json!("Target model");
+        catalog.complete(Ok(page(
+            vec![header(1, true), enabled(1), target],
+            Value::Null,
+        )));
+        assert!(catalog.ready());
+        assert_eq!(catalog.rows.len(), 1);
+        assert_eq!(catalog.rows[0].choice.connection_id, "id-1");
+        catalog.selected = Some(catalog.rows[0].choice.clone());
+        catalog.search("absent");
+        assert!(catalog.rows.is_empty());
+        assert!(catalog.selected.is_none());
+        assert_eq!(catalog.query(), Some(Query::Start));
     }
 }

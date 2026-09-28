@@ -21,6 +21,8 @@ mod catalog;
 mod view;
 use super::{Command as Manage, Target};
 use crate::app::{Action, App};
+use crate::editor::Editor;
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use maka_protocol::configuration::ConnectionCatalogQueryInput;
 use maka_protocol::session::ThinkingLevel;
 use serde_json::Value;
@@ -34,6 +36,8 @@ pub struct Choice {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    Search,
+    Connections,
     Select(Choice),
     ClearDefault,
     Refresh,
@@ -45,6 +49,8 @@ pub enum Command {
 impl Command {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::Search => "session-model-search",
+            Self::Connections => "route-connections",
             Self::Select(_) => "session-model-change",
             Self::ClearDefault => "default-model-none",
             Self::Refresh => "command-refresh",
@@ -63,6 +69,8 @@ pub struct Request {
 pub(super) struct Models {
     generation: u64,
     pub catalog: catalog::Catalog,
+    search: Editor,
+    search_engaged: bool,
     pub for_default: bool,
     pub clear_default: bool,
     pub thinking: Option<ThinkingLevel>,
@@ -74,6 +82,8 @@ impl Models {
         Self {
             generation,
             catalog,
+            search: Editor::bounded(128, "session-model-search-limit"),
+            search_engaged: false,
             for_default,
             clear_default: false,
             thinking: None,
@@ -154,6 +164,13 @@ impl App {
             return false;
         }
         match command {
+            Command::Search => true,
+            Command::Connections => {
+                models.for_default
+                    && models.catalog.ready()
+                    && models.catalog.rows.is_empty()
+                    && !models.catalog.searching()
+            }
             Command::ClearDefault => models.for_default && models.catalog.revision().is_some(),
             Command::Select(choice) => models.catalog.rows.iter().any(|r| r.choice == *choice),
             Command::Refresh => !models.catalog.loading,
@@ -170,9 +187,30 @@ impl App {
         }
     }
     pub(super) fn models_action(&mut self, command: Command) -> Option<Action> {
+        if command == Command::Search {
+            if let Some(models) = self
+                .management
+                .dialog
+                .as_mut()
+                .and_then(|dialog| dialog.models.as_mut())
+            {
+                models.search_engaged = true;
+            }
+            self.layer.focus("search");
+            return None;
+        }
+        if command == Command::Connections {
+            if !self.models_enabled(&command) {
+                return None;
+            }
+            self.management.dialog = None;
+            self.apply(Action::Visit(crate::navigation::Route::Connections));
+            return None;
+        }
         let dialog = self.management.dialog.as_mut()?;
         let models = dialog.models.as_mut()?;
         match command {
+            Command::Search | Command::Connections => unreachable!("handled above"),
             Command::Select(choice) => {
                 models.clear_default = false;
                 models.catalog.selected = Some(choice);
@@ -239,6 +277,103 @@ impl App {
             models.catalog.selected = None;
         }
         models.catalog.complete(result);
+    }
+
+    pub(super) fn models_sheet_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
+        let dialog = self.management.dialog.as_mut()?;
+        if !dialog.visible
+            || dialog.blocked
+            || self.management.pending.is_some()
+            || self.layer.slot("search").is_none()
+        {
+            return None;
+        }
+        let models = dialog.models.as_mut()?;
+        let focused = self.layer.focused("search");
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release && focused => {
+                if matches!(key.code, KeyCode::Down | KeyCode::Enter) && key.modifiers.is_empty() {
+                    let row = models.catalog.rows.first()?;
+                    self.layer.focus_path(&format!(
+                        "list/rows/{}:{}",
+                        row.choice.connection_id, row.choice.model
+                    ));
+                    return Some((true, None));
+                }
+                if matches!(key.code, KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab)
+                    || (key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('q') | KeyCode::Enter))
+                {
+                    return None;
+                }
+                let changed = models.search.key(*key);
+                if changed {
+                    models.search_engaged = true;
+                    models.catalog.search(models.search.text());
+                }
+                Some((changed, None))
+            }
+            Event::Paste(text) if focused => {
+                if text.chars().any(char::is_control) {
+                    return Some((false, None));
+                }
+                let changed = models.search.insert(text);
+                if changed {
+                    models.search_engaged = true;
+                    models.catalog.search(models.search.text());
+                }
+                Some((changed, None))
+            }
+            Event::Mouse(mouse) if models.search.takes(mouse) => {
+                let press = matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_));
+                if press {
+                    models.search_engaged = true;
+                    self.layer.focus("search");
+                }
+                Some((models.search.mouse(*mouse) || (press && !focused), None))
+            }
+            _ => None,
+        }
+    }
+}
+
+pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
+    let rect = app.layer.slot("search").filter(|rect| !rect.is_empty());
+    let focused = app.layer.focused("search");
+    let editable = app.management.pending.is_none();
+    let colors = app.theme.colors();
+    let prompt = app.i18n.text("session-model-search");
+    let Some(dialog) = app.management.dialog.as_mut() else {
+        return;
+    };
+    let blocked = dialog.blocked;
+    let Some(models) = dialog.models.as_mut() else {
+        return;
+    };
+    let Some(rect) = rect else {
+        if app
+            .frame_size
+            .is_some_and(|(width, height)| width < 60 || height < 20)
+            && (models.search_engaged || !models.search.text().is_empty())
+        {
+            models.search = Editor::bounded(128, "session-model-search-limit");
+            models.search_engaged = false;
+            models.catalog.search("");
+        }
+        models.search.invalidate_geometry();
+        return;
+    };
+    models
+        .search
+        .draw(frame, rect, focused && editable && !blocked, colors);
+    if models.search.text().is_empty() {
+        let prompt_area =
+            ratatui::layout::Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(1), 1);
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(prompt)
+                .style(ratatui::style::Style::default().fg(colors.subtle)),
+            prompt_area,
+        );
     }
 }
 
@@ -345,6 +480,102 @@ mod tests {
             .as_ref()
             .unwrap()
             .thinking_level()
+    }
+    #[test]
+    fn default_model_search_uses_the_presented_field_and_restarts_the_catalog() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.apply(app.default_model_action().unwrap());
+        let request = app.models_request().unwrap();
+        app.models_completed(request, Ok(page("alpha")));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let search = app.i18n.text("session-model-search");
+        click(&mut app, locate(&terminal, &search));
+        key(&mut app, KeyCode::Char('b'));
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        key(&mut app, KeyCode::Backspace);
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        key(&mut app, KeyCode::Char('b'));
+        let models = app
+            .management
+            .dialog
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap();
+        assert!(models.catalog.searching());
+        assert_eq!(models.search.text(), "b");
+        assert!(models.catalog.rows.is_empty());
+        let request = app.models_request().unwrap();
+        assert_eq!(request.query, ConnectionCatalogQueryInput::Start);
+        app.models_completed(request, Ok(page("beta")));
+        let models = app
+            .management
+            .dialog
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap();
+        assert_eq!(models.catalog.rows.len(), 1);
+        assert_eq!(models.catalog.rows[0].choice.model, "beta");
+        let mut narrow = Terminal::new(TestBackend::new(42, 17)).unwrap();
+        narrow
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let models = app
+            .management
+            .dialog
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap();
+        assert_eq!(models.search.text(), "");
+        assert!(!models.catalog.searching());
+    }
+    #[test]
+    fn empty_default_model_chooser_can_open_connections() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.apply(app.default_model_action().unwrap());
+        let request = app.models_request().unwrap();
+        app.models_completed(
+            request,
+            Ok(json!({"kind":"page","revision":7,"nextCursor":null,"items":[]})),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let label = app.i18n.text("session-model-enable-chat");
+        click(&mut app, locate(&terminal, &label));
+        assert!(app.management.dialog.is_none());
+        assert_eq!(
+            app.navigation.current(),
+            crate::navigation::Route::Connections
+        );
+        assert!(!app.creating);
     }
     #[test]
     fn thinking_uses_current_catalog_levels_and_rechecks_before_submission() {

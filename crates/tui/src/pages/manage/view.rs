@@ -283,6 +283,14 @@ pub(crate) fn draw_field(frame: &mut Frame<'_>, app: &mut App) {
         .management
         .dialog
         .as_ref()
+        .is_some_and(|dialog| dialog.models.is_some())
+    {
+        return super::models::draw(frame, app);
+    }
+    if app
+        .management
+        .dialog
+        .as_ref()
         .is_some_and(|dialog| dialog.kind == Kind::Oauth)
     {
         return super::oauth::draw(frame, app);
