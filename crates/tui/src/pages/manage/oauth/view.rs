@@ -126,13 +126,16 @@ pub(in crate::pages::manage) fn sheet(app: &App) -> Sheet<Action> {
     if state.customizable() {
         sheet = sheet.body(identity(app, state));
     }
-    let phase = state.projection.as_ref().map(|projection| projection.phase);
+    let phase = state
+        .projection
+        .as_ref()
+        .map(|projection| &projection.phase);
     let warning = state.error.is_some()
         || (state.customizable() && state.identity.error().is_some())
         || matches!(phase, Some(Phase::Failed { .. }));
     sheet = sheet.text(
         "note",
-        &app.i18n.text(state.status()),
+        &state.status_text(&app.i18n),
         if warning { Tone::Warning } else { Tone::Subtle },
     );
     if let Some((url, code)) = &state.display {

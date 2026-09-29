@@ -84,10 +84,14 @@ impl Provider for Codex {
     fn resolve(&self, request: Resolve) -> BoxFuture<'_, Result<Model, Error>> {
         Box::pin(async move {
             let base_url = configuration(&request.connection)?;
-            let info = match &request.overrides {
+            let mut info = match &request.overrides {
                 Some(overrides) => overrides.apply(&request.model),
                 None => request.model,
             };
+            // Existing saved connections may predate discovery of this fact.
+            if info.max_output_tokens.is_none() {
+                info.max_output_tokens = super::inventory::output_capacity(&info.id)?;
+            }
             if info
                 .api_protocol
                 .is_some_and(|wire| wire != ApiProtocol::OpenaiResponses)

@@ -111,6 +111,32 @@ async fn sql(path: &Path) -> sqlx::SqliteConnection {
 }
 
 #[tokio::test]
+async fn provider_login_explanation_survives_restart_without_creating_a_connection() {
+    use maka_runtime::oauth::{Failure, Phase};
+    let temp = tempfile::tempdir().unwrap();
+    let store = open(temp.path(), true).await;
+    let input = create("rejected-login");
+    let ticket = prepare(&store, input.clone()).await;
+    assert!(ticket.claim().await.unwrap());
+    let phase = Phase::Failed {
+        failure: Failure::Provider {
+            message: "Example provider: account approval required (HTTP 403).".into(),
+        },
+    };
+    assert_eq!(ticket.finish_failure(phase.clone()).await.unwrap(), phase);
+    drop(ticket);
+    Arc::try_unwrap(store).ok().unwrap().close().await.unwrap();
+    let store = open(temp.path(), false).await;
+    let LoginPreparation::Finished(receipt) = store.prepare_oauth_login(input).await.unwrap()
+    else {
+        panic!("a completed rejection must not start authorization again");
+    };
+    assert_eq!(receipt.phase, phase);
+    assert!(store.catalog().await.unwrap().connections.is_empty());
+    Arc::try_unwrap(store).ok().unwrap().close().await.unwrap();
+}
+
+#[tokio::test]
 async fn authentication_receipts_bind_inputs_and_survive_reopen_without_publishing_drafts() {
     let temp = tempfile::tempdir().unwrap();
     let store = open(temp.path(), true).await;

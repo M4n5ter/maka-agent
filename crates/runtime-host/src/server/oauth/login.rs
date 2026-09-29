@@ -249,13 +249,61 @@ impl Interaction for Presentation {
 
 fn provider_failure(error: Error) -> Failure {
     match error {
-        Error::AuthenticationRequired | Error::Rejected(_) => Failure::ProviderRejected,
+        Error::AuthenticationRequired => Failure::ProviderRejected,
+        Error::Rejected(message) => {
+            let message: String = message
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(1024)
+                .collect();
+            if message.trim().is_empty() {
+                Failure::ProviderRejected
+            } else {
+                Failure::Provider { message }
+            }
+        }
         Error::Unavailable
-        | Error::OutcomeUnknown
         | Error::Invalid(_)
         | Error::Transport(_)
-        | Error::Http(_) => Failure::OutcomeUnknown,
+        | Error::Http(_)
+        | Error::OutcomeUnknown => Failure::OutcomeUnknown,
         Error::Cancelled => Failure::AuthorizationFailed,
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn login_failure_preserves_safe_diagnostics_and_uncertain_grants() {
+        for (error, expected) in [
+            (
+                Error::Rejected("Provider-specific explanation".into()),
+                Failure::Provider {
+                    message: "Provider-specific explanation".into(),
+                },
+            ),
+            (Error::Rejected("\n\t".into()), Failure::ProviderRejected),
+            (Error::Http(429), Failure::OutcomeUnknown),
+            (Error::OutcomeUnknown, Failure::OutcomeUnknown),
+            (Error::Transport("secret".into()), Failure::OutcomeUnknown),
+            (Error::Invalid("secret".into()), Failure::OutcomeUnknown),
+        ] {
+            let phase = Phase::Failed {
+                failure: provider_failure(error),
+            };
+            assert_eq!(phase, Phase::Failed { failure: expected });
+            let encoded = serde_json::to_string(&phase).unwrap();
+            assert!(!encoded.contains("secret"));
+            assert_eq!(serde_json::from_str::<Phase>(&encoded).unwrap(), phase);
+        }
+        let Failure::Provider { message } = provider_failure(Error::Rejected("文\n".repeat(2000)))
+        else {
+            panic!("expected provider explanation");
+        };
+        assert_eq!(message.chars().count(), 1024);
+        assert!(message.len() <= 4096 && !message.chars().any(char::is_control));
     }
 }
 

@@ -222,8 +222,8 @@ pub(super) async fn authenticate(
             .decode::<Grant>()?
             .tokens(None);
         }
-        if !matches!(response.status, 403 | 404) {
-            return Err(Error::AuthenticationRequired);
+        if response.unsupported_region() || !matches!(response.status, 403 | 404) {
+            return Err(response.error());
         }
         tokio::select! {
             _ = context.cancellation.cancelled() => return Err(Error::Cancelled),
@@ -257,9 +257,35 @@ struct Response {
 impl Response {
     fn decode<T: DeserializeOwned>(self) -> Result<T, Error> {
         if !(200..300).contains(&self.status) {
-            return Err(Error::AuthenticationRequired);
+            return Err(self.error());
         }
         serde_json::from_slice(&self.bytes).map_err(|_| invalid())
+    }
+
+    fn error(&self) -> Error {
+        // Classify known codes, never expose an arbitrary response body: it
+        // can contain credentials, authorization codes, or terminal escapes.
+        let reason = if self.unsupported_region() {
+            "Country, region, or territory not supported (unsupported_country_region_territory). Check your network route."
+        } else {
+            match self.status {
+                401 => "Authorization was rejected or expired. Start a new sign-in.",
+                403 => "Access was denied. Check your ChatGPT account and network route.",
+                429 => "Too many requests. Wait before trying again.",
+                500..=599 => "The sign-in service is unavailable. Try again later.",
+                _ => "The sign-in service rejected the request.",
+            }
+        };
+        Error::Rejected(format!(
+            "ChatGPT sign-in failed (HTTP {}): {reason}",
+            self.status
+        ))
+    }
+
+    fn unsupported_region(&self) -> bool {
+        serde_json::from_slice::<serde_json::Value>(&self.bytes)
+            .ok()
+            .is_some_and(|body| body["error"]["code"] == "unsupported_country_region_territory")
     }
 }
 async fn post_json(

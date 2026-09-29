@@ -65,7 +65,7 @@ impl Attempt {
         LoginProjection {
             attempt_id: self.input.attempt_id.clone(),
             connection: self.connection.clone(),
-            phase: *self.phase.lock().unwrap_or_else(|e| e.into_inner()),
+            phase: self.phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         }
     }
     fn cancel(&self) {

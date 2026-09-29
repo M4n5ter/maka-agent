@@ -89,6 +89,7 @@ pub fn decode_model_inventory(bytes: &[u8]) -> Result<Vec<ModelInfo>, Error> {
             continue;
         }
         let mut info = ModelInfo::new(id);
+        info.max_output_tokens = output_capacity(id)?;
         info.display_name = row.display_name;
         info.context_window = row
             .context_window
@@ -144,6 +145,15 @@ pub fn decode_model_inventory(bytes: &[u8]) -> Result<Vec<ModelInfo>, Error> {
         }
     }
     Ok(models)
+}
+
+// Account inventory currently omits output capacity. Keep the model's known
+// capacity for Host budgeting without turning it into a subscription parameter.
+pub(super) fn output_capacity(id: &str) -> Result<Option<u64>, Error> {
+    Ok(crate::facts::provider_facts("openai-codex")?
+        .models
+        .get(id)
+        .and_then(|model| model.metadata.max_output_tokens))
 }
 
 fn invalid() -> Error {

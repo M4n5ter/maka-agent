@@ -58,6 +58,7 @@ fn codex_request(port: u16, token: &str) -> ModelRequest {
     );
     // The subscription profile must enforce store:false and supply verbosity.
     request.provider_options = json!({"openai":{"store":true}});
+    assert!(request.max_output_tokens.is_some());
     request
 }
 
@@ -150,6 +151,7 @@ async fn subscription_profile_survives_proxy_ws_continuation_and_http_fallback()
                     assert_eq!(next["instructions"], "Keep this system instruction.");
                     assert_eq!(next["store"], false);
                     assert_eq!(next["text"]["verbosity"], "medium");
+                    assert!(next.get("max_output_tokens").is_none());
                     finish(&mut socket, "resp_2").await;
                 }
                 assert!(socket.next().await.is_none_or(|frame| frame.is_err() || matches!(frame, Ok(Message::Close(_)))));
@@ -202,6 +204,7 @@ fn check_body(body: &Value) {
     assert_eq!(body["store"], false);
     assert_eq!(body["instructions"], "Keep this system instruction.");
     assert_eq!(body["text"]["verbosity"], "medium");
+    assert!(body.get("max_output_tokens").is_none());
     assert!(
         body["input"]
             .as_array()

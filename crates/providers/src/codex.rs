@@ -123,6 +123,9 @@ fn prepare(request: &mut Request) -> Result<(), Error> {
             "subscription requires the Responses protocol".into(),
         ));
     }
+    // The subscription endpoint rejects max_output_tokens. Host-side reply
+    // budgets still reserve context; only this provider's wire request omits it.
+    request.max_output_tokens = None;
     // Resolve against full canonical input before the Responses lane removes a
     // confirmed prefix. A tool-only continuation must retain its instructions.
     if request.provider_options.is_null() {

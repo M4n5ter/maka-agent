@@ -25,6 +25,8 @@ Bundled model providers using the public `maka-plugins::provider` contract. Prov
 
 API providers own their bundled model facts, authentication, bounded inventory discovery and protocol policy. The ChatGPT provider composes the native Responses adapter; neither provider authentication nor discovery requires V8. Discovery support does not imply support for every inference protocol.
 
+For ChatGPT subscription models, `maxOutputTokens` is the maximum generated output, separate from `contextWindow` (for example, [GPT-6 Luna supports 128,000 output tokens](https://developers.openai.com/api/docs/models/gpt-6-luna)). Host uses this metadata for context budgeting. It is not a configurable request limit: the subscription endpoint rejects `max_output_tokens`, `max_completion_tokens`, and `max_tokens`. Its adapter omits the wire limit, matching the official Codex [HTTP and WebSocket request types](https://github.com/openai/codex/blob/d515b2f85ec1b24a4b5ec3fbd86db27fd51aea3b/codex-rs/codex-api/src/common.rs#L278); ordinary Responses API requests retain their output limit. Account inventory supplies the context window; bundled facts fill missing maximum output tokens for known models. Provider plugins also own their caller-safe sign-in explanations; Host persists them and clients display them without interpreting provider-specific codes.
+
 Cargo embeds the checked-in facts without Node. Provider facts live in `data/catalog-facts.json`; pricing facts live in `../config/data/pricing-facts.json`. Review changes with their owning crate tests.
 
 Metadata updates do not implement new inference protocols.

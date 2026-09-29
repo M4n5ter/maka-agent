@@ -269,7 +269,7 @@ impl State {
             return note;
         }
         if let Some(projection) = &self.projection {
-            return match projection.phase {
+            return match &projection.phase {
                 Phase::AwaitingAuthorization => "oauth-awaiting",
                 Phase::Exchanging => "oauth-exchanging",
                 Phase::Committing => "oauth-committing",
@@ -282,7 +282,14 @@ impl State {
                     maka_protocol::oauth::Failure::CapabilityUnavailable => {
                         "oauth-presentation-failed"
                     }
-                    _ => "oauth-failed",
+                    maka_protocol::oauth::Failure::ProviderRejected
+                    | maka_protocol::oauth::Failure::Provider { .. } => "oauth-provider-rejected",
+                    maka_protocol::oauth::Failure::AuthorizationFailed => {
+                        "oauth-authorization-failed"
+                    }
+                    maka_protocol::oauth::Failure::PersistenceFailed => "oauth-persistence-failed",
+                    maka_protocol::oauth::Failure::InternalFailure => "oauth-internal-failed",
+                    maka_protocol::oauth::Failure::OutcomeUnknown => "oauth-provider-unknown",
                 },
             };
         }
@@ -295,6 +302,18 @@ impl State {
         } else {
             "oauth-note"
         }
+    }
+
+    fn status_text(&self, i18n: &crate::i18n::I18n) -> String {
+        if self.error.is_none()
+            && self.copy_note.is_none()
+            && let Some(Phase::Failed {
+                failure: maka_protocol::oauth::Failure::Provider { message },
+            }) = self.projection.as_ref().map(|projection| &projection.phase)
+        {
+            return crate::view::safe(message);
+        }
+        i18n.text(self.status())
     }
 }
 
@@ -879,6 +898,43 @@ mod tests {
         }
         assert!(app.oauth_enabled(command), "{command:?}");
         app.apply(Action::Manage(Manage::Oauth(command)));
+    }
+
+    #[test]
+    fn oauth_failure_diagnostics_survive_protocol_and_render_in_every_locale() {
+        use maka_protocol::oauth::Failure;
+        let mut app = app();
+        app.management.oauth.attempt = Some(LoginRecovery {
+            attempt_id: "attempt".into(),
+            target: LoginTarget::Create {
+                provider: crate::providers::fixtures::entry("openai-codex", true).identity,
+                configuration: serde_json::json!({}),
+                slug: "chatgpt".into(),
+                name: "ChatGPT".into(),
+            },
+        });
+        for marker in [
+            "Example provider: account approval required (HTTP 403).",
+            "Example provider: rate limited (HTTP 429).",
+        ] {
+            let failure = Failure::Provider {
+                message: marker.into(),
+            };
+            let projection = login(&app, Phase::Failed { failure });
+            let wire = serde_json::to_value(projection).unwrap();
+            app.management.oauth.projection =
+                Some(maka_protocol::oauth::decode_login(&wire).unwrap());
+            for locale in Locale::ALL {
+                app.i18n = I18n::new(LocalePreference::Explicit(locale), locale);
+                let text = render(&mut app, 100, 30);
+                assert!(text.contains(marker), "{locale:?}: {text}");
+                assert!(!text.contains("Sign-in did not complete"));
+                assert!(app.management.oauth.terminal());
+            }
+            let mut oversized = wire;
+            oversized["failure"]["provider"]["message"] = serde_json::json!("x".repeat(4097));
+            assert!(maka_protocol::oauth::decode_login(&oversized).is_err());
+        }
     }
 
     #[test]

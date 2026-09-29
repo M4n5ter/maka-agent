@@ -89,6 +89,15 @@ pub fn decode_login(value: &Value) -> Result<LoginProjection> {
         },
     )?;
     let output: LoginProjection = parsed(value)?;
+    if let Phase::Failed {
+        failure: Failure::Provider { message },
+    } = &output.phase
+        && message.len() > 4096
+    {
+        return Err(ProtocolError::invalid(
+            "OAuth provider diagnostic exceeds limit",
+        ));
+    }
     codec::record(&value["connection"], "OAuth connection identity")?;
     id(&output.attempt_id)?;
     id(&output.connection.connection_id)?;

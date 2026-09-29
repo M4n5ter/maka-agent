@@ -43,6 +43,7 @@ struct Exchange {
     requests: Mutex<Vec<http::Request>>,
     fail: bool,
     response: serde_json::Value,
+    status: u16,
 }
 impl Transport for Exchange {
     fn identity(&self) -> u64 {
@@ -58,7 +59,7 @@ impl Transport for Exchange {
             }
             Ok(http::Response {
                 head: http::Head {
-                    status: 200,
+                    status: self.status,
                     url: "https://auth.openai.com/oauth/token".into(),
                     headers: vec![],
                 },
@@ -98,6 +99,64 @@ fn credential() -> Credential {
     }
 }
 
+struct UnexpectedPresentation;
+impl maka_plugins::provider::authentication::Interaction for UnexpectedPresentation {
+    fn open_external(&self, _: String, _: Option<String>) -> BoxFuture<'_, Result<(), Error>> {
+        panic!("a rejected device-code request must not open authorization")
+    }
+}
+
+#[tokio::test]
+async fn device_login_preserves_region_and_http_failures_without_echoing_response_secrets() {
+    for (status, code) in [
+        (403, "unsupported_country_region_territory"),
+        (403, "access_denied"),
+        (429, "rate_limit_exceeded"),
+        (503, "unavailable"),
+    ] {
+        let transport = Arc::new(Exchange {
+            started: Notify::new(),
+            release: Notify::new(),
+            requests: Mutex::new(vec![]),
+            fail: false,
+            status,
+            response: json!({"error":{
+                "code":code,
+                "message":"do-not-echo-secret\u{1b}[2J",
+                "refresh_token":"do-not-echo-secret"
+            }}),
+        });
+        transport.release.notify_one();
+        let error = Codex::default()
+            .authenticate(
+                maka_plugins::provider::authentication::Authenticate {
+                    connection: connection(),
+                    method: "chatgpt".into(),
+                    input: json!({}),
+                },
+                Context {
+                    transport: transport.clone(),
+                    cancellation: CancellationToken::new(),
+                    interaction: Some(Arc::new(UnexpectedPresentation)),
+                },
+            )
+            .await
+            .err()
+            .expect("the login service rejected the request");
+        assert!(matches!(&error, Error::Rejected(message) if message.contains("ChatGPT")));
+        if code == "unsupported_country_region_territory" {
+            assert!(error.to_string().contains(code));
+        }
+        assert!(error.to_string().contains(&status.to_string()));
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("do-not-echo")
+        );
+        assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    }
+}
+
 #[tokio::test]
 async fn sent_refresh_settles_after_cancellation_and_unknown_reply_is_never_retried() {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -129,6 +188,7 @@ async fn sent_refresh_settles_after_cancellation_and_unknown_reply_is_never_retr
                 release: Notify::new(),
                 requests: Mutex::new(vec![]),
                 fail,
+                status: 200,
                 response: json!({
                     "access_token": "replacement-access",
                     "refresh_token": "replacement-refresh",

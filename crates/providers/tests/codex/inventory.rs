@@ -20,6 +20,42 @@
 use super::*;
 
 #[tokio::test]
+async fn subscription_capacity_survives_discovery_and_older_saved_models() {
+    let provider = Codex::default();
+    let discovered = maka_providers::codex::decode_model_inventory(
+        br#"{"models":[{"slug":"gpt-6-luna","context_window":272000}]}"#,
+    )
+    .unwrap()
+    .remove(0);
+    assert_eq!(discovered.max_output_tokens, Some(128_000));
+    for mut info in [
+        discovered,
+        maka_runtime::configuration::ModelInfo::new("gpt-6-luna"),
+    ] {
+        info.context_window = Some(272_000);
+        let model = provider
+            .resolve(Resolve {
+                connection: connection(),
+                model: info,
+                overrides: None,
+                thinking_level: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(model.info.max_output_tokens, Some(128_000));
+        assert_eq!(model.info.context_window, Some(272_000));
+    }
+    assert!(
+        maka_providers::codex::decode_model_inventory(
+            br#"{"models":[{"slug":"unknown-future-model"}]}"#,
+        )
+        .unwrap()[0]
+            .max_output_tokens
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn discovery_and_preparation_share_account_facts_and_explicit_policy() {
     use maka_runtime::{
         configuration::{ModelInfo, ModelOverride},
@@ -30,6 +66,7 @@ async fn discovery_and_preparation_share_account_facts_and_explicit_policy() {
         release: Notify::new(),
         requests: Mutex::new(vec![]),
         fail: false,
+        status: 200,
         response: json!({"models":[{
             "slug":"future-model", "context_window":272000,
             "supported_reasoning_levels":[{"effort":"medium"},{"effort":"high"},{"effort":"max"},{"effort":"ultra"}],

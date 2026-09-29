@@ -21,7 +21,7 @@ use super::*;
 
 /// Explicit opt-in; access tokens are read into memory only, never refreshed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires MAKA_CODEX_AUTH_FILE and authorized gpt-5.6-luna subscription access"]
+#[ignore = "requires MAKA_CODEX_AUTH_FILE and authorized gpt-6-luna subscription access"]
 async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation() {
     use std::io::Read;
     let path = std::env::var_os("MAKA_CODEX_AUTH_FILE").expect("explicit auth path required");
@@ -50,7 +50,7 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
         adapter: Some(maka_providers::codex::ADAPTER.into()),
         capabilities: Default::default(),
         kind: ProviderKind::OpenaiResponses,
-        model: "gpt-5.6-luna".into(),
+        model: "gpt-6-luna".into(),
         base_url: "https://chatgpt.com/backend-api/codex".into(),
         auth: ProviderAuth::RequestHeaders(
             maka_providers::codex::request_headers(&access_token, &format!("maka-rust-live-{now}"))
@@ -80,7 +80,7 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
                 prompt: prompt.clone(),
                 tools: vec![],
                 provider_options: json!({"openai":{"reasoningEffort":"low"}}),
-                max_output_tokens: None,
+                max_output_tokens: Some(128_000),
             };
             let step = generate_step(&executor, &lane, request).await;
             let text: String = step

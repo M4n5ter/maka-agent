@@ -150,12 +150,16 @@ impl Target {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Failure {
     CapabilityUnavailable,
     AuthorizationFailed,
     ProviderRejected,
+    /// Bounded, caller-safe explanation supplied by the provider plugin.
+    Provider {
+        message: String,
+    },
     SlugTaken,
     CredentialChanged,
     ConnectionChanged,
@@ -165,7 +169,7 @@ pub enum Failure {
 }
 
 /// Failure cannot accompany a successful or pending login.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
     AwaitingAuthorization,

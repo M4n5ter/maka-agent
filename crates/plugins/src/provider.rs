@@ -55,6 +55,8 @@ pub enum Error {
     Cancelled,
     #[error("provider requires authentication")]
     AuthenticationRequired,
+    /// Caller-facing explanation supplied by the provider. Must not include
+    /// credentials or unfiltered remote response bodies.
     #[error("provider rejected the request: {0}")]
     Rejected(String),
     #[error("invalid provider input or output: {0}")]
