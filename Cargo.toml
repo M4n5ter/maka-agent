@@ -50,6 +50,7 @@ members = [
     "crates/scheduler",
     "crates/session-import",
     "crates/session-recap",
+    "crates/session-title",
     "crates/skills",
     "crates/tool-catalog",
     "crates/tools",
@@ -116,6 +117,7 @@ maka-sandbox = { path = "crates/sandbox" }
 maka-scheduler = { path = "crates/scheduler" }
 maka-session-import = { path = "crates/session-import" }
 maka-session-recap = { path = "crates/session-recap" }
+maka-session-title = { path = "crates/session-title" }
 maka-skills = { path = "crates/skills" }
 maka-tool-catalog = { path = "crates/tool-catalog" }
 maka-tools = { path = "crates/tools" }

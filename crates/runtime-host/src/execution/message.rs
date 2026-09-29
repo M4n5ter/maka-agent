@@ -324,7 +324,9 @@ impl Executions {
             // Opening and original source identity commit together before any model
             // or tool effect. There is no separately accepted, unstarted idle row.
             let _native_admission = native.admit(self, &input.session_id, principal).await?;
+            let title_invocation = run.invocation_mut().clone();
             let turn = self.launch(run).await?;
+            self.title_after_message(title_invocation);
             return Ok(SubmitResult::TurnStarted {
                 turn_id: turn.turn_id,
                 preparation,

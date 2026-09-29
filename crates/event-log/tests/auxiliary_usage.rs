@@ -177,3 +177,177 @@ async fn auxiliary_accounting_requires_admission_and_preserves_usage_through_fai
     );
     log.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn title_accounting_uses_first_opening_after_stop_and_never_replays_after_recovery() {
+    use maka_runtime::{
+        event::{EventWrite, Fact, Invocation, InvocationOutcome, RuntimeEvent},
+        execution::*,
+        input::InvocationInput,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("title.sqlite");
+    let log = EventLog::open(&path).await.unwrap();
+    log.create_session(
+        "title",
+        "create",
+        &serde_json::json!({"name":"New Chat"}),
+        1,
+    )
+    .await
+    .unwrap();
+    let invocation = Invocation {
+        session_id: "title".into(),
+        turn_id: "first".into(),
+        run_id: "run".into(),
+        invocation_id: "first".into(),
+    };
+    let source = AuxiliarySource::SessionTitle {
+        invocation: invocation.clone(),
+    };
+    assert!(
+        log.begin_auxiliary_model(source.clone(), None)
+            .await
+            .is_err()
+    );
+    let configuration = InvocationConfiguration {
+        workspace_origin: WorkspaceOrigin::Selected,
+        approval_policy: ApprovalPolicy::OnRequest,
+        boundary_revision: 0,
+        cwd: directory.path().to_string_lossy().into_owned(),
+        workspace_identity: None,
+        model: Some(ModelBinding {
+            connection_id: "connection".into(),
+            connection_slug: "frozen".into(),
+            model: "title-model".into(),
+        }),
+        tool_composition: None,
+        system_prompt: None,
+        thinking_level: None,
+        sandbox_mode: SandboxMode::ReadOnly,
+        collaboration_mode: CollaborationMode::Agent,
+        orchestration_mode: BehaviorId::default(),
+        tool_mode: ToolMode::Direct,
+    };
+    let opening = Fact::InvocationOpened {
+        configuration: Some(Box::new(configuration)),
+        input: InvocationInput::Message {
+            source_messages: vec![],
+            content: "first question".into(),
+            request_fingerprint: None,
+        },
+    };
+    log.append(&EventWrite::plain(RuntimeEvent::new(invocation.clone(), opening.clone())).unwrap())
+        .await
+        .unwrap();
+    log.append(
+        &EventWrite::plain(RuntimeEvent::new(
+            invocation.clone(),
+            Fact::InvocationEnded {
+                outcome: InvocationOutcome::Cancelled {
+                    source: "user".into(),
+                },
+            },
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    log.set_session_archived::<serde_json::Value>("title", true, 2)
+        .await
+        .unwrap();
+    assert!(
+        log.begin_auxiliary_model(source.clone(), None)
+            .await
+            .is_err(),
+        "archived Sessions cannot admit title work"
+    );
+    log.set_session_archived::<serde_json::Value>("title", false, 3)
+        .await
+        .unwrap();
+    let later = Invocation {
+        turn_id: "later".into(),
+        run_id: "later".into(),
+        invocation_id: "later".into(),
+        ..invocation.clone()
+    };
+    log.append(&EventWrite::plain(RuntimeEvent::new(later.clone(), opening)).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        log.begin_auxiliary_model(
+            AuxiliarySource::SessionTitle {
+                invocation: later.clone()
+            },
+            None
+        )
+        .await
+        .is_err(),
+        "later turns cannot mint title attempts"
+    );
+    log.append(
+        &EventWrite::plain(RuntimeEvent::new(
+            later,
+            Fact::InvocationEnded {
+                outcome: InvocationOutcome::Cancelled {
+                    source: "user".into(),
+                },
+            },
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let id = log
+        .begin_auxiliary_model(source.clone(), None)
+        .await
+        .unwrap();
+    assert!(
+        log.begin_auxiliary_model(source.clone(), None)
+            .await
+            .is_err()
+    );
+    log.observe_auxiliary_model(
+        id,
+        ModelUsage {
+            input_tokens: Some(17),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let session = log
+        .get_session::<serde_json::Value>("title")
+        .await
+        .unwrap()
+        .unwrap();
+    log.begin_session_removal("title", session.revision)
+        .await
+        .unwrap();
+    assert!(
+        !log.session_retirement_ready("title").await.unwrap(),
+        "pending title accounting retains its Session owner"
+    );
+    log.close().await.unwrap();
+    let log = EventLog::open(&path).await.unwrap();
+    log.recover_auxiliary_models().await.unwrap();
+    assert!(
+        log.session_retirement_ready("title").await.unwrap(),
+        "exclusive recovery releases the title owner without replay"
+    );
+    assert!(
+        log.begin_auxiliary_model(source.clone(), None)
+            .await
+            .is_err(),
+        "unknown title attempts are not replayable"
+    );
+    let page = log.model_attempts(query(), 0, 10).await.unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.attempts[0].origin, Origin::Auxiliary { source });
+    assert_eq!(page.attempts[0].outcome, Outcome::Unknown);
+    assert_eq!(
+        page.attempts[0].binding.as_ref().unwrap().connection_slug,
+        "frozen"
+    );
+    assert_eq!(page.attempts[0].usage.input_tokens, Some(17));
+}

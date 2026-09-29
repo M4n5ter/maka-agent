@@ -43,6 +43,7 @@ pub(crate) mod remote;
 pub(crate) mod scheduler;
 pub(crate) mod session_import;
 pub(crate) mod session_recap;
+pub(crate) mod session_title;
 pub(crate) mod skills;
 pub(crate) mod storage;
 mod terminal;

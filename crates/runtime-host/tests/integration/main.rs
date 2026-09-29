@@ -66,6 +66,7 @@ mod session_bundle;
 mod session_history;
 mod session_recap_plugin;
 mod session_removal;
+mod session_title_plugin;
 mod skills_management;
 mod skills_plugin;
 mod todo_plugin;

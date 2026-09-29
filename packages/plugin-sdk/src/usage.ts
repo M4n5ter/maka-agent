@@ -28,7 +28,8 @@ export interface ModelAttempt {
         kind: 'auxiliary';
         source:
           | { kind: 'agent'; invocation: Invocation; operation_id: string }
-          | { kind: 'host_effect'; id: string };
+          | { kind: 'host_effect'; id: string }
+          | { kind: 'session_title'; invocation: Invocation };
       };
   binding: ModelChoice['model'] | null;
   sessionId: string | null;

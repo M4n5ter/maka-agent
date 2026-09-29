@@ -104,6 +104,22 @@ impl RootMessageProof {
 }
 
 impl EventLog {
+    /// The earliest user-message opening in owned history, including inherited
+    /// prefixes. Later messages and successor invocations cannot become the first.
+    pub async fn first_message_opening(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<StoredEvent>, StoreError> {
+        self.validate_root()?;
+        crate::sessions::validate_id(session_id)?;
+        let session = session_id.to_owned();
+        self.connection
+            .run(move |connection| {
+                Box::pin(async move { first_message_opening(connection, &session).await })
+            })
+            .await
+    }
+
     /// Ordered canonical messages of a logical Turn, before any preparation.
     /// Presentation aggregation never supplies an editable message identity.
     pub async fn editable_turn(
@@ -302,4 +318,27 @@ async fn editable(
 }
 fn invalid(message: &str) -> StoreError {
     StoreError::InvalidTransition(message.into())
+}
+
+/// Shared with auxiliary admission, inside its write transaction.
+pub(crate) async fn first_message_opening(
+    connection: &mut SqliteConnection,
+    session: &str,
+) -> Result<Option<StoredEvent>, StoreError> {
+    let row: Option<(i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT e.sequence, CASE WHEN length(CAST(e.event_json AS BLOB)) <= 1048576 THEN e.event_json END, e.kind
+         FROM runtime_events e WHERE ((e.kind='invocation_opened'
+             AND json_extract(e.event_json,'$.fact.input.kind')='message')
+             OR (e.kind='message_imported' AND json_extract(e.event_json,'$.fact.record.content.kind')='user'))
+         AND (json_extract(e.event_json,'$.invocation.session_id')=?1
+            OR EXISTS(SELECT 1 FROM session_history_members h WHERE h.session_id=?1 AND h.sequence=e.sequence)
+            OR EXISTS(SELECT 1 FROM session_revision_sources r WHERE r.session_id=?1 AND r.sequence=e.sequence))
+         ORDER BY e.sequence LIMIT 1"
+    ).bind(session).fetch_optional(connection).await?;
+    match row {
+        Some((sequence, json, kind)) if kind == "invocation_opened" => {
+            decode_delivery(sequence, json).map(Some)
+        }
+        _ => Ok(None),
+    }
 }

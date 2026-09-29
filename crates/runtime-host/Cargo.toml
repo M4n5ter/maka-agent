@@ -41,6 +41,7 @@ maka-skills.workspace = true
 maka-goal.workspace = true
 maka-background-health.workspace = true
 maka-session-recap.workspace = true
+maka-session-title.workspace = true
 maka-jev.workspace = true
 maka-web.workspace = true
 maka-insights.workspace = true

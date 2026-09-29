@@ -28,7 +28,7 @@ mod configure;
 mod effects;
 mod filesystem;
 mod interactions;
-mod llm;
+pub(super) mod llm;
 mod messages;
 mod network;
 mod removal;

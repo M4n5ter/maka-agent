@@ -6360,6 +6360,7 @@ dependencies = [
  "maka-scheduler",
  "maka-session-import",
  "maka-session-recap",
+ "maka-session-title",
  "maka-skills",
  "maka-tools",
  "maka-transport",
@@ -6460,6 +6461,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "maka-session-title"
+version = "0.2.0"
+dependencies = [
+ "futures-util",
+ "maka-plugins",
+ "serde_json",
 ]
 
 [[package]]

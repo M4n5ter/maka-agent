@@ -43,6 +43,7 @@ mod resume;
 mod shell;
 pub(crate) mod snapshot;
 mod successor;
+mod title;
 mod tools;
 mod workspaces;
 

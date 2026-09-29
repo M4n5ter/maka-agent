@@ -45,6 +45,11 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuxiliarySource {
+    /// One Host-owned title request, authorized by the first committed user opening.
+    /// It may finish after that invocation ends and cannot execute tools.
+    SessionTitle {
+        invocation: Invocation,
+    },
     Agent {
         invocation: Invocation,
         operation_id: String,
