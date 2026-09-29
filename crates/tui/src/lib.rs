@@ -1578,6 +1578,7 @@ where
                                 _ => None,
                             };
                         }
+                        app.return_from_model_setup();
                     },
                     Some(Ok(Completed::Providers(generation, result))) => {
                         app.providers.complete(generation, result);

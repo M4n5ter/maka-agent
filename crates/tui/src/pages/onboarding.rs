@@ -256,7 +256,10 @@ impl App {
                 self.onboarding_catalog_loaded();
                 self.hover = None;
             }
-            Command::Close => self.onboarding.dialog = None,
+            Command::Close => {
+                self.onboarding.dialog = None;
+                self.setup_return_home = false;
+            }
             Command::Verify | Command::Save => return Some(Action::Onboard(c)),
             _ => {
                 let Some(f) = &mut self.onboarding.dialog else {

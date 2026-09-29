@@ -874,6 +874,9 @@ impl App {
                 });
             }
             Command::Close => {
+                if self.management.dialog.is_some() {
+                    self.setup_return_home = false;
+                }
                 self.management.dialog = None;
                 self.hits.clear();
             }
