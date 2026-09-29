@@ -45,11 +45,11 @@ just publish native-preview
 
 GitHub 使用已登记的 `npm-publication.yml`。在功能分支可运行 `gh workflow run npm-publication.yml --ref <branch> -f publish=false`，得到完整产物与三平台验收结果。实际发布须显式选择 `publish=true`，且仅在 `main`、现有 `npm-publication` 环境中执行。
 
-正式打包会从固定的上游提交构建 V8，关闭其可选的 LGPL glibc 数学实现，再使用匹配的静态库和 Rust bindings。需要 Python 3、Git、可用的 Clang/libclang（19 或更新）及原生 C++ 工具链。macOS 构建需要 Xcode 26 或更新版本，以编译 Computer Use 的 Swift 绑定；CI 使用 macOS 26 构建，并在 macOS 15 验证安装。Linux 还需要 glib 开发包和 cargo-zigbuild/Zig。首次构建会下载 Chromium 工具链，可能耗时超过一小时，请预留数十 GiB 临时空间。构建完成后临时目录自动清理。
+正式包使用固定的 V8 构建，关闭可选的 LGPL glibc 数学实现。macOS 打包需要 Xcode 26 或更新版本来编译 Computer Use；CI 使用 macOS 26 构建，并在 macOS 15 验证安装。Linux 需要 glib 开发包和 cargo-zigbuild/Zig。回退到 V8 源码构建时，还需 Python 3、Git、Clang/libclang 19 或更新版本及原生 C++ 工具链；该过程会下载 Chromium 工具，可能耗时超过一小时，并使用数十 GiB 临时空间，完成后自动清理。
 
 完成的 V8 静态库、bindings 和声明保存在 `target/v8`（或 `$CARGO_TARGET_DIR/v8`）。缓存未命中时，打包程序下载 `scripts/rust/v8-prebuilts.json` 中固定的匹配产物；只有缺少对应条目才源码编译。key 绑定 V8 源码、平台、功能和生产代码，不绑定 Maka/deno_core 版本或下载工具。下载必须匹配源码内固定的 SHA-256，每次使用还会校验包内文件摘要；下载异常或缓存损坏会明确报错。每次打包仍执行实际链接和原生冒烟测试。
 
-对于尚未固定的 key，原生 CI 导出 `v8-prebuilt-*` 产物，包含压缩包、摘要和完成验证的提交及运行记录。完整工作流通过后，将同一批压缩包发布为不可覆盖的 GitHub 依赖预构建资产，并把 URL、摘要和验证记录提交到 `v8-prebuilts.json`。不要覆盖既有资产或改变同一 key 的含义。Actions 缓存加速尚未发布的构建，源码内的清单负责认证下载内容。缓存损坏时删除对应的本地条目及 Actions 缓存后重试；单独删除本地缓存通常会重新下载已固定的预构建。
+对于尚未固定的 key，原生 CI 导出 `v8-prebuilt-*` 产物，包含压缩包、摘要和完成验证的提交及运行记录。完整工作流通过后，将同一批压缩包发布到 `deps-v8-*` 标签下，作为固定版本的 GitHub 依赖预构建资产，并把 URL、摘要和验证记录提交到 `v8-prebuilts.json`。不要覆盖既有资产或改变同一 key 的含义。Actions 缓存加速尚未发布的构建，源码内的清单负责认证下载内容。缓存损坏时删除对应的本地条目及 Actions 缓存后重试；单独删除本地缓存通常会重新下载已固定的预构建。
 
 依赖变化后运行 `node scripts/rust/notices.mjs generate` 并审查许可证快照。它从固定依赖版本收集全文和嵌套声明，少数上游缺少独立许可文件的例外记录在 `notices-sources.json`。发布校验快照与源码输入的绑定，并追加实际 V8 构建图和 Rust 标准库声明；许可证 TSV 仅用作清单，不能代替全文。
 
