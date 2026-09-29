@@ -1069,7 +1069,6 @@ where
                 }
                 Action::CreateSession | Action::Project(pages::projects::Command::Create(_)) => {
                     if let Some(client) = client.clone() {
-                        let name = app.i18n.text("session-new");
                         let origin = app.navigation.current();
                         jobs.spawn(async move {
                             let result = async {
@@ -1083,7 +1082,7 @@ where
                                 };
                                 let input =
                                     maka_protocol::session::decode_session_create_input(&json!({
-                                        "sessionId":uuid::Uuid::new_v4().to_string(), "name":name,
+                                        "sessionId":uuid::Uuid::new_v4().to_string(),
                                         "workspace":workspace,
                                         "modelTarget":{"kind":"default"}
                                     }))?;
