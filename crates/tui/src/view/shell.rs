@@ -25,7 +25,6 @@ use crate::{
     ui::{Align, Context, Node, On, Size, Tone},
 };
 use ratatui::{Frame, layout::Rect};
-use unicode_width::UnicodeWidthStr;
 
 pub(crate) mod controls;
 mod input;
@@ -109,31 +108,7 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     };
     let actions: Vec<_> = actions
         .into_iter()
-        .map(|value| {
-            let key = format!("{value:?}");
-            if area.width >= 80
-                && matches!(&value, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment())
-            {
-                let label = app.i18n.text(if app.management.oauth.enrollment_label() == "oauth-resume" {
-                    "oauth-resume"
-                } else {
-                    "oauth-connect-short"
-                });
-                let width = label.width() as u16 + 2;
-                let node = controls::compact(
-                    key,
-                    label,
-                    Tone::Muted,
-                    value.clone(),
-                    app.enabled(&value),
-                    action_label(app, &value),
-                )
-                .size(Size::Fixed(width));
-                (node, width)
-            } else {
-                (action(app, key, value), 3)
-            }
-        })
+        .map(|value| (action(app, format!("{value:?}"), value), 3))
         .collect();
     let right_width = actions.iter().map(|(_, width)| width).sum::<u16>()
         + (1 + u16::from(object_menu.is_some())) * 3
