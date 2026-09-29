@@ -27,63 +27,91 @@ use std::{collections::BTreeMap, path::Path};
 
 /// Artwork is authored here as bounded vector geometry; no runtime theme code.
 const TIP: f32 = 29.519;
-const BODY: &[[f32; 2]] = &[
-    [TIP, TIP],
-    [108.0, 42.0],
-    [120.0, 54.0],
-    [120.0, 108.0],
-    [108.0, 120.0],
-    [54.0, 120.0],
-    [42.0, 108.0],
-];
-
-// The product mark from scripts/generate-logo.py: apex, feet, inner
-// valley and detached top bar. Keep it upright and separate from the pointer
-// tip, so the bar cannot obscure the position being indicated.
-const BRAND_SCALE: f32 = 0.085;
+// The bare product mark from scripts/generate-logo.py is the cursor itself.
+// Rotate the whole mark towards Cua's upper-left pointing direction, placing
+// the leading edge of its detached bar at the native renderer's pointer tip.
+const BRAND_SCALE: f32 = 0.11;
 const BRAND_STROKE: f32 = 70.0 * BRAND_SCALE;
 const fn brand(x: f32, y: f32) -> [f32; 2] {
+    let x = (x - 512.0) * BRAND_SCALE;
+    let y = (y - 127.0) * BRAND_SCALE;
     [
-        83.0 + (x - 512.0) * BRAND_SCALE,
-        52.0 + (y - 162.0) * BRAND_SCALE,
+        TIP + (x + y) * std::f32::consts::FRAC_1_SQRT_2,
+        TIP + (y - x) * std::f32::consts::FRAC_1_SQRT_2,
     ]
 }
-const MARK: &[&[[f32; 2]]] = &[
-    &[
-        brand(180.0, 845.0),
-        brand(512.0, 274.0),
-        brand(844.0, 845.0),
-    ],
-    &[
-        brand(359.1, 537.0),
-        brand(512.0, 800.0),
-        brand(664.9, 537.0),
-    ],
-    &[brand(405.0, 162.0), brand(619.0, 162.0)],
+struct MarkPath {
+    points: &'static [[f32; 2]],
+    cap: u8,
+    join: u8,
+}
+const MARK: &[MarkPath] = &[
+    MarkPath {
+        points: &[
+            brand(359.1, 537.0),
+            brand(512.0, 274.0),
+            brand(664.9, 537.0),
+        ],
+        cap: 1,
+        join: 2,
+    },
+    MarkPath {
+        points: &[
+            brand(180.0, 845.0),
+            brand(359.1, 537.0),
+            brand(512.0, 800.0),
+        ],
+        cap: 2,
+        join: 1,
+    },
+    MarkPath {
+        points: &[
+            brand(844.0, 845.0),
+            brand(664.9, 537.0),
+            brand(512.0, 800.0),
+        ],
+        cap: 2,
+        join: 1,
+    },
+    MarkPath {
+        points: &[brand(405.0, 162.0), brand(619.0, 162.0)],
+        cap: 2,
+        join: 2,
+    },
 ];
-fn path(points: &[[f32; 2]], closed: bool) -> CompiledGeometry {
+fn layers(color: Color) -> [([u8; 4], f32); 3] {
+    // Thin edges follow the glyph itself and retain its transparent openings.
+    [
+        ([23, 34, 59, 170], BRAND_STROKE + 3.0),
+        ([255, 255, 255, 255], BRAND_STROKE + 1.5),
+        (color.rgba(), BRAND_STROKE),
+    ]
+}
+fn path(points: &[[f32; 2]]) -> CompiledGeometry {
     CompiledGeometry::Path {
         vertices: points.to_vec(),
         in_tangents: vec![[0.0; 2]; points.len()],
         out_tangents: vec![[0.0; 2]; points.len()],
-        closed,
+        closed: false,
     }
 }
 fn command(
     geometry: CompiledGeometry,
-    fill: Option<[u8; 4]>,
-    stroke: Option<([u8; 4], f32)>,
+    color: [u8; 4],
+    width: f32,
+    line_cap: u8,
+    line_join: u8,
 ) -> CompiledDrawCommand {
     CompiledDrawCommand {
         geometries: vec![geometry],
         transform: CompiledTransform::default(),
         opacity: 1.0,
-        fill,
-        stroke: stroke.map(|(color, width)| CompiledStroke {
+        fill: None,
+        stroke: Some(CompiledStroke {
             color,
             width,
-            line_cap: 2,
-            line_join: 2,
+            line_cap,
+            line_join,
         }),
     }
 }
@@ -109,28 +137,22 @@ pub fn compiled(color: Color) -> CompiledTheme {
                         center: [TIP, TIP],
                         size: [size, size],
                     },
-                    None,
-                    Some((ring, 3.0)),
+                    ring,
+                    3.0,
+                    2,
+                    2,
                 ));
             }
-            // A dark outer edge and light inner edge remain legible on either
-            // background, without filling the pointed area with extra detail.
-            commands.push(command(
-                path(BODY, true),
-                None,
-                Some(([23, 34, 59, 170], 7.0)),
-            ));
-            commands.push(command(
-                path(BODY, true),
-                Some(fill),
-                Some(([255, 255, 255, 255], 4.0)),
-            ));
-            for points in MARK {
-                commands.push(command(
-                    path(points, false),
-                    None,
-                    Some(([255, 255, 255, 255], BRAND_STROKE)),
-                ));
+            for (color, width) in layers(color) {
+                for mark in MARK {
+                    commands.push(command(
+                        path(mark.points),
+                        color,
+                        width,
+                        mark.cap,
+                        mark.join,
+                    ));
+                }
             }
             animation.push(CompiledFrame { commands });
         }
@@ -145,7 +167,7 @@ pub fn compiled(color: Color) -> CompiledTheme {
     CompiledTheme {
         id: format!("org.apache.maka.cursor.{}", color.name()),
         name: format!("Maka {}", color.name()),
-        version: "1.1.0".into(),
+        version: "1.2.0".into(),
         author: "Apache Maka".into(),
         license: "Apache-2.0".into(),
         profile: cursor_overlay::THEME_PROFILE.into(),
@@ -163,25 +185,30 @@ pub(crate) fn write_artifacts(directory: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn svg_path(points: &[[f32; 2]], closed: bool) -> String {
+fn svg_path(points: &[[f32; 2]]) -> String {
     let mut value = String::new();
     for (i, [x, y]) in points.iter().enumerate() {
         use std::fmt::Write;
         let _ = write!(value, "{} {x} {y} ", if i == 0 { "M" } else { "L" });
     }
-    if closed {
-        value.push('Z');
-    }
     value
 }
 pub(crate) fn svg(color: Color) -> String {
-    let [r, g, b, _] = color.rgba();
-    format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none"><g stroke-linecap="round" stroke-linejoin="round"><path d="{body}" stroke="#17223b" stroke-width="7" opacity=".666667"/><path d="{body}" fill="rgb({r},{g},{b})" stroke="white" stroke-width="4"/><path d="{mark}" stroke="white" stroke-width="{BRAND_STROKE}"/></g></svg>"##,
-        body = svg_path(BODY, true),
-        mark = MARK
-            .iter()
-            .map(|points| svg_path(points, false))
-            .collect::<String>(),
-    )
+    use std::fmt::Write;
+    let mut svg =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">"#.to_owned();
+    for ([r, g, b, a], width) in layers(color) {
+        for mark in MARK {
+            let cap = if mark.cap == 1 { "butt" } else { "round" };
+            let join = if mark.join == 1 { "miter" } else { "round" };
+            let _ = write!(
+                svg,
+                r#"<path d="{}" stroke="rgb({r},{g},{b})" stroke-opacity="{}" stroke-width="{width}" stroke-linecap="{cap}" stroke-linejoin="{join}"/>"#,
+                svg_path(mark.points),
+                f32::from(a) / 255.0
+            );
+        }
+    }
+    svg.push_str("</svg>");
+    svg
 }

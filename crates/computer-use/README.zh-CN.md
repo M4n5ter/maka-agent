@@ -71,8 +71,9 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 内置 `maka-cua` skill 可从原生 Skill library 安装，不自动写入用户库。
 不包含视觉识别扩展、模型下载或 Python。
 
-每个 Session 拥有独立的 Maka 标志合成光标，保留 A 形轮廓、菱形留白和上方横线，
-左上尖端表示准确位置。支持六种配色、标签、显示开关和减弱动画。
+每个 Session 直接使用 Maka 标志作为合成光标，保留 A 形轮廓、菱形留白和独立的上方横线，
+没有外围指针外壳或底板。整个标志朝左上倾斜，横线中点的前缘表示准确位置。
+支持六种配色、标签、显示开关和减弱动画。
 输入动作自动显示反馈；`app.moveCursor(indexOrPoint)` / `tab.moveCursor(indexOrPoint)`
 只指示当前观察中的位置，不移动系统鼠标，也不消耗截图坐标。
 `cua.cursor.configure({label, color, enabled, reducedMotion})` 配置当前光标，
