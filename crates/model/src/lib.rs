@@ -422,7 +422,6 @@ impl ModelExecutor {
         let lease = binding.admit()?;
         let network = self.networks.get(&request.provider.network)?;
         let request = request.into_adapter()?;
-        budget::bytes(&request, 32 * 1024 * 1024)?;
         let worker = tokio::spawn(async move {
             let _permit = permit;
             let failure_sender = sender.clone();

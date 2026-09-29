@@ -135,7 +135,10 @@ async fn responses_http_preserves_reasoning_and_raw_tool_identity_across_steps()
                 let (mut socket, _) = listener.accept().await.unwrap();
                 requests.push(read_request(&mut socket).await);
                 let length = if index == 0 { first.len() + tail.len() } else { second.len() };
-                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                // The subscription endpoint can omit this header on a valid
+                // response; both turns must be decoded by their SSE events.
+                let content_type = if index == 0 { "Content-Type: text/event-stream\r\n" } else { "" };
+                socket.write_all(format!("HTTP/1.1 200 OK\r\n{content_type}Content-Length: {length}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
                 if index == 0 {
                     socket.write_all(first.as_bytes()).await.unwrap();
                     release.notified().await;

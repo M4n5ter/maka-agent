@@ -129,6 +129,39 @@ fn fixtures(kind: ProviderKind, text: &str) -> (String, String) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_sdk_requests_reserve_the_queue_without_a_body_size_cap() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for large in [true, false] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                assert_eq!(request.len() > 32 * 1024 * 1024, large);
+                let (first, last) = fixtures(ProviderKind::OpenaiChat, "large request accepted");
+                let body = first + &last;
+                socket.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let models = ModelExecutor::new(1, Duration::from_secs(20)).unwrap();
+        for large in [true, false] {
+            let mut input = request(ProviderKind::OpenaiChat, base.clone());
+            if large {
+                input.prompt = vec![maka_model::prompt::Message::user("x".repeat(33 * 1024 * 1024))];
+            }
+            let mut stream = models.stream(input, CancellationToken::new()).await.unwrap();
+            let mut output = StepBuilder::for_step("large-sdk-request").unwrap();
+            while let Some(event) = stream.next().await { output.push(event.unwrap()).unwrap(); }
+            assert!(serde_json::to_string(&output.finish().unwrap()).unwrap().contains("large request accepted"));
+            stream.cancel_and_wait().await;
+        }
+        server.await.unwrap();
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sdk_text_and_tool_streams_cross_real_http_before_response_finishes() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let executor = ModelExecutor::new(1, Duration::from_secs(15)).unwrap();

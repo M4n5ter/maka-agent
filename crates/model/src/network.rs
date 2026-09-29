@@ -154,9 +154,6 @@ impl Transport for Network {
     }
     fn request(&self, request: http::Request) -> BoxFuture<'_, Result<http::Response, Error>> {
         Box::pin(async move {
-            if request.body.len() > 32 * 1024 * 1024 {
-                return Err(Error::Adapter("model HTTP input exceeds 32 MiB".into()));
-            }
             let method = match request.method {
                 http::Method::Get => reqwest::Method::GET,
                 http::Method::Head => reqwest::Method::HEAD,
@@ -284,9 +281,6 @@ impl Socket for Connection {
                 Frame::Text(text) => Wire::Text(text.into()),
                 Frame::Binary(bytes) => Wire::Binary(bytes.into()),
             };
-            if frame.len() > 8 * 1024 * 1024 {
-                return Err(Error::Adapter("model WebSocket frame exceeds 8 MiB".into()));
-            }
             let mut write = self.write.lock().await;
             let write = write.as_mut().ok_or(Error::Cancelled)?;
             tokio::select! {

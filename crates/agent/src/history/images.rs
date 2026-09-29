@@ -17,8 +17,6 @@
  * under the License.
  */
 
-use std::collections::BTreeMap;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use maka_event_log::EventLog;
 use maka_model::prompt::{ContentPart, FileData, Message, ToolOutput};
@@ -31,8 +29,9 @@ use crate::RunError;
 
 pub(super) const NO_VISION: &str =
     "Image was read, but the selected model does not support image input.";
-const IMAGE_BUDGET: usize = 12 * 1024 * 1024;
-const TOOL_BUDGET_EXCEEDED: &str = "Image was read, but the per-request image budget (12MB across all images this turn) was exceeded; earlier images were sent and this one was omitted. Read fewer or smaller images.";
+// Bound each artifact read, not the accumulated media in a model request.
+// Historical images must not consume the allowance for a newly captured image.
+const MEDIA_READ_LIMIT: usize = 12 * 1024 * 1024;
 
 /// Targets borrow canonical evidence and are emitted alongside their messages.
 /// Arbitrary JSON tool results cannot authorize a storage read.
@@ -56,7 +55,6 @@ pub(super) enum Target<'a> {
 enum ImageRead {
     Bytes(Vec<u8>),
     Unavailable(&'static str),
-    OverBudget,
 }
 
 pub(crate) async fn materialize(
@@ -106,9 +104,6 @@ pub(crate) async fn materialize_replay(
         replay,
         prior_unknown,
     )?;
-    let mut remaining = IMAGE_BUDGET;
-    let mut audio_remaining = IMAGE_BUDGET;
-    let mut omitted = BTreeMap::<usize, usize>::new();
     for target in targets {
         if cancellation.is_cancelled() {
             return Err(RunError::Cancelled);
@@ -119,33 +114,25 @@ pub(crate) async fn materialize_replay(
             Target::Tool { image, .. } => (&image.reference, &image.mime_type),
         };
         let audio = matches!(target, Target::Audio { .. });
-        let budget = if audio {
-            &mut audio_remaining
-        } else {
-            &mut remaining
-        };
         let read = match resources.resolve(reference) {
-            Some(reference) => read(log, session, reference, *budget, audio).await?,
+            Some(reference) => read(log, session, reference, audio).await?,
             None => ImageRead::Unavailable("session_mismatch"),
         };
         if cancellation.is_cancelled() {
             return Err(RunError::Cancelled);
         }
         let part = match read {
-            ImageRead::Bytes(bytes) => {
-                *budget -= bytes.len();
-                Some(ContentPart::File {
-                    data: FileData::Data(STANDARD.encode(bytes)),
-                    media_type: mime.clone(),
-                    provider_options: match &target {
-                        Target::Tool { image, .. } => image
-                            .detail
-                            .map(|detail| serde_json::json!({"openai":{"imageDetail":detail}})),
-                        Target::User { .. } | Target::Audio { .. } => None,
-                    },
-                })
-            }
-            ImageRead::Unavailable(reason) => Some(match &target {
+            ImageRead::Bytes(bytes) => ContentPart::File {
+                data: FileData::Data(STANDARD.encode(bytes)),
+                media_type: mime.clone(),
+                provider_options: match &target {
+                    Target::Tool { image, .. } => image
+                        .detail
+                        .map(|detail| serde_json::json!({"openai":{"imageDetail":detail}})),
+                    Target::User { .. } | Target::Audio { .. } => None,
+                },
+            },
+            ImageRead::Unavailable(reason) => match &target {
                 Target::User { image, .. } => ContentPart::text(format!(
                     "Image attachment \"{}\" could not be loaded: {reason}.",
                     image.name
@@ -156,54 +143,34 @@ pub(crate) async fn materialize_replay(
                 Target::Tool { .. } => ContentPart::text(format!(
                     "Image could not be loaded from artifact storage: {reason}."
                 )),
-            }),
-            ImageRead::OverBudget => match target {
-                Target::User { message, .. } => {
-                    *omitted.entry(message).or_default() += 1;
-                    None
-                }
-                Target::Audio { .. } => Some(ContentPart::text(
-                    "Audio omitted: the per-request audio byte budget was exceeded.",
-                )),
-                Target::Tool { .. } => Some(ContentPart::text(TOOL_BUDGET_EXCEEDED)),
             },
         };
-        if let Some(part) = part {
-            match target {
-                Target::User { message, .. } => {
-                    let Message::User { content, .. } = &mut messages[message] else {
-                        unreachable!("user image target comes from the user message builder");
-                    };
-                    content.push(part);
-                }
-                Target::Audio {
-                    message,
-                    part: index,
-                    ..
-                }
-                | Target::Tool {
-                    message,
-                    part: index,
-                    ..
-                } => {
-                    let Message::Tool { content, .. } = &mut messages[message] else {
-                        unreachable!("tool image target comes from the tool message builder");
-                    };
-                    let ToolOutput::Content(parts) = &mut content[0].output else {
-                        unreachable!("image target comes from a structured content output");
-                    };
-                    parts[index] = part;
-                }
+        match target {
+            Target::User { message, .. } => {
+                let Message::User { content, .. } = &mut messages[message] else {
+                    unreachable!("user image target comes from the user message builder");
+                };
+                content.push(part);
+            }
+            Target::Audio {
+                message,
+                part: index,
+                ..
+            }
+            | Target::Tool {
+                message,
+                part: index,
+                ..
+            } => {
+                let Message::Tool { content, .. } = &mut messages[message] else {
+                    unreachable!("tool image target comes from the tool message builder");
+                };
+                let ToolOutput::Content(parts) = &mut content[0].output else {
+                    unreachable!("image target comes from a structured content output");
+                };
+                parts[index] = part;
             }
         }
-    }
-    for (message, count) in omitted {
-        let Message::User { content, .. } = &mut messages[message] else {
-            unreachable!("omitted images come from the user message builder");
-        };
-        content.push(ContentPart::text(format!(
-            "[{count} image attachment(s) omitted: the per-request image budget was exceeded. Earlier images were sent; ask the user to send fewer or smaller images.]"
-        )));
     }
     if cancellation.is_cancelled() {
         return Err(RunError::Cancelled);
@@ -215,7 +182,6 @@ async fn read(
     log: &EventLog,
     session: &str,
     reference: &StorageRef,
-    remaining: usize,
     audio: bool,
 ) -> Result<ImageRead, RunError> {
     let StorageRef::SessionFile {
@@ -232,14 +198,9 @@ async fn read(
         return Ok(ImageRead::Unavailable("not_found"));
     }
     // Signatures fit within 1024 bytes. Read one bounded snapshot, enough to
-    // distinguish an invalid image from a valid image exceeding the budget.
+    // distinguish an invalid image from a valid image exceeding the per-artifact read limit.
     let Some(chunk) = log
-        .read_artifact_chunk(
-            session,
-            relative_path,
-            0,
-            remaining.saturating_add(1).max(1024),
-        )
+        .read_artifact_chunk(session, relative_path, 0, MEDIA_READ_LIMIT + 1)
         .await?
     else {
         return Ok(ImageRead::Unavailable("not_found"));
@@ -247,8 +208,10 @@ async fn read(
     if !audio && sniff_binary_mime(&chunk.bytes).is_none() {
         return Ok(ImageRead::Unavailable("unsupported_mime"));
     }
-    if chunk.total_bytes > remaining as u64 {
-        return Ok(ImageRead::OverBudget);
+    if chunk.total_bytes > MEDIA_READ_LIMIT as u64 {
+        return Ok(ImageRead::Unavailable(
+            "media exceeds the 12 MiB per-artifact read limit",
+        ));
     }
     Ok(ImageRead::Bytes(chunk.bytes))
 }

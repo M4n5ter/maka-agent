@@ -200,11 +200,13 @@ impl Exchange {
             .socket
             .send(Frame::Text(text))
             .await
-            .map_err(|_| {
+            .map_err(|cause| {
                 if !self.cancellation.is_cancelled() {
                     self.transport.defer(route, Instant::now());
                 }
-                error("Responses WebSocket failed after dispatch; request was not replayed")
+                crate::Error::Transport(format!(
+                    "Responses WebSocket send failed; request was not replayed: {cause}"
+                ))
             })?;
         connection.baseline = prepared.cache(&self.transport.cache);
         *active = Some(connection);

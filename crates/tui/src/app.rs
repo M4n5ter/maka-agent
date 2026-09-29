@@ -1939,7 +1939,7 @@ impl App {
                     if mouse.kind == MouseEventKind::Up(MouseButton::Left)
                         && self.chat.view.search.is_none()
                     {
-                        self.chat.scroll(true, 0);
+                        self.chat.scroll(self.chat.view.at_top(), 0);
                     }
                     self.focus = Focus::Transcript;
                     self.hover = None;

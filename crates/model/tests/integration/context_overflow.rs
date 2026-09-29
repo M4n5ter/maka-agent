@@ -41,8 +41,13 @@ async fn failure_with_headers(
         .iter()
         .map(|(name, value)| format!("{name}: {value}\r\n"))
         .collect();
+    let content_type = if content_type.is_empty() {
+        String::new()
+    } else {
+        format!("Content-Type: {content_type}\r\n")
+    };
     let headers = format!(
-        "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n",
+        "HTTP/1.1 {status} Fixture\r\n{content_type}Content-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n",
         body.len()
     );
     let server = tokio::spawn(async move {
@@ -80,6 +85,44 @@ fn sse(parts: &[Value]) -> String {
         .iter()
         .map(|part| format!("data: {part}\n\n"))
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_unexpected_http_body_preserves_diagnostics_without_replaying() {
+    for (status, content_type, body, detail) in [
+        (
+            200,
+            "",
+            json!({"error":{"message":"untyped response"}}).to_string(),
+            "missing Content-Type",
+        ),
+        (
+            200,
+            "application/json",
+            json!({"detail":"gateway rejected the request body"}).to_string(),
+            "gateway rejected the request body",
+        ),
+        (
+            200,
+            "text/html",
+            "<html>private-page-content</html>".into(),
+            "text/html",
+        ),
+        (
+            400,
+            "application/json",
+            json!({"detail":"Unsupported parameter: example"}).to_string(),
+            "Unsupported parameter: example",
+        ),
+    ] {
+        let error = failure(ProviderKind::OpenaiResponses, status, content_type, body).await;
+        let ModelError::Adapter(message) = error else {
+            panic!("unexpected response must remain a terminal protocol failure");
+        };
+        assert!(message.contains(&format!("HTTP {status}")), "{message}");
+        assert!(message.contains(detail), "{message}");
+        assert!(!message.contains("private-page-content"));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

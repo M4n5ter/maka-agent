@@ -24,3 +24,5 @@
 Native Rust Responses encoding, stream decoding, and disposable WebSocket continuation state. No V8 dependency. Host owns credentials, request admission, canonical history, and usage settlement.
 
 Inspired by [OpenAI Codex](https://github.com/openai/codex/tree/94174e44cbc54cece45f6052328ca0c2cd7a8a2a/codex-rs/codex-api). HTTP and WebSocket share one event decoder; connection caches are optimizations, not replay authorities.
+
+Outbound model requests have no fixed local body-size cap. Context selection and provider limits govern valid requests; response/event limits remain independent. A request larger than the WebSocket cache budget still runs, without retaining a continuation baseline. The trusted JavaScript adapter reserves its entire input queue window for a larger request instead of rejecting it. Media is validated and read per artifact, so historical images do not crowd out newer images with a cumulative byte allowance.

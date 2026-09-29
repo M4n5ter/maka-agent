@@ -20,6 +20,47 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn screenshot_requests_can_exceed_the_response_frame_limit() {
+    use maka_runtime::model::prompt::{ContentPart, FileData, Message as Prompt};
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async_with_config(
+                socket,
+                Some(
+                    tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                        .max_frame_size(Some(64 * 1024 * 1024))
+                        .max_message_size(Some(64 * 1024 * 1024)),
+                ),
+            )
+            .await
+            .unwrap();
+            let frame = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(frame.len() > 32 * 1024 * 1024);
+            let body: Value = serde_json::from_str(&frame).unwrap();
+            assert_eq!(body["input"][0]["content"][0]["type"], "input_image");
+            finish(&mut socket, "large-screenshot").await;
+        });
+        let mut input = request(&base, "unused");
+        input.prompt = vec![Prompt::User {
+            content: vec![ContentPart::File {
+                data: FileData::Data("A".repeat(33 * 1024 * 1024)),
+                media_type: "image/png".into(),
+                provider_options: None,
+            }],
+            provider_options: None,
+        }];
+        let executor = ModelExecutor::new(1, Duration::from_secs(10)).unwrap();
+        generate(&executor, &Conversation::default(), input).await;
+        server.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_and_bad_frames_do_not_replay_or_poison_other_lanes() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

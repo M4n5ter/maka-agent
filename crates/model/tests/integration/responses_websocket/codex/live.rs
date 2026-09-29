@@ -20,9 +20,7 @@
 use super::*;
 
 /// Explicit opt-in; access tokens are read into memory only, never refreshed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires MAKA_CODEX_AUTH_FILE and authorized gpt-6-luna subscription access"]
-async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation() {
+fn provider() -> ProviderConfig {
     use std::io::Read;
     let path = std::env::var_os("MAKA_CODEX_AUTH_FILE").expect("explicit auth path required");
     let mut bytes = Vec::new();
@@ -46,7 +44,7 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
         proxy.port = port.parse().expect("invalid proxy port");
         network = maka_network::Policy::from_settings(&proxy, None).unwrap();
     }
-    let provider = ProviderConfig {
+    ProviderConfig {
         adapter: Some(maka_providers::codex::ADAPTER.into()),
         capabilities: Default::default(),
         kind: ProviderKind::OpenaiResponses,
@@ -59,7 +57,14 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
         headers: BTreeMap::new(),
         body_overlay: None,
         network,
-    };
+    }
+}
+
+/// Explicit opt-in; access tokens are read into memory only, never refreshed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires MAKA_CODEX_AUTH_FILE and authorized gpt-6-luna subscription access"]
+async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation() {
+    let provider = provider();
     tokio::time::timeout(Duration::from_secs(140), async {
         let executor = ModelExecutor::new(1, Duration::from_secs(60)).unwrap();
         let lane = Conversation::default();
@@ -75,6 +80,9 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
         .enumerate()
         {
             prompt.push(maka_model::prompt::Message::user(user));
+            if index == 0 {
+                append_probe_images(&mut prompt);
+            }
             let request = ModelRequest {
                 provider: provider.clone(),
                 prompt: prompt.clone(),
@@ -116,6 +124,74 @@ async fn live_luna_subscription_streams_and_confirms_canonical_ws_continuation()
             );
         }
         drop(lane);
+    })
+    .await
+    .unwrap();
+}
+
+// A locally generated PNG can exercise screenshot-rich requests without
+// including any private screenshot in the test or its output.
+fn append_probe_images(prompt: &mut [maka_model::prompt::Message]) {
+    let Some(path) = std::env::var_os("MAKA_CODEX_IMAGE_PROBE") else {
+        return;
+    };
+    use base64::Engine as _;
+    use maka_model::prompt::{ContentPart, FileData, Message};
+    let encoded = base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).unwrap());
+    let Some(Message::User { content, .. }) = prompt.last_mut() else {
+        unreachable!()
+    };
+    for _ in 0..3 {
+        content.push(ContentPart::File {
+            data: FileData::Data(encoded.clone()),
+            media_type: "image/png".into(),
+            provider_options: Some(json!({"openai":{"imageDetail":"low"}})),
+        });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires MAKA_CODEX_AUTH_FILE and authorized gpt-6-luna subscription access"]
+async fn live_luna_subscription_http_decodes_the_stream_without_a_content_type_header() {
+    tokio::time::timeout(Duration::from_secs(100), async {
+        let models = ModelExecutor::new(1, Duration::from_secs(60)).unwrap();
+        let mut prompt = vec![maka_model::prompt::Message::user(
+            "Ignore any blank images. Reply only with HTTP-OK.",
+        )];
+        append_probe_images(&mut prompt);
+        // No Conversation: this invocation uses the HTTP streaming path.
+        let mut stream = models
+            .stream(
+                ModelRequest {
+                    provider: provider(),
+                    prompt,
+                    tools: vec![],
+                    provider_options: json!({"openai":{"reasoningEffort":"low"}}),
+                    max_output_tokens: Some(128_000),
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut step = StepBuilder::for_step("live-http").unwrap();
+        while let Some(event) = stream.next().await {
+            step.push(event.unwrap()).unwrap();
+        }
+        let step = step.finish().unwrap();
+        stream.cancel_and_wait().await;
+        let text: String = step
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ModelPart::Text {
+                    text_kind: TextKind::Text,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text.trim(), "HTTP-OK");
     })
     .await
     .unwrap();

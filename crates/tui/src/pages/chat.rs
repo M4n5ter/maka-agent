@@ -308,6 +308,8 @@ impl Chat {
         self.view.scroll(up, amount);
         if up && self.view.at_top() {
             self.request_older();
+        } else if !up && self.view.following() {
+            self.request_newer();
         }
     }
     pub fn can_newer(&self) -> bool {
@@ -341,6 +343,8 @@ impl Chat {
             && self.view.needs_fill()
             && self.can_older();
         let mut automatic = false;
+        // Reflow can remove a historical viewport's anchor. Only explicit
+        // forward input advances that window toward the live tail.
         let (direction, through_sequence, cursor, anchor_sequence) = if tail {
             self.latest_requested = false;
             (
@@ -358,9 +362,7 @@ impl Chat {
                 (!cursor.is_empty()).then_some(cursor),
                 None,
             )
-        } else if self.wanted > self.through
-            && (self.newer_requested || !self.reading_history || self.view.following())
-        {
+        } else if self.wanted > self.through && (self.newer_requested || !self.reading_history) {
             automatic = !self.newer_requested && !self.reading_history;
             if self.reading_history {
                 self.view.pause();
@@ -852,6 +854,7 @@ mod tests {
     fn batch(start: u64, end: u64, through: u64) -> TranscriptBatch {
         TranscriptBatch { rows: (start..=end).map(|sequence| TranscriptRow { sequence, value: json!({"type":"user","id":format!("m{sequence}"),"turnId":"turn","text":format!("Row {sequence} 中文🦀")}) }).collect(), next_cursor: None, through_sequence: Some(through) }
     }
+
     #[test]
     fn incoming_content_waits_for_mouse_release_without_losing_the_selection() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -979,6 +982,13 @@ mod tests {
         let mut initial = opened();
         initial.batch = batch(20, 20, 20);
         initial.batch.next_cursor = Some("large".into());
+        initial
+            .snapshot
+            .transcript
+            .as_mut()
+            .unwrap()
+            .durable
+            .through_sequence = Some(20);
         chat.opened(request, Ok(initial));
         draw(&mut chat, &mut terminal);
         let fill = chat.page_query().unwrap();
@@ -1109,6 +1119,67 @@ mod tests {
         chat.refresh();
         chat.select(&Route::Session("a".into()));
         assert!(chat.open_query().unwrap().range.is_none());
+    }
+
+    #[test]
+    fn historical_pages_without_visible_anchors_wait_for_explicit_forward_scroll() {
+        let mut chat = Chat::default();
+        chat.select(&Route::Session("a".into()));
+        let request = chat.open_query().unwrap();
+        let mut initial = opened();
+        initial.batch = batch(20, 20, 20);
+        initial.batch.next_cursor = Some("older".into());
+        initial
+            .snapshot
+            .transcript
+            .as_mut()
+            .unwrap()
+            .durable
+            .through_sequence = Some(20);
+        chat.opened(request, Ok(initial));
+        let i18n = I18n::new(
+            crate::LocalePreference::Explicit(crate::Locale::En),
+            crate::Locale::En,
+        );
+        let mut screen =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 12)).unwrap();
+        screen
+            .draw(|f| {
+                chat.draw(f, f.area(), &i18n, false);
+            })
+            .unwrap();
+        chat.scroll(true, 3);
+        let request = chat.page_query().unwrap();
+        let mut hidden = batch(19, 19, 20);
+        hidden.rows[0].value["type"] = json!("turn_state");
+        hidden.rows[0].value["status"] = json!("completed");
+        hidden.rows[0].value["providerMetadata"] = json!("x".repeat(WINDOW_BYTES));
+        hidden.next_cursor = Some("earlier".into());
+        chat.page(request, Ok(hidden));
+        screen
+            .draw(|f| {
+                chat.draw(f, f.area(), &i18n, false);
+            })
+            .unwrap();
+        assert!(
+            chat.reading_history && chat.view.following(),
+            "a hidden page has no visual anchor"
+        );
+        assert!(
+            chat.page_query().is_none(),
+            "lack of an anchor must not reverse history pagination"
+        );
+        chat.scroll(false, 3);
+        let request = chat
+            .page_query()
+            .expect("explicit forward scrolling still loads newer history");
+        assert_eq!(
+            request.input.direction,
+            SessionTranscriptPageDirection::Newer
+        );
+        assert_eq!(request.input.anchor_sequence, Some(19));
+        chat.page(request, Ok(batch(20, 20, 20)));
+        assert!(!chat.reading_history);
     }
     fn opened() -> Opened {
         let snapshot = decode_subscription_open_result(&json!({

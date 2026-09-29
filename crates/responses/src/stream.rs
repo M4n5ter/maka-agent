@@ -158,7 +158,16 @@ async fn run(
         }),
     )
     .await??;
-    if !(200..300).contains(&response.head.status) {
+    let content_type = header(&response.head, "content-type");
+    // Some Responses endpoints omit Content-Type even for a valid event
+    // stream. The decoder still validates its frames and terminal outcome.
+    let event_stream = content_type.is_none_or(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+    });
+    if !(200..300).contains(&response.head.status) || !event_stream {
         let status = response.head.status;
         let retry_after = header(&response.head, "retry-after")
             .and_then(|v| v.parse::<u64>().ok())
@@ -205,26 +214,29 @@ async fn run(
                 retry_after,
             )));
         }
-        return Err(ModelError::Adapter(format!(
-            "Responses HTTP {status}: {}",
-            value["error"]["message"]
-                .as_str()
-                .unwrap_or("request rejected")
+        let message = value["error"]["message"]
+            .as_str()
+            .or_else(|| value["detail"].as_str())
+            .unwrap_or("request rejected")
+            .chars()
+            .take(4096)
+            .collect::<String>();
+        if (200..300).contains(&status) {
+            let content_type = content_type
+                .unwrap_or("missing Content-Type")
                 .chars()
-                .take(4096)
-                .collect::<String>()
+                .take(256)
+                .collect::<String>();
+            return Err(ModelError::Adapter(format!(
+                "Responses HTTP {status} returned {content_type}, expected text/event-stream: {message}"
+            )));
+        }
+        return Err(ModelError::Adapter(format!(
+            "Responses HTTP {status}: {message}"
         )));
     }
-    if !header(&response.head, "content-type").is_some_and(|v| {
-        v.split(';')
-            .next()
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
-    }) {
-        return Err(ModelError::Adapter(
-            "Responses streaming request did not return SSE".into(),
-        ));
-    }
     let mut sse = crate::sse::Sse::default();
+    let mut received_event = false;
     while let Some(chunk) = wait(idle_timeout, response.body.next())
         .await?
         .map_err(|error| match error {
@@ -240,12 +252,21 @@ async fn run(
     {
         for byte in chunk {
             if let Some(value) = sse.push(byte).map_err(failure)? {
+                received_event = true;
                 emit(&mut decoder, value, &sender).await?;
                 if decoder.finished() {
                     return Ok(());
                 }
             }
         }
+    }
+    if content_type.is_none() && !received_event {
+        // An untyped JSON/HTML response is not evidence of a retryable stream
+        // interruption. Do not replay a possibly completed generation.
+        return Err(ModelError::Adapter(format!(
+            "Responses HTTP {} had missing Content-Type and no SSE events",
+            response.head.status
+        )));
     }
     decoder.end().map_err(failure)
 }

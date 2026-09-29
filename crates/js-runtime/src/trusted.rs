@@ -56,6 +56,8 @@ impl From<TrustedError> for maka_runtime::model::error::ModelError {
 }
 pub(super) type Reply = oneshot::Sender<Result<()>>;
 
+const INPUT_WINDOW: u32 = 32 * 1024 * 1024;
+
 /// Queued SDK output retains its share of the runtime-wide byte budget until
 /// the consumer takes it. Queue count alone is not a useful memory boundary
 /// when model events vary from a few bytes to several MiB.
@@ -105,7 +107,7 @@ impl Default for TrustedRuntime {
         Self(Arc::new(Inner {
             service: OnceLock::new(),
             slots: Arc::new(Semaphore::new(128)),
-            input: Arc::new(Semaphore::new(32 * 1024 * 1024)),
+            input: Arc::new(Semaphore::new(INPUT_WINDOW as usize)),
             sequence: AtomicU32::new(1),
         }))
     }
@@ -159,14 +161,16 @@ impl TrustedRuntime {
         cancellation: CancellationToken,
         network: Arc<dyn maka_plugins::model::Transport>,
     ) -> Result<()> {
-        let bytes = budget::bytes(&request, 32 * 1024 * 1024)?;
+        let bytes =
+            maka_runtime::model::budget::reservation(&request, INPUT_WINDOW).map_err(failed)?;
         let permit = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(TrustedError::Cancelled),
             permit = self.0.slots.clone().acquire_owned() => permit.map_err(failed)?,
         };
-        // Large image/context requests queue before V8 conversion. Their
-        // serialized-byte reservation lasts through request cleanup.
+        // Large image/context requests queue before V8 conversion. Oversized
+        // requests take the whole window rather than failing a fixed body cap.
+        // The reservation lasts through request cleanup.
         let input = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(TrustedError::Cancelled),

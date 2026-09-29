@@ -78,8 +78,6 @@ impl Prepared {
             prepared.full["input"] = baseline.body["input"].take();
             prepared.prior = Some(baseline.permit);
         }
-        budget::bytes(&prepared.full, CACHE_LIMIT)
-            .map_err(|_| error("Responses WebSocket input exceeds 32 MiB"))?;
         Ok(prepared)
     }
 
