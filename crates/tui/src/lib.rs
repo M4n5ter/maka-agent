@@ -1069,7 +1069,6 @@ where
                 }
                 Action::CreateSession | Action::Project(pages::projects::Command::Create(_)) => {
                     if let Some(client) = client.clone() {
-                        let name = app.i18n.text("session-new");
                         let origin = app.navigation.current();
                         jobs.spawn(async move {
                             let result = async {
@@ -1081,12 +1080,11 @@ where
                                         json!({"kind":"host_path","path":std::env::current_dir()?})
                                     }
                                 };
-                                let input =
-                                    maka_protocol::session::decode_session_create_input(&json!({
-                                        "sessionId":uuid::Uuid::new_v4().to_string(), "name":name,
-                                        "workspace":workspace,
-                                        "modelTarget":{"kind":"default"}
-                                    }))?;
+                                let input = maka_protocol::session::decode_session_create_input(&json!({
+                                    "sessionId":uuid::Uuid::new_v4().to_string(),
+                                    "workspace":workspace,
+                                    "modelTarget":{"kind":"default"}
+                                }))?;
                                 Ok::<_, Error>(Box::new(client.create_session(input).await?))
                             }
                             .await
