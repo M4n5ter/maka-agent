@@ -142,6 +142,7 @@ impl Tools {
                 call,
                 name,
                 input,
+                ..
             }
             | Fact::ToolRejected {
                 operation_id,
@@ -197,6 +198,25 @@ impl Tools {
                             provider_options: None,
                             provider_executed: None,
                             metadata,
+                        },
+                    ));
+                }
+                if let Fact::ToolDispatched {
+                    title: Some(title), ..
+                } = &event.fact
+                {
+                    title.validate().map_err(ProjectionError::Invalid)?;
+                    rows.push(message(
+                        event,
+                        ts,
+                        format!("{}:activity", event.id),
+                        Content::ToolActivity {
+                            tool_use_id: tool_message_id(
+                                &event.invocation.invocation_id,
+                                operation_id,
+                            ),
+                            tool_name: name.clone(),
+                            title: title.clone(),
                         },
                     ));
                 }

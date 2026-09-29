@@ -45,6 +45,8 @@ pub enum ToolResultStatus {
 )]
 pub enum SessionToolEvent {
     ToolStart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<maka_runtime::display::Text>,
         id: String,
         turn_id: String,
         ts: u64,
@@ -121,6 +123,12 @@ pub fn decode_tool_observation_frame(value: &Value) -> Result<ToolObservationFra
 }
 
 fn validate_event(event: &SessionToolEvent) -> Result<()> {
+    if let SessionToolEvent::ToolStart {
+        title: Some(title), ..
+    } = event
+    {
+        title.validate().map_err(ProtocolError::invalid)?;
+    }
     if let SessionToolEvent::ToolProgress {
         id: event_id,
         turn_id,

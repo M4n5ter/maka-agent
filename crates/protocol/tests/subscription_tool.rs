@@ -145,3 +145,20 @@ fn timestamp_and_sequence_follow_javascript_safe_integer_contract() {
     let error = decode_tool_observation_frame(&value).unwrap_err();
     assert!(error.to_string().contains("exceeds byte limit"));
 }
+
+#[test]
+fn plugin_activity_title_roundtrips_and_invalid_display_text_is_rejected() {
+    let mut value = start();
+    value["title"] = json!({"fallback":"Inspect app","translations":{"zh-CN":"查看应用"}});
+    let decoded = decode_session_tool_event(&value).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    for bad in [
+        json!("plain is not the title contract"),
+        json!({"fallback":""}),
+        json!({"fallback":"x".repeat(257)}),
+        json!({"fallback":"bad\u{1b}[2J"}),
+    ] {
+        value["title"] = bad;
+        assert!(decode_session_tool_event(&value).is_err());
+    }
+}

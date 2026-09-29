@@ -105,7 +105,7 @@ impl Projection {
                     meta,
                 )
             }
-            "tool_call" | "tool_result" => self.tool_row(row, turn, id),
+            "tool_call" | "tool_result" | "tool_activity" => self.tool_row(row, turn, id),
             _ => Ok(vec![]),
         }
     }

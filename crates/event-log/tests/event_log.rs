@@ -138,6 +138,7 @@ async fn committed_prefix_survives_reopen_with_exact_replay_and_terminal_sealing
             (RuntimeEvent::new(
                 invocation(),
                 Fact::ToolDispatched {
+                    title: None,
                     operation_id: "effect-1".into(),
                     call: maka_runtime::tool_call::ToolCallIdentity::standalone(
                         "effect-1-call".into(),
@@ -246,6 +247,7 @@ async fn committed_prefix_survives_reopen_with_exact_replay_and_terminal_sealing
                 (RuntimeEvent::new(
                     invocation(),
                     Fact::ToolDispatched {
+                        title: None,
                         operation_id: "effect-2".into(),
                         call: maka_runtime::tool_call::ToolCallIdentity::standalone(
                             "effect-2-call".into()

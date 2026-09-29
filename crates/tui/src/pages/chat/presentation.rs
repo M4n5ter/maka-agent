@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 pub struct Presentation {
     pub active_turn: Option<String>,
+    pub(super) activity: tools::Live,
     waiting: HashSet<(String, String)>,
     branchable: HashMap<MessageKey, Revision>,
     timings: HashMap<String, Timing>,
@@ -59,14 +60,15 @@ impl Presentation {
         &mut self,
         view: &mut Transcript,
         rows: &BTreeMap<u64, Value>,
-        live: &[(SessionAssistantStreamIdentity, LiveText)],
-        live_revision: u64,
+        live: Option<(&[(SessionAssistantStreamIdentity, LiveText)], u64)>,
         i18n: &I18n,
         ascii: bool,
     ) {
+        let include_activity = live.is_some();
+        let (live, live_revision) = live.unwrap_or((&[], 0));
         view.begin();
         self.branchable.clear();
-        let trace = view.trace;
+        self.activity.reconcile(rows);
         let tools = tools::Index::new(rows);
         let latest: BTreeMap<_, _> = rows
             .iter()
@@ -75,36 +77,14 @@ impl Presentation {
             .collect();
         for (sequence, row) in rows {
             let kind = row["type"].as_str().unwrap();
-            if matches!(kind, "tool_call" | "tool_result") {
+            if matches!(kind, "tool_call" | "tool_result" | "tool_activity") {
                 match tools.entry(row) {
                     tools::Entry::Consumed => continue,
-                    tools::Entry::Card(card) => {
-                        let state = card.state(
-                            self.waiting
-                                .iter()
-                                .any(|(turn, id)| turn == card.turn && id == card.id),
-                        );
-                        if !view.trace
-                            && card.internal()
-                            && matches!(state, tools::State::Pending | tools::State::Returned)
-                        {
-                            continue;
-                        }
-                        view.upsert(
-                            MessageKey::new(card.turn, card.id, Part::Tool),
-                            Revision::Tool {
-                                call: card.call.map(|(seq, _)| seq),
-                                result: card.result.map(|(seq, _)| seq),
-                                trace,
-                            },
-                            Kind::Tool(state),
-                            || card.text(state, i18n, trace),
-                        );
-                        view.metadata(
-                            &MessageKey::new(card.turn, card.id, Part::Tool),
-                            None,
-                            card.activity(),
-                        );
+                    tools::Entry::Card(mut card) => {
+                        card.live = include_activity
+                            .then(|| self.activity.get(card.turn, card.id))
+                            .flatten();
+                        self.draw_tool(view, card, i18n);
                         continue;
                     }
                     tools::Entry::Raw => {}
@@ -172,6 +152,30 @@ impl Presentation {
                 view.metadata(&key, row["ts"].as_u64(), None);
             }
         }
+        let mut pending: Vec<_> = self
+            .activity
+            .entries
+            .iter()
+            .filter(|(id, update)| {
+                include_activity && update.title.is_some() && !tools.contains(&update.turn, id)
+            })
+            .collect();
+        pending.sort_by_key(|(_, update)| update.revision);
+        for (id, update) in pending {
+            self.draw_tool(
+                view,
+                tools::Card {
+                    turn: &update.turn,
+                    id,
+                    call: None,
+                    result: None,
+                    activity: None,
+                    live: Some(update),
+                    closed: false,
+                },
+                i18n,
+            );
+        }
         for (id, stream) in live {
             if stream.text.trim().is_empty() {
                 continue;
@@ -195,6 +199,38 @@ impl Presentation {
                 timing
             }),
             i18n,
+        );
+    }
+
+    fn draw_tool(&self, view: &mut Transcript, card: tools::Card<'_>, i18n: &I18n) {
+        let state = card.state(
+            self.waiting
+                .iter()
+                .any(|(turn, id)| turn == card.turn && id == card.id),
+        );
+        if !view.trace
+            && card.internal()
+            && matches!(state, tools::State::Pending | tools::State::Returned)
+        {
+            return;
+        }
+        let trace = view.trace;
+        view.upsert(
+            MessageKey::new(card.turn, card.id, Part::Tool),
+            Revision::Tool {
+                call: card.call.map(|(sequence, _)| sequence),
+                result: card.result.map(|(sequence, _)| sequence),
+                activity: card.activity.map(|(sequence, _)| sequence),
+                live: card.live.map(|update| update.revision),
+                trace,
+            },
+            Kind::Tool(state),
+            || card.text(state, i18n, trace),
+        );
+        view.metadata(
+            &MessageKey::new(card.turn, card.id, Part::Tool),
+            None,
+            card.activity(),
         );
     }
 
@@ -351,7 +387,7 @@ mod tests {
         )]);
         let mut presentation = Presentation::default();
         let mut view = Transcript::default();
-        presentation.sync(&mut view, &rows, &[], 0, &i18n, false);
+        presentation.sync(&mut view, &rows, Some((&[], 0)), &i18n, false);
         let key = durable(&rows[&1]);
         view.select(key.clone());
         assert_eq!(

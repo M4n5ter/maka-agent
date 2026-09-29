@@ -280,6 +280,8 @@ mod tests {
             let i18n = I18n::new(LocalePreference::Explicit(locale), locale);
             let call = json!({"toolName":"apply_patch","origin":"code_mode","args":patch});
             let card = Card {
+                activity: None,
+                live: None,
                 turn: "t",
                 id: "p",
                 call: Some((1, &call)),
@@ -363,6 +365,8 @@ mod tests {
                     value.insert("stoppedBefore".into(), boundary);
                 }
                 let card = Card {
+                    activity: None,
+                    live: None,
                     turn: "t",
                     id: "p",
                     call: Some((1, &call)),
@@ -401,6 +405,8 @@ mod tests {
         let mut foreign = call.clone();
         foreign["toolName"] = json!("mcp__other__apply_patch");
         let card = Card {
+            activity: None,
+            live: None,
             turn: "t",
             id: "p",
             call: Some((1, &foreign)),
@@ -432,6 +438,8 @@ mod tests {
         ] {
             let returned = json!({"isError":true,"content":content});
             let card = Card {
+                activity: None,
+                live: None,
                 turn: "t",
                 id: "p",
                 call: Some((1, &call)),

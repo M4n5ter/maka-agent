@@ -248,6 +248,7 @@ async fn forged_summary_source_and_hidden_old_unknowns_never_become_a_baseline()
     );
     let mut unknown: RuntimeEvent = serde_json::from_str(&original).unwrap();
     unknown.fact = Fact::ToolDispatched {
+        title: None,
         operation_id: "hidden".into(),
         call: ToolCallIdentity::standalone("hidden-call".into()),
         name: "write".into(),

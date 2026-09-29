@@ -121,6 +121,7 @@ impl ToolPreparer for Tools {
             }
             crate::validate(&name, &input)
                 .map_err(|message| ToolRejection::InvalidInput { message })?;
+            let title = crate::activity::call(&name, &input);
             Ok(PreparedEffect::new(move |_| {
                 Box::pin(async move {
                     let scope = maka_plugins::call::current().ok_or_else(|| {
@@ -141,7 +142,8 @@ impl ToolPreparer for Tools {
                         .await?;
                     Ok(ToolOutput::Mcp(result).into())
                 })
-            }))
+            })
+            .titled(title))
         })
     }
 }

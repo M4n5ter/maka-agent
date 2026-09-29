@@ -50,7 +50,7 @@ async fn settled(log: &EventLog, output: &ToolOutput) {
             "parts":[{"kind":"tool_call","call":{"id":"call","name":"Read","input":{},"provider_executed":false}}],
             "finish_reason":"tool-calls","usage":{}
         })).unwrap() },
-        Fact::ToolDispatched { operation_id: "step:call".into(),
+        Fact::ToolDispatched { title: None, operation_id: "step:call".into(),
             call: ToolCallIdentity::provider("step".into(), "call".into()), name: "Read".into(), input: json!({}) },
     ] {
         log.append(&EventWrite::plain(RuntimeEvent::new(prior.clone(), fact)).unwrap()).await.unwrap();

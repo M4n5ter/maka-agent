@@ -257,6 +257,8 @@ mod tests {
         for locale in Locale::ALL {
             let i18n = I18n::new(LocalePreference::Explicit(locale), locale);
             let mut card = Card {
+                activity: None,
+                live: None,
                 turn: "t",
                 id: "edit",
                 call: Some((1, &call)),

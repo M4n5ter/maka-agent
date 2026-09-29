@@ -58,6 +58,15 @@ impl Session {
             cursor: Default::default(),
         }
     }
+    pub(crate) fn target_label(&self, handle: &Handle) -> Option<&str> {
+        match handle {
+            Handle::App(id) => self
+                .targets
+                .get(id)
+                .map(|target| target.window.app_name.as_str()),
+            Handle::Tab(id) => self.browsers.target_label(id),
+        }
+    }
     pub fn configure_browsers(
         &mut self,
         connections: Vec<maka_plugins::computer::BrowserConnection>,

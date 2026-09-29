@@ -283,7 +283,7 @@ async fn continuation_claim_replays_only_its_lineage_and_retries_with_frozen_inp
             Fact::ModelInterrupted { status: ModelInterruption::RetryableFailure, .. })).count(), 1);
         for fact in [
             opening("later unknown effect"),
-            Fact::ToolDispatched { operation_id: "unknown".into(),
+            Fact::ToolDispatched { title: None, operation_id: "unknown".into(),
                 call: maka_runtime::tool_call::ToolCallIdentity::standalone("unknown-call".into()),
                 name: "write".into(), input: json!({}) },
             Fact::InvocationEnded { outcome: InvocationOutcome::Failed { class: "outcome_unknown".into(), message: None } },

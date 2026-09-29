@@ -355,14 +355,7 @@ impl History {
         let fresh = self.preview.is_none();
         let preview = self.preview.get_or_insert_with(Transcript::default);
         preview.trace = self.trace;
-        presentation::Presentation::default().sync(
-            preview,
-            &self.preview_rows,
-            &[],
-            0,
-            i18n,
-            ascii,
-        );
+        presentation::Presentation::default().sync(preview, &self.preview_rows, None, i18n, ascii);
         if fresh {
             if let Some(key) = preview.first_visible()
                 && preview.folded(&key)

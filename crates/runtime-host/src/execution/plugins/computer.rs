@@ -167,6 +167,9 @@ impl Executions {
             Err(maka_js_runtime::CellAbort::Tool(error)) => return Err(error),
             Err(error) => return Err(failed(error)),
         };
+        if let maka_js_runtime::CellResult::Failure { error, .. } = result {
+            return Err(failed(format!("Cua JavaScript error: {}", error.message)));
+        }
         let mut content = Vec::new();
         for output in context.take_output() {
             match output {
@@ -179,16 +182,9 @@ impl Executions {
                 }
             }
         }
-        if let maka_js_runtime::CellResult::Failure { error, .. } = &result {
-            content.push(maka_runtime::capability::ContentBlock::Text {
-                text: format!("Cua JavaScript error: {}", error.message),
-            });
-        }
         Ok(CallResult {
             content,
-            structured_content: Some(
-                serde_json::json!({"ok":matches!(result,maka_js_runtime::CellResult::Success {..})}),
-            ),
+            structured_content: Some(serde_json::json!({"ok":true})),
         })
     }
 
@@ -264,6 +260,7 @@ impl Executions {
         if cancellation.is_cancelled() || !owner.is_effective() {
             return Err(failed("Computer Use authority retired before admission"));
         }
+        let title = runtime.activity(&command);
         let session_id = invocation.session_id.clone();
         let effect = PreparedEffect::new(move |cancellation| {
             Box::pin(async move {
@@ -288,6 +285,7 @@ impl Executions {
                 .into())
             })
         });
+        let effect = effect.titled(title);
         let result = ToolJournal::new(self.log.clone(), invocation)
             .invoke_prepared_output(
                 context.operation_id,

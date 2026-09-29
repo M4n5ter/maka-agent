@@ -44,6 +44,7 @@ fn plain(fact: Fact) -> EventWrite {
 
 fn dispatch(operation: &str) -> EventWrite {
     plain(Fact::ToolDispatched {
+        title: None,
         operation_id: operation.into(),
         call: ToolCallIdentity::standalone(format!("{operation}-call")),
         name: "Read".into(),

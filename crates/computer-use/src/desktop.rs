@@ -88,6 +88,19 @@ impl Session {
         }
     }
 
+    /// Snapshot display metadata from the same target owner used for execution.
+    /// Remote/unknown bindings use a generic action, never a guessed window name.
+    pub fn activity(&self, command: &Command) -> maka_runtime::display::Text {
+        let target = match (&self.backend, command) {
+            (
+                Some(Backend::Local(local)),
+                Command::Observe { handle, .. } | Command::Action { handle, .. },
+            ) => local.target_label(handle),
+            _ => None,
+        };
+        crate::activity::command(command, target)
+    }
+
     pub fn configure(
         &mut self,
         desktop: Desktop,

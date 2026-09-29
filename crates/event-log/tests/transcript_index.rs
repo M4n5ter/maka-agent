@@ -293,6 +293,7 @@ async fn oversized_evidence_and_tool_content_fail_without_committing_progress() 
         .append(&event(
             "b",
             Fact::ToolDispatched {
+                title: None,
                 operation_id: "tool".into(),
                 call: maka_runtime::tool_call::ToolCallIdentity::standalone("tool-call".into()),
                 name: "file".into(),

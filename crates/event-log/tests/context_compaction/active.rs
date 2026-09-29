@@ -226,6 +226,7 @@ async fn active_cut_rejects_pending_child_and_changed_summary_repair_source() {
     log.append(&event(
         "active",
         Fact::ToolDispatched {
+            title: None,
             operation_id: "parent".into(),
             call: ToolCallIdentity::standalone("parent-call".into()),
             name: "code".into(),

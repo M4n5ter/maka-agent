@@ -140,6 +140,7 @@ async fn tool_boundaries_page_independently_and_rebuild_exact_ids_without_readin
     let accepted_fence = accepted(&log, "first", "exec").await;
     let parent = "first:reused-provider-id";
     log.append(&event(Fact::ToolDispatched {
+        title: None,
         operation_id: parent.into(),
         call: ToolCallIdentity::provider("first".into(), "reused-provider-id".into()),
         name: "exec".into(),
@@ -150,6 +151,7 @@ async fn tool_boundaries_page_independently_and_rebuild_exact_ids_without_readin
     for index in 0..3 {
         let operation = format!("child-{index}");
         log.append(&event(Fact::ToolDispatched {
+            title: None,
             operation_id: operation.clone(),
             call: ToolCallIdentity {
                 tool_call_id: format!("nested-{index}"),

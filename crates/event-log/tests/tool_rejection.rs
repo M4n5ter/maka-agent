@@ -49,6 +49,7 @@ async fn refusals_have_no_dispatch_or_uncertainty_and_cannot_alias_effects() {
     };
     let dispatch = |operation: &str, id: &str| {
         event(Fact::ToolDispatched {
+            title: None,
             operation_id: operation.into(),
             call: ToolCallIdentity::standalone(id.into()),
             name: "tool".into(),

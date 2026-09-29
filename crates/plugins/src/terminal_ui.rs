@@ -31,68 +31,10 @@ pub mod view;
 
 use crate::Error;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 pub const VERSION: u32 = 9;
 
-/// Presentation text is distinct from the stable identity used for navigation.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Text {
-    pub fallback: String,
-    #[serde(default)]
-    pub translations: BTreeMap<String, String>,
-}
-impl Text {
-    pub fn plain(value: impl Into<String>) -> Self {
-        Self {
-            fallback: value.into(),
-            translations: BTreeMap::new(),
-        }
-    }
-    pub fn localized(en: &str, zh_cn: &str, zh_tw: &str) -> Self {
-        Self {
-            fallback: en.into(),
-            translations: BTreeMap::from([
-                ("zh-CN".into(), zh_cn.into()),
-                ("zh-TW".into(), zh_tw.into()),
-            ]),
-        }
-    }
-    pub fn resolve(&self, locale: &str) -> &str {
-        self.translations
-            .get(locale)
-            .or_else(|| {
-                locale
-                    .split_once('-')
-                    .and_then(|(language, _)| self.translations.get(language))
-            })
-            .map_or(&self.fallback, String::as_str)
-    }
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        let valid_text = |text: &str| {
-            !text.trim().is_empty()
-                && text.len() <= 256
-                && !text.chars().any(|c| {
-                    c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-                })
-        };
-        if !valid_text(&self.fallback)
-            || self.translations.len() > 8
-            || self.translations.iter().any(|(locale, text)| {
-                locale.is_empty()
-                    || locale.len() > 64
-                    || locale.split('-').any(|part| {
-                        part.is_empty() || !part.bytes().all(|c| c.is_ascii_alphanumeric())
-                    })
-                    || !valid_text(text)
-            })
-        {
-            return Err(Error::Invalid("Invalid terminal view title".into()));
-        }
-        Ok(())
-    }
-}
+pub use maka_runtime::display::Text;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -188,7 +130,9 @@ impl Descriptor {
         if self.version != VERSION {
             return Err(Error::Invalid("Unsupported terminal view version".into()));
         }
-        self.title.validate()?;
+        self.title
+            .validate()
+            .map_err(|reason| Error::Invalid(reason.into()))?;
         if !self.commands.is_empty() && self.placement != Placement::Page {
             return Err(invalid());
         }

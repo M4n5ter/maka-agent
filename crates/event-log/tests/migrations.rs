@@ -71,6 +71,7 @@ async fn initialization_and_reopen_preserve_facts_payloads_and_schema_identity()
         &EventWrite::plain(RuntimeEvent::new(
             event.invocation.clone(),
             Fact::ToolDispatched {
+                title: None,
                 operation_id: "read".into(),
                 call: maka_runtime::tool_call::ToolCallIdentity::standalone("call".into()),
                 name: "Read".into(),

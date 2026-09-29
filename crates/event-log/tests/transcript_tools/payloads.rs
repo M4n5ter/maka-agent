@@ -23,6 +23,7 @@ async fn dispatch(log: &EventLog, step: &str) -> String {
     accepted(log, step, "Read").await;
     let operation = format!("{step}:reused-provider-id");
     log.append(&event(Fact::ToolDispatched {
+        title: None,
         operation_id: operation.clone(),
         call: ToolCallIdentity::provider(step.into(), "reused-provider-id".into()),
         name: "Read".into(),

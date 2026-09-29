@@ -31,12 +31,14 @@ fn accepted_tools_replay_with_distinct_ids_parentage_rejections() {
     let mut facts = vec![opening()];
     step(&mut facts, "first", true, false);
     facts.push(Fact::ToolDispatched {
+        title: Some(maka_runtime::display::Text::plain("Inspect application")),
         operation_id: "first:raw".into(),
         call: ToolCallIdentity::provider("first".into(), "raw".into()),
         name: "exec".into(),
         input: json!({"code":"Read()"}),
     });
     facts.push(Fact::ToolDispatched {
+        title: None,
         operation_id: "child".into(),
         call: ToolCallIdentity {
             tool_call_id: "nested".into(),
@@ -67,6 +69,7 @@ fn accepted_tools_replay_with_distinct_ids_parentage_rejections() {
     step(&mut facts, "native", false, true);
     step(&mut facts, "unknown", false, false);
     facts.push(Fact::ToolDispatched {
+        title: None,
         operation_id: "unknown:raw".into(),
         call: ToolCallIdentity::provider("unknown".into(), "raw".into()),
         name: "exec".into(),
@@ -126,6 +129,15 @@ fn accepted_tools_replay_with_distinct_ids_parentage_rejections() {
         .iter()
         .map(|row| serde_json::to_value(&row.message).unwrap())
         .collect();
+    let activity = messages
+        .iter()
+        .find(|row| row["type"] == "tool_activity")
+        .unwrap();
+    assert_eq!(activity["title"]["fallback"], "Inspect application");
+    assert_eq!(
+        activity["toolUseId"],
+        tool_message_id("invocation", "first:raw")
+    );
     let calls: Vec<_> = messages
         .iter()
         .filter(|message| message["type"] == "tool_call")

@@ -150,6 +150,13 @@ pub enum Content {
         #[serde(flatten)]
         metadata: ToolMetadata,
     },
+    /// Display metadata admitted with a call whose model acceptance may already
+    /// have produced its immutable tool_call row.
+    ToolActivity {
+        tool_use_id: String,
+        tool_name: String,
+        title: maka_runtime::display::Text,
+    },
     ToolResult {
         tool_use_id: String,
         is_error: bool,

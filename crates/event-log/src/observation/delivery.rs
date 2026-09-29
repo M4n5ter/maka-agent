@@ -84,6 +84,8 @@ pub enum StreamFact {
         interrupted: Vec<String>,
     },
     ToolDispatched {
+        #[serde(default)]
+        title: Option<maka_runtime::display::Text>,
         operation_id: String,
         name: String,
     },
@@ -246,7 +248,11 @@ SELECT json_object(
         WHEN kind = 'executor_observed' THEN
             json_object('kind', 'executor_tool_result', 'tool_call_id', json_extract(event_json, '$.fact.output.toolCallId'),
                 'is_error', json(CASE WHEN json_extract(event_json, '$.fact.output.isError') THEN 'true' ELSE 'false' END))
-        WHEN kind IN ('tool_dispatched', 'tool_rejected') THEN
+        WHEN kind = 'tool_dispatched' THEN
+            json_object('kind', kind, 'operation_id', operation_id,
+                'name', json_extract(event_json, '$.fact.name'),
+                'title', json_extract(event_json, '$.fact.title'))
+        WHEN kind = 'tool_rejected' THEN
             json_object('kind', kind, 'operation_id', operation_id,
                 'name', json_extract(event_json, '$.fact.name'))
         WHEN kind = 'tool_settled' THEN

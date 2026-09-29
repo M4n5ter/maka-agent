@@ -236,6 +236,7 @@ tool-patch-failed = Applied { $count } · patch failed
 tool-patch-stopped = Applied { $count } · patch stopped
 tool-patch-failed-at = Failed at · { $path }
 tool-patch-stopped-before = Stopped before · { $path }
+tool-running = Running
 tool-pending = Awaiting result
 tool-waiting = Waiting for you
 tool-returned = Result received

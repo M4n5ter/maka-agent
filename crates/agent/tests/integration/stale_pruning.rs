@@ -46,7 +46,7 @@ async fn legacy(log: &EventLog, id: &str, repeats: usize) {
             "parts":[{"kind":"tool_call","call":{"id":format!("call-{id}"),"name":"Read","input":{"path":id},"provider_executed":false}}],
             "finish_reason":"tool-calls","usage":{}
         })).unwrap() },
-        Fact::ToolDispatched { operation_id: operation.clone(),
+        Fact::ToolDispatched { title: None, operation_id: operation.clone(),
             call: ToolCallIdentity::provider(step, format!("call-{id}")), name: "Read".into(), input: json!({"path":id}) },
     ] {
         log.append(&EventWrite::plain(RuntimeEvent::new(invocation.clone(), fact)).unwrap()).await.unwrap();

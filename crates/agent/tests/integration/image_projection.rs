@@ -59,7 +59,7 @@ async fn reopened_images_do_not_starve_current_images_and_each_artifact_read_is_
             Fact::ModelCompleted { step_id: "prior-step".into(), output: serde_json::from_value(json!({
                 "parts":[{"kind":"tool_call","call":{"id":"read","name":"Read","input":{},"provider_executed":false}}],
                 "finish_reason":"tool-calls", "usage":{}})).unwrap() },
-            Fact::ToolDispatched { operation_id: "prior-step:read".into(), call: ToolCallIdentity::provider("prior-step".into(), "read".into()), name: "Read".into(), input: json!({}) },
+            Fact::ToolDispatched { title: None, operation_id: "prior-step:read".into(), call: ToolCallIdentity::provider("prior-step".into(), "read".into()), name: "Read".into(), input: json!({}) },
         ];
         for fact in facts { log.append(&EventWrite::plain(RuntimeEvent::new(prior.clone(), fact)).unwrap()).await.unwrap(); }
         log.append(&EventWrite::tool_success("prior-result".into(), std::time::SystemTime::now(), prior.clone(), "prior-step:read".into(),

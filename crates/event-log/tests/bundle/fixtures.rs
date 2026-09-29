@@ -85,6 +85,7 @@ pub(super) async fn tool(
     .unwrap();
     let operation = format!("{step}:{step}");
     log.append(&event(Fact::ToolDispatched {
+        title: None,
         operation_id: operation.clone(),
         call: ToolCallIdentity::provider(step.into(), step.into()),
         name: "Read".into(),

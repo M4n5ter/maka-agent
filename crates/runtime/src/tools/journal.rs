@@ -147,6 +147,7 @@ impl ToolJournal {
             let dispatch = RuntimeEvent::new(
                 invocation.clone(),
                 Fact::ToolDispatched {
+                    title: effect.title.clone(),
                     operation_id: operation_id.clone(),
                     call,
                     name,

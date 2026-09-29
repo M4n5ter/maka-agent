@@ -49,7 +49,9 @@ pub(super) fn events(stored: &StoreStreamEvent) -> Result<Vec<SessionToolEvent>,
                 ToolResultStatus::Completed
             }),
         ),
-        StreamFact::ToolDispatched { operation_id, name } => (operation_id, Some(name), None),
+        StreamFact::ToolDispatched {
+            operation_id, name, ..
+        } => (operation_id, Some(name), None),
         StreamFact::ToolRejected { operation_id, name } => {
             (operation_id, Some(name), Some(ToolResultStatus::Errored))
         }
@@ -71,6 +73,10 @@ pub(super) fn events(stored: &StoreStreamEvent) -> Result<Vec<SessionToolEvent>,
     let mut events = Vec::new();
     if let Some(name) = name {
         events.push(SessionToolEvent::ToolStart {
+            title: match &stored.fact {
+                StreamFact::ToolDispatched { title, .. } => title.clone(),
+                _ => None,
+            },
             id: tool_use_id.clone(),
             turn_id: stored.invocation.turn_id.clone(),
             ts,

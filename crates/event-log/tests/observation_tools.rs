@@ -58,6 +58,11 @@ async fn tool_delivery_excludes_payloads_and_preserves_factual_order_time_and_fe
             },
         },
         Fact::ToolDispatched {
+            title: Some(maka_runtime::display::Text::localized(
+                "Inspect application",
+                "查看应用",
+                "查看應用程式",
+            )),
             operation_id: "success".into(),
             call: ToolCallIdentity::standalone("call-success".into()),
             name: "Read".into(),
@@ -74,6 +79,7 @@ async fn tool_delivery_excludes_payloads_and_preserves_factual_order_time_and_fe
             },
         },
         Fact::ToolDispatched {
+            title: None,
             operation_id: "failure".into(),
             call: ToolCallIdentity::standalone("call-failure".into()),
             name: "Read".into(),
@@ -180,6 +186,9 @@ async fn tool_delivery_excludes_payloads_and_preserves_factual_order_time_and_fe
         }
     }
     assert_eq!(delivered.len(), 7);
+    assert!(
+        matches!(&delivered[1].fact, StreamFact::ToolDispatched { title: Some(title), .. } if title.resolve("zh-CN") == "查看应用")
+    );
     for (projected, (canonical, sequence)) in delivered.iter().zip(events.iter().zip(&sequences)) {
         assert_eq!(projected.sequence, *sequence);
         assert_eq!(projected.id, canonical.id);

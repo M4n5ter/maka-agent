@@ -86,6 +86,7 @@ async fn exact_run_cuts_bind_identity_and_bytes_without_admitting_unproven_repla
         RuntimeEvent::new(
             first.invocation.clone(),
             Fact::ToolDispatched {
+                title: None,
                 operation_id: "unsettled".into(),
                 call: ToolCallIdentity::standalone("call".into()),
                 name: "write".into(),

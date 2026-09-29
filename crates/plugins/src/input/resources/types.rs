@@ -29,7 +29,9 @@ pub struct Descriptor {
 }
 impl Descriptor {
     pub fn validate(&self) -> Result<(), Error> {
-        self.title.validate()
+        self.title
+            .validate()
+            .map_err(|reason| Error::Invalid(reason.into()))
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

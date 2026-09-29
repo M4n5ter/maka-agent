@@ -71,6 +71,7 @@ pub(crate) async fn validate(
             call,
             name,
             input,
+            ..
         }
         | Fact::ToolRejected {
             operation_id,

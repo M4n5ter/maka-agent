@@ -101,6 +101,7 @@ async fn session_bounds_and_evidence_exclude_unrelated_history() {
     let second = RuntimeEvent::new(
         first.invocation.clone(),
         Fact::ToolDispatched {
+            title: None,
             operation_id: "tool-1".into(),
             call: maka_runtime::tool_call::ToolCallIdentity::standalone("tool-1-call".into()),
             name: "read_file".into(),

@@ -24,6 +24,7 @@ async fn dispatch(log: &EventLog, id: &str, origin: ToolOrigin) {
     log.append(&event(
         "child",
         Fact::ToolDispatched {
+            title: None,
             operation_id: id.into(),
             call: ToolCallIdentity {
                 tool_call_id: id.into(),

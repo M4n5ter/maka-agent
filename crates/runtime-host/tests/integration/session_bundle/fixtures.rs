@@ -159,6 +159,7 @@ pub(super) async fn interrupt(log: &EventLog) {
             },
         },
         Fact::ToolDispatched {
+            title: None,
             operation_id: "uncertain".into(),
             call: maka_runtime::tool_call::ToolCallIdentity::standalone("uncertain".into()),
             name: "Shell".into(),

@@ -181,6 +181,7 @@ async fn streamed_exec_journals_parallel_children_and_reopens_without_reexecutio
                         call,
                         name,
                         input,
+                        ..
                     } = &event.event.fact
                     {
                         Some((index, operation_id, call, name, input))

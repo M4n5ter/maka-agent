@@ -25,6 +25,7 @@ fn boundary(output: &ToolOutput) -> (InvocationView, StoredEvent) {
     let mut facts = vec![opening()];
     step(&mut facts, "first", false, false);
     facts.push(Fact::ToolDispatched {
+        title: None,
         operation_id: "first:raw".into(),
         call: ToolCallIdentity::provider("first".into(), "raw".into()),
         name: "exec".into(),

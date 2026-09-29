@@ -151,6 +151,7 @@ async fn generated_media_remain_required_material_not_deletable_upload_reference
     for (index, output) in outputs.into_iter().enumerate() {
         let operation = format!("image-{index}");
         log.append(&event(Fact::ToolDispatched {
+            title: None,
             operation_id: operation.clone(),
             call: ToolCallIdentity::standalone(operation.clone()),
             name: "Read".into(),

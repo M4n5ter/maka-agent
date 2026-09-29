@@ -161,6 +161,9 @@ pub enum Fact {
         output: crate::model::ModelStep,
     },
     ToolDispatched {
+        /// Plugin-owned display text captured before dispatch, with no execution authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<crate::display::Text>,
         operation_id: String,
         call: crate::tool_call::ToolCallIdentity,
         name: String,

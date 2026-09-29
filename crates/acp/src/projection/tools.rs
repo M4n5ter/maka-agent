@@ -43,9 +43,16 @@ impl Projection {
         };
         let tool = self.ensure_tool(turn, id)?;
         match event {
-            SessionToolEvent::ToolStart { tool_name, .. } => {
+            SessionToolEvent::ToolStart {
+                tool_name, title, ..
+            } => {
                 if !tool.authoritative {
-                    tool.card.title = MaybeUndefined::Value(bounded(tool_name, 4096));
+                    tool.card.title = MaybeUndefined::Value(bounded(
+                        title
+                            .as_ref()
+                            .map_or(tool_name.as_str(), |title| title.fallback.as_str()),
+                        4096,
+                    ));
                     tool.card.name = MaybeUndefined::Value(tool_name.clone());
                 }
             }
@@ -84,6 +91,14 @@ impl Projection {
         turn: &str,
         id: &str,
     ) -> Result<Vec<acp::SessionUpdate>, crate::Error> {
+        if row["type"] == "tool_activity" {
+            let tool_id = required(row, "toolUseId")?;
+            let title: maka_runtime::display::Text = serde_json::from_value(row["title"].clone())?;
+            title.validate()?;
+            let tool = self.ensure_tool(turn, tool_id)?;
+            tool.card.title = MaybeUndefined::Value(title.fallback);
+            return self.publish(tool_id);
+        }
         if row["type"] == "tool_call" {
             let name = required(row, "toolName")?;
             let tool = self.ensure_tool(turn, id)?;

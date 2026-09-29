@@ -36,8 +36,12 @@ pub struct Command {
 }
 impl Command {
     pub fn validate(&self) -> Result<(), Error> {
-        self.title.validate()?;
-        self.description.validate()?;
+        self.title
+            .validate()
+            .map_err(|reason| Error::Invalid(reason.into()))?;
+        self.description
+            .validate()
+            .map_err(|reason| Error::Invalid(reason.into()))?;
         super::view::route(&self.route)?;
         let mut seen = BTreeSet::new();
         for name in std::iter::once(&self.name).chain(&self.aliases) {

@@ -63,6 +63,11 @@ impl ProjectionArtifactWrite {
 impl EventWrite {
     pub fn plain(event: RuntimeEvent) -> Result<Self, CommitError> {
         match &event.fact {
+            Fact::ToolDispatched {
+                title: Some(title), ..
+            } => title
+                .validate()
+                .map_err(|reason| CommitError::Rejected(reason.into()))?,
             Fact::ToolNotified {
                 operation_id,
                 text,

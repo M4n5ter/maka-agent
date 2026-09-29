@@ -47,10 +47,11 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
             assert_eq!(peer.rpc("session.create",json!({"sessionId":session,"sandboxMode":mode,"approvalPolicy":{"kind":policy},"workspace":{"kind":"host_path","path":fixture.workspace},"modelTarget":{"kind":"explicit","connectionId":model.connection_id,"connectionSlug":model.connection_slug,"model":model.model}})).await["ok"],true);
         }
         for (session,turn,tool,input,expected) in [
-            ("a","platform","cua_repl",json!({"code":"nodeRepl.write(cua.computer.target);"}),if cfg!(target_os="macos") {"mac"} else {std::env::consts::OS}),
+            ("a","platform","cua_repl",json!({"code":"nodeRepl.write(cua.computer.target);","title":"检查电脑操作环境"}),if cfg!(target_os="macos") {"mac"} else {std::env::consts::OS}),
             ("a","first","cua_repl",json!({"code":"await cua.cursor.configure({label:'A cursor',color:'blue',enabled:false}); const retained={value:41}; nodeRepl.write(retained.value);"}),"41"),
             ("b","isolated","cua_repl",json!({"code":"nodeRepl.write(typeof retained + ':' + (await cua.cursor.getState()).settings.label);"}),"undefined:Maka"),
             ("a","next","cua_repl",json!({"code":"retained.value++; nodeRepl.write(retained.value + ':' + (await cua.cursor.getState()).settings.label);"}),"42:A cursor"),
+            ("a","failure","cua_repl",json!({"code":"throw new Error('boom');","title":"检查应用"}),"boom"),
             ("a","reset","cua_reset",json!({}),"reset"),
             ("a","fresh","cua_repl",json!({"code":"nodeRepl.write(typeof retained + ':' + (await cua.cursor.getState()).settings.label);"}),"undefined:Maka"),
             ("approved","delayed","cua_repl",json!({"code":"await cua.cursor.configure({label:'approved',enabled:false}); await cua.rewriteDocumentation(); nodeRepl.write(43);","timeout_ms":1000}),"43"),
@@ -74,13 +75,20 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
             let request=requests.recv().await.unwrap();
             let output=request.body["messages"].as_array().unwrap().iter().find(|message|message["tool_call_id"]==format!("cell-{turn}")).unwrap()["content"].as_str().unwrap();
             assert!(output.contains(expected),"{session}/{turn}: {output}");
-            assert!(!output.contains("tool failed"),"{output}");
+            if turn == "failure" { assert!(output.contains("Cua JavaScript error: Error: boom"), "{output}"); }
+            else { assert!(!output.contains("tool failed"), "{output}"); }
             request.reply.send(json!({"index":0,"delta":{"content":"done"},"finish_reason":"stop"})).unwrap();
             loop {
                 let state=peer.rpc("turn.query",json!({"sessionId":session,"turnId":turn})).await;
                 match state["result"]["status"].as_str() {Some("completed")=>break,Some("failed"|"cancelled")=>panic!("{state}"),_=>tokio::task::yield_now().await}
             }
         }
+        let title: String = sqlx::query_scalar("SELECT json_extract(event_json,'$.fact.title.fallback') FROM runtime_events WHERE kind='tool_dispatched' AND json_extract(event_json,'$.fact.name')='cua_repl' AND json_extract(event_json,'$.invocation.turn_id')='platform'").fetch_one(&mut database).await.unwrap();
+        assert_eq!(title, "检查电脑操作环境");
+        let title: String = sqlx::query_scalar("SELECT json_extract(event_json,'$.fact.title.translations.\"zh-CN\"') FROM runtime_events WHERE kind='tool_dispatched' AND json_extract(event_json,'$.fact.name')='cua_operation' AND json_extract(event_json,'$.fact.input.method')='configureCursor' LIMIT 1").fetch_one(&mut database).await.unwrap();
+        assert_eq!(title, "设置操作光标");
+        let outcome: String = sqlx::query_scalar("SELECT json_extract(event_json,'$.fact.outcome.kind') FROM runtime_events WHERE kind='tool_settled' AND json_extract(event_json,'$.invocation.turn_id')='failure' AND operation_id IN (SELECT operation_id FROM runtime_events WHERE kind='tool_dispatched' AND json_extract(event_json,'$.fact.name')='cua_repl')").fetch_one(&mut database).await.unwrap();
+        assert_eq!(outcome, "failed", "a script exception is the same failure for model history, live delivery and transcript projection");
         peer.close().await; drop(cleanup); server.await.unwrap().unwrap();
     }).await.unwrap();
 }

@@ -298,6 +298,7 @@ async fn unknown_dispatch_stays_unknown_and_blocks_next_admission_after_reopen()
         append(
             &log,
             Fact::ToolDispatched {
+                title: None,
                 operation_id: "step:call".into(),
                 call: maka_runtime::tool_call::ToolCallIdentity::provider(
                     "step".into(),
@@ -409,7 +410,7 @@ async fn explicit_new_message_after_unknown_dispatch_informs_model_without_repla
                     timestamp: None,
                 },
             }).await;
-            append(&log, Fact::ToolDispatched {
+            append(&log, Fact::ToolDispatched { title: None,
                 operation_id: "step:call".into(),
                 call: maka_runtime::tool_call::ToolCallIdentity::provider("step".into(), "call".into()),
                 name: "write_file".into(),

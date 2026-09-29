@@ -96,6 +96,8 @@ mod tests {
             let result = json!({"isError":false,"content":{"kind":"json","value":{"kind":"terminal","cwd":"/tmp","cmd":"exit 7","status":status,"exitCode":code,
                 "output":{"mode":"pipes","stdout":"error is a word, not evidence","stderr":"","stdoutTruncated":false,"stderrTruncated":false,"redacted":false}}}});
             let card = Card {
+                activity: None,
+                live: None,
                 turn: "t",
                 id: "s",
                 call: Some((1, &call)),
@@ -139,6 +141,8 @@ mod tests {
         );
         let result = json!({"isError":true,"content":{"kind":"text","text":"rejected"}});
         let card = Card {
+            activity: None,
+            live: None,
             turn: "t",
             id: "s",
             call: Some((1, &call)),

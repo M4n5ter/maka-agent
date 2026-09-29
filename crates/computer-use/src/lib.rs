@@ -22,6 +22,7 @@
 //! Host supplies authorization and journal ownership; this crate supplies the
 //! pinned native implementation. Perception and driver administration are absent.
 
+mod activity;
 mod browser;
 mod catalog;
 pub mod cursor;

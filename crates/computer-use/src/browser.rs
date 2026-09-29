@@ -213,6 +213,10 @@ fn tab_info(provider: &BrowserConnection, tab: &TabInfo) -> Value {
     json!({"id":format!("{}:{}",provider.id,tab.id),"providerTabId":tab.id,"browserId":provider.id,"title":tab.title,"url":tab.url})
 }
 impl Browsers {
+    pub(crate) fn target_label(&self, id: &str) -> Option<&str> {
+        self.targets.get(id).map(|tab| tab.provider.id.as_str())
+    }
+
     pub(crate) fn configure(
         &mut self,
         connections: Vec<BrowserConnection>,

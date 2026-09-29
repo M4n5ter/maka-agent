@@ -547,7 +547,7 @@ pub(crate) mod tests {
         )]);
         app.chat
             .presentation
-            .sync(&mut app.chat.view, &rows, &[], 0, &app.i18n, false);
+            .sync(&mut app.chat.view, &rows, Some((&[], 0)), &app.i18n, false);
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
             .draw(|f| {

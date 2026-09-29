@@ -202,6 +202,7 @@ impl Chat {
         self.open_retry = None;
         self.requested = false;
         self.subscription = None;
+        self.presentation.activity.clear();
         self.error = Some(error);
     }
     /// An explicit refresh after a read failure retries from the current tail;
@@ -607,9 +608,56 @@ impl Chat {
         match frame {
             ObservationFrame::Projection(frame) => {
                 let SessionProjectionFrame::SessionProjection { snapshot, .. } = *frame;
+                if self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|old| old.root_turn.as_ref())
+                    .map(|root| &root.run_id)
+                    != snapshot.root_turn.as_ref().map(|root| &root.run_id)
+                {
+                    self.presentation.activity.clear();
+                } else if !snapshot.root_turn.as_ref().is_some_and(|root| {
+                    matches!(
+                        root.state,
+                        maka_protocol::turn::TurnState::Created(_)
+                            | maka_protocol::turn::TurnState::Admitted(_)
+                            | maka_protocol::turn::TurnState::Running(_)
+                            | maka_protocol::turn::TurnState::WaitingForUser(_)
+                    )
+                }) {
+                    self.presentation.activity.finish();
+                }
                 self.snapshot = Some(snapshot);
                 self.cadence.flush();
                 self.dirty = true;
+            }
+            ObservationFrame::Tool(ToolObservationFrame::SessionEvent {
+                run_id, event, ..
+            }) => {
+                if self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.root_turn.as_ref())
+                    .is_some_and(|root| {
+                        root.run_id == run_id
+                            && matches!(
+                                root.state,
+                                maka_protocol::turn::TurnState::Created(_)
+                                    | maka_protocol::turn::TurnState::Admitted(_)
+                                    | maka_protocol::turn::TurnState::Running(_)
+                                    | maka_protocol::turn::TurnState::WaitingForUser(_)
+                            )
+                    })
+                {
+                    let progress = matches!(event, SessionToolEvent::ToolProgress { .. });
+                    self.presentation.activity.accept(event);
+                    if progress {
+                        self.cadence.arrived();
+                    } else {
+                        self.cadence.flush();
+                    }
+                    self.dirty = true;
+                }
             }
             ObservationFrame::Transcript(TranscriptAdvancedFrame::TranscriptAdvanced {
                 through_sequence,
@@ -793,19 +841,17 @@ impl Chat {
             self.presentation.sync(
                 &mut self.view,
                 &self.rows,
-                if self.reading_history {
-                    &[]
-                } else {
-                    &self.live
-                },
-                self.live_revision,
+                (!self.reading_history).then_some((self.live.as_slice(), self.live_revision)),
                 i18n,
                 ascii,
             );
             self.dirty = false;
             self.cadence.rendered(std::time::Instant::now());
         }
-        if self.rows.is_empty() && self.live.iter().all(|(_, stream)| stream.text.is_empty()) {
+        if self.rows.is_empty()
+            && self.live.iter().all(|(_, stream)| stream.text.is_empty())
+            && (self.reading_history || self.presentation.activity.entries.is_empty())
+        {
             frame.render_widget(Paragraph::new(i18n.text("chat-empty")), area);
             return vec![];
         }
@@ -944,6 +990,7 @@ impl Chat {
 
 #[cfg(test)]
 mod tests {
+    mod activity;
     mod paging;
     mod performance;
     mod preparing;

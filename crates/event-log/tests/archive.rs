@@ -83,6 +83,7 @@ async fn retirement_fences_new_effects_without_rejecting_accepted_results_or_exa
         log.append(&event(
             "run",
             Fact::ToolDispatched {
+                title: None,
                 operation_id: "step:call".into(),
                 call: ToolCallIdentity::provider("step".into(), "call".into()),
                 name: "Read".into(),

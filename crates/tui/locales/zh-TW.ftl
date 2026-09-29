@@ -236,6 +236,7 @@ tool-patch-failed = 已套用 { $count } 項 · 修補失敗
 tool-patch-stopped = 已套用 { $count } 項 · 修補已中止
 tool-patch-failed-at = 失敗位置 · { $path }
 tool-patch-stopped-before = 中止於此操作之前 · { $path }
+tool-running = 執行中
 tool-pending = 等待結果
 tool-waiting = 等待你回答
 tool-returned = 已收到結果

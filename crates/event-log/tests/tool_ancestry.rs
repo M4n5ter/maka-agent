@@ -48,6 +48,7 @@ fn opening(invocation: &str) -> RuntimeEvent {
 
 fn dispatch(operation: &str, call: &str, origin: ToolOrigin) -> Fact {
     Fact::ToolDispatched {
+        title: None,
         operation_id: operation.into(),
         call: ToolCallIdentity {
             tool_call_id: call.into(),

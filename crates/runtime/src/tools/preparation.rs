@@ -34,6 +34,7 @@ type Admission = Box<dyn FnOnce() -> Result<Box<dyn Send>, ToolError> + Send>;
 /// including failures. Preparation itself does not begin a plugin call.
 pub struct PreparedEffect {
     execute: Option<Execute>,
+    pub(super) title: Option<crate::display::Text>,
     admissions: Vec<Admission>,
     leases: Vec<Box<dyn Send>>,
 }
@@ -44,9 +45,16 @@ impl PreparedEffect {
     ) -> Self {
         Self {
             execute: Some(Box::new(execute)),
+            title: None,
             admissions: Vec::new(),
             leases: Vec::new(),
         }
+    }
+
+    /// The owning tool supplies its presentation before journal admission.
+    pub fn titled(mut self, title: crate::display::Text) -> Self {
+        self.title = Some(title);
+        self
     }
 
     pub fn guarded<G: Send + 'static>(

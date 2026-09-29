@@ -125,6 +125,8 @@ pub enum Revision {
     Tool {
         call: Option<u64>,
         result: Option<u64>,
+        activity: Option<u64>,
+        live: Option<u64>,
         trace: bool,
     },
 }
@@ -1076,7 +1078,7 @@ impl Transcript {
     ) {
         let mut presentation = std::mem::take(&mut self.test_presentation);
         presentation.active_turn = self.active_turn.clone();
-        presentation.sync(self, rows, live, revision, i18n, ascii);
+        presentation.sync(self, rows, Some((live, revision)), i18n, ascii);
         self.test_presentation = presentation;
     }
     fn selected_branch_point(&self) -> Option<(&str, &str)> {

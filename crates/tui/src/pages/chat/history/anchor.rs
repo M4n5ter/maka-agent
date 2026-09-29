@@ -137,14 +137,8 @@ impl Chat {
             .map_err(|e| e.to_string())?;
         self.reading_history = true;
         self.fill_blocked = true;
-        self.presentation.sync(
-            &mut self.view,
-            &self.rows,
-            &[],
-            self.live_revision,
-            i18n,
-            ascii,
-        );
+        self.presentation
+            .sync(&mut self.view, &self.rows, None, i18n, ascii);
         self.view.enter();
         self.view.pause();
         self.dirty = true;

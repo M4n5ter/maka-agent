@@ -69,6 +69,7 @@ async fn history_pages_preserve_utf8_nul_suffixes_archive_and_frozen_fences() {
     log.append(&event(
         "a",
         Fact::ToolDispatched {
+            title: None,
             operation_id: "step-history:read".into(),
             call: maka_runtime::tool_call::ToolCallIdentity::provider(
                 "step-history".into(),

@@ -24,7 +24,9 @@ use std::collections::{BTreeMap, HashMap};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod changes;
+mod live;
 mod outcome;
+pub(super) use live::{Live, Update};
 
 pub(super) use crate::ui::transcript::{Activity, Content, ToolState as State};
 
@@ -36,6 +38,8 @@ pub(super) struct Card<'a> {
     pub id: &'a str,
     pub call: Option<Row<'a>>,
     pub result: Option<Row<'a>>,
+    pub activity: Option<Row<'a>>,
+    pub live: Option<&'a Update>,
     pub closed: bool,
 }
 impl Card<'_> {
@@ -84,6 +88,8 @@ impl Card<'_> {
             State::Waiting
         } else if self.closed {
             State::Missing
+        } else if let Some(live) = self.live {
+            live.state
         } else {
             State::Pending
         }
@@ -91,7 +97,20 @@ impl Card<'_> {
     pub fn text(&self, state: State, i18n: &I18n, trace: bool) -> Content {
         let name = self
             .call
-            .map(|(_, call)| call["toolName"].as_str().unwrap());
+            .or(self.activity)
+            .map(|(_, call)| call["toolName"].as_str().unwrap())
+            .or_else(|| {
+                self.live
+                    .map(|live| live.name.as_str())
+                    .filter(|name| !name.is_empty())
+            });
+        let title = self
+            .activity
+            .and_then(|(_, row)| {
+                serde_json::from_value::<maka_runtime::display::Text>(row["title"].clone()).ok()
+            })
+            .or_else(|| self.live.and_then(|live| live.title.clone()));
+        let explicit_title = title.is_some();
         let parent = self
             .call
             .or(self.result)
@@ -121,36 +140,50 @@ impl Card<'_> {
         let patch_failure = !trace && self.patch() && state == State::Attention;
         let mut text = String::new();
         let mut file = None;
-        let label = match name {
-            Some("Shell") => i18n.text("tool-run"),
-            Some("Read") => i18n.text("tool-read"),
-            Some("Glob" | "Grep") => i18n.text("tool-search"),
-            Some("AskUserQuestion") => i18n.text("tool-question"),
-            Some("apply_patch") => i18n.text("tool-patch"),
-            Some(name) => name
-                .strip_prefix("mcp__")
-                .and_then(|qualified| qualified.split_once("__"))
-                .filter(|(server, tool)| !server.is_empty() && !tool.is_empty())
-                .map_or_else(
-                    || preview(name),
-                    |(server, tool)| format!("{} · {}", preview(tool), preview(server)),
-                ),
-            None => i18n.text("tool-earlier"),
+        let label = if let Some(title) = title {
+            title.resolve(i18n.locale().id()).to_owned()
+        } else {
+            match name {
+                Some("Shell") => i18n.text("tool-run"),
+                Some("Read") => i18n.text("tool-read"),
+                Some("Glob" | "Grep") => i18n.text("tool-search"),
+                Some("AskUserQuestion") => i18n.text("tool-question"),
+                Some("apply_patch") => i18n.text("tool-patch"),
+                Some(name) => name
+                    .strip_prefix("mcp__")
+                    .and_then(|qualified| qualified.split_once("__"))
+                    .filter(|(server, tool)| !server.is_empty() && !tool.is_empty())
+                    .map_or_else(
+                        || preview(name),
+                        |(server, tool)| format!("{} · {}", preview(tool), preview(server)),
+                    ),
+                None => i18n.text("tool-earlier"),
+            }
         };
         text.push_str(&label);
-        if matches!(state, State::Waiting | State::Missing) || state.problem() {
-            text.push_str(&format!(" · {}", i18n.text(state.label())));
+        if explicit_title || matches!(state, State::Waiting | State::Missing) || state.problem() {
+            text.push_str(&format!(
+                " · {}",
+                i18n.text(
+                    if explicit_title && self.live.is_some() && state == State::Pending {
+                        "tool-running"
+                    } else {
+                        state.label()
+                    }
+                )
+            ));
         }
         if let Some((_, call)) = self.call {
             let args = &call["args"];
-            if let Some(summary) = ["command", "path", "file_path", "pattern", "query", "code"]
-                .into_iter()
-                .find_map(|key| args[key].as_str())
-                .or_else(|| {
-                    self.patch()
-                        .then(|| args["operation"]["path"].as_str())
-                        .flatten()
-                })
+            if !explicit_title
+                && let Some(summary) = ["command", "path", "file_path", "pattern", "query", "code"]
+                    .into_iter()
+                    .find_map(|key| args[key].as_str())
+                    .or_else(|| {
+                        self.patch()
+                            .then(|| args["operation"]["path"].as_str())
+                            .flatten()
+                    })
             {
                 text.push_str(" · ");
                 let start = text.len();
@@ -172,6 +205,14 @@ impl Card<'_> {
                     });
                 }
             }
+        }
+        if let Some(progress) = self
+            .live
+            .map(|live| live.progress.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            text.push_str(" · ");
+            text.push_str(&preview(progress));
         }
         if state.problem()
             && let Some((_, result)) = self.result
@@ -388,6 +429,7 @@ fn preview(value: &str) -> String {
 pub(super) struct Index<'a> {
     calls: HashMap<Identity<'a>, Option<Row<'a>>>,
     results: HashMap<Identity<'a>, Option<Row<'a>>>,
+    activities: HashMap<Identity<'a>, Option<Row<'a>>>,
     closed: HashMap<&'a str, bool>,
 }
 pub(super) enum Entry<'a> {
@@ -400,6 +442,7 @@ impl<'a> Index<'a> {
         let mut index = Self {
             calls: HashMap::new(),
             results: HashMap::new(),
+            activities: HashMap::new(),
             closed: HashMap::new(),
         };
         for (&sequence, row) in rows {
@@ -412,6 +455,15 @@ impl<'a> Index<'a> {
                     if row["isError"].is_boolean() && row["content"].is_object() =>
                 {
                     (&mut index.results, row["toolUseId"].as_str())
+                }
+                Some("tool_activity")
+                    if row["toolName"].is_string()
+                        && serde_json::from_value::<maka_runtime::display::Text>(
+                            row["title"].clone(),
+                        )
+                        .is_ok_and(|title| title.validate().is_ok()) =>
+                {
+                    (&mut index.activities, row["toolUseId"].as_str())
                 }
                 Some("turn_state") => {
                     index.closed.insert(
@@ -433,24 +485,45 @@ impl<'a> Index<'a> {
         }
         index
     }
+    pub fn contains(&self, turn: &str, id: &str) -> bool {
+        let key = (turn, id);
+        self.calls.contains_key(&key)
+            || self.results.contains_key(&key)
+            || self.activities.contains_key(&key)
+    }
     pub fn entry(&self, row: &'a Value) -> Entry<'a> {
         let turn = row["turnId"].as_str().unwrap();
         let is_call = row["type"] == "tool_call";
+        let is_activity = row["type"] == "tool_activity";
         let Some(id) = row[if is_call { "id" } else { "toolUseId" }].as_str() else {
             return Entry::Raw;
         };
         let key = (turn, id);
         let call = self.calls.get(&key);
         let result = self.results.get(&key);
-        if matches!(call, Some(None)) || matches!(result, Some(None)) {
+        let activity = self.activities.get(&key);
+        if matches!(call, Some(None))
+            || matches!(result, Some(None))
+            || matches!(activity, Some(None))
+        {
             return Entry::Raw;
         }
         let call = call.copied().flatten();
         let result = result.copied().flatten();
-        if (is_call && call.is_none()) || (!is_call && result.is_none()) {
+        let activity = activity.copied().flatten();
+        if (is_call && call.is_none())
+            || (is_activity && activity.is_none())
+            || (!is_call && !is_activity && result.is_none())
+        {
             return Entry::Raw;
         }
-        let indexed = if is_call { call } else { result };
+        let indexed = if is_call {
+            call
+        } else if is_activity {
+            activity
+        } else {
+            result
+        };
         if indexed.is_none_or(|(_, value)| !std::ptr::eq(value, row)) {
             return Entry::Raw;
         }
@@ -462,7 +535,7 @@ impl<'a> Index<'a> {
         {
             return Entry::Raw;
         }
-        if !is_call && call.is_some() {
+        if !is_call && (call.is_some() || (!is_activity && activity.is_some())) {
             return Entry::Consumed;
         }
         Entry::Card(Card {
@@ -470,6 +543,8 @@ impl<'a> Index<'a> {
             id,
             call,
             result,
+            activity,
+            live: None,
             closed: self.closed.get(turn).copied().unwrap_or(false),
         })
     }
@@ -490,6 +565,8 @@ mod tests {
         }}});
         let original = result.clone();
         let card = Card {
+            activity: None,
+            live: None,
             turn: "t",
             id: "call",
             call: Some((1, &call)),

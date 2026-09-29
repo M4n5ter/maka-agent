@@ -83,6 +83,7 @@ async fn tool_accounting_preserves_dispatch_truth_and_snapshot_without_private_b
     {
         log.append(&event(
             Fact::ToolDispatched {
+                title: None,
                 operation_id: id.into(),
                 call: ToolCallIdentity::standalone(id.into()),
                 name: "Shell".into(),

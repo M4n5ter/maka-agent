@@ -30,6 +30,8 @@ pub struct Evaluate {
     #[serde(default = "default_timeout")]
     #[schemars(range(min = 1, max = 120000))]
     pub timeout_ms: u64,
+    /// Short, user-facing description of this call, in the user’s language.
+    #[schemars(length(max = 256))]
     pub title: Option<String>,
 }
 fn default_timeout() -> u64 {

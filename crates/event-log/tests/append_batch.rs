@@ -86,6 +86,7 @@ async fn batch_rolls_back_every_fact_and_catalog_change_then_replays_exactly_aft
         .unwrap();
     let mut commits = log.subscribe_commits();
     let dispatched = event(Fact::ToolDispatched {
+        title: None,
         operation_id: "call".into(),
         call: maka_runtime::tool_call::ToolCallIdentity::standalone("call-call".into()),
         name: "write_file".into(),
