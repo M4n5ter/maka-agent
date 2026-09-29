@@ -515,7 +515,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
             if app.management.oauth.enrollment_label() == "oauth-resume" {
                 ("↻", "R")
             } else {
-                ("↪", "L")
+                ("⊕", "+")
             }
         }
         Action::Manage(_) => ("⋯", "."),
@@ -766,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_enrollment_is_labeled_and_keeps_its_target_on_resize() {
+    fn connection_enrollment_uses_distinct_icon_and_keeps_its_target_on_resize() {
         for locale in crate::Locale::ALL {
             let mut app = App::new(
                 "/unused".into(),
@@ -790,15 +790,8 @@ mod tests {
                     text.push_str(symbol);
                     x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
                 }
-                if width >= 80 {
-                    assert!(
-                        text.contains(&app.i18n.text("oauth-connect-short")),
-                        "{locale:?}: {text:?} {rect:?}"
-                    );
-                } else {
-                    assert!(text.contains(icon(&app, &enrollment)));
-                    assert!(!text.contains('⋯'));
-                }
+                assert!(text.contains(icon(&app, &enrollment)), "{locale:?}: {text:?} {rect:?}");
+                assert!(!text.contains('⋯'));
                 assert_eq!(
                     app.chrome.header.input(&click(rect.x, rect.y)).message,
                     Some(enrollment.clone())
