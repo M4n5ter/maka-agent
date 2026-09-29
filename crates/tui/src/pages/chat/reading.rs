@@ -188,9 +188,9 @@ pub(super) async fn restore(
                 max_bytes: SESSION_TRANSCRIPT_PAGE_MAX_BYTES,
             })
             .await?;
-        let batch = client.complete_transcript_page(subscription, page).await?;
+        let batch = complete_page(client, subscription, page).await?;
         for row in batch.rows {
-            bytes += serde_json::to_vec(&row.value)?.len();
+            bytes += row_bytes(&row.value);
             rows.push(row);
         }
         if rows.len() > WINDOW_ROWS || (rows.len() > 1 && bytes > WINDOW_BYTES) {

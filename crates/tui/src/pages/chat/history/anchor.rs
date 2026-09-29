@@ -75,6 +75,8 @@ impl Chat {
             .ok_or("controls-anchor-unavailable")?;
         self.generation += 1;
         self.paging = true;
+        self.prefetch = None;
+        self.prefetched = None;
         self.older_requested = false;
         self.newer_requested = false;
         self.latest_requested = false;
@@ -157,8 +159,7 @@ pub async fn execute_anchor(
         .transcript_page(request.input.clone())
         .await
         .map_err(|e| e.to_string())?;
-    client
-        .complete_transcript_page(&request.input.subscription_id, page)
+    complete_page(client, &request.input.subscription_id, page)
         .await
         .map_err(|e| e.to_string())
 }

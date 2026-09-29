@@ -32,6 +32,8 @@ const BATCH_BYTES: usize = 32 * 1024 * 1024;
 pub struct TranscriptRow {
     pub sequence: u64,
     pub value: Value,
+    /// Digest verified against the complete original JSON bytes, when provided by the Host.
+    pub payload_digest: Option<String>,
 }
 #[derive(Debug)]
 pub struct TranscriptBatch {
@@ -183,6 +185,7 @@ impl Assembler {
                 }
                 self.rows.push(TranscriptRow {
                     sequence: row.sequence,
+                    payload_digest: row.digest,
                     value: serde_json::from_slice(&row.bytes)?,
                 });
             }
@@ -235,6 +238,7 @@ mod tests {
             }
             let rows = assembly.finish().unwrap();
             assert_eq!(rows[0].sequence, 42);
+            assert_eq!(rows[0].payload_digest, parts[0].payload_digest);
             assert_eq!(rows[0].value["text"], "中文 🦀 é");
             for defect in ["gap", "identity", "digest", "oversize", "truncated"] {
                 let mut parts = parts.clone();

@@ -200,6 +200,7 @@ mod tests {
             rows: sequences
                 .iter()
                 .map(|sequence| TranscriptRow {
+                    payload_digest: None,
                     sequence: *sequence,
                     value: serde_json::json!({"id":sequence}),
                 })

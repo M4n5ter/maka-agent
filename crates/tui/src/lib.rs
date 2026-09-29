@@ -821,9 +821,7 @@ where
             jobs.spawn(async move {
                 let result = async {
                     let page = client.transcript_page(request.input.clone()).await?;
-                    client
-                        .complete_transcript_page(&request.input.subscription_id, page)
-                        .await
+                    pages::chat::complete_page(&client, &request.input.subscription_id, page).await
                 }
                 .await
                 .map_err(|e: Error| e.to_string());

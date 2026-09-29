@@ -334,6 +334,15 @@ impl Transcript {
     pub fn needs_fill(&self) -> bool {
         self.height > 0 && self.total < self.height
     }
+    /// One viewport of lead time; callers only prefetch after directional input.
+    pub(crate) fn near_edge(&self, up: bool) -> bool {
+        self.height > 0
+            && if up {
+                self.top <= self.height
+            } else {
+                self.total.saturating_sub(self.top + self.height) <= self.height
+            }
+    }
     pub fn at_top(&self) -> bool {
         self.top == 0
     }

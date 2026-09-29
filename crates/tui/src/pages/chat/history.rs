@@ -381,9 +381,7 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Error
         Work::Preview(input, _) => {
             let page = client.transcript_page(input.clone()).await?;
             Ok(Output::Preview(
-                client
-                    .complete_transcript_page(&input.subscription_id, page)
-                    .await?,
+                complete_page(client, &input.subscription_id, page).await?,
             ))
         }
     }
@@ -428,6 +426,7 @@ mod tests {
             through_sequence: Some(1000),
             next_cursor: Some("later".into()),
             rows: vec![TranscriptRow {
+                payload_digest: None,
                 sequence,
                 value: json!({"type":"assistant","id":format!("m{sequence}"),"turnId":"t","text":"needle message"}),
             }],

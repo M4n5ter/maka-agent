@@ -37,7 +37,9 @@ pub mod presentation;
 mod search;
 pub mod stopping;
 use crate::ui::transcript::streaming;
+mod media;
 mod tools;
+pub(crate) use media::complete_page;
 
 const WINDOW_ROWS: usize = 256;
 const WINDOW_BYTES: usize = 4 * 1024 * 1024;
@@ -85,6 +87,7 @@ pub struct PageRequest {
     tail: bool,
     automatic: bool,
     fill: bool,
+    prefetch: bool,
 }
 
 #[derive(Default)]
@@ -112,6 +115,8 @@ pub struct Chat {
     latest_requested: bool,
     reading_history: bool,
     paging: bool,
+    prefetch: Option<SessionTranscriptPageDirection>,
+    prefetched: Option<(PageRequest, TranscriptBatch)>,
     pub error: Option<String>,
     pub removed: bool,
     pub view: render::Transcript,
@@ -299,6 +304,13 @@ impl Chat {
         self.older.is_some() && !self.paging && self.error.is_none()
     }
     pub fn request_older(&mut self) {
+        self.prefetch = None;
+        if self.prefetched.is_some() {
+            self.view.pause();
+        }
+        if self.install_prefetched(SessionTranscriptPageDirection::Older) {
+            return;
+        }
         self.older_requested = self.can_older();
         if self.older_requested {
             self.view.pause();
@@ -310,16 +322,46 @@ impl Chat {
             self.request_older();
         } else if !up && self.view.following() {
             self.request_newer();
+        } else if self.prefetched.is_none()
+            && self.view.near_edge(up)
+            && if up {
+                self.can_older()
+            } else {
+                self.can_newer()
+            }
+        {
+            self.prefetch = Some(if up {
+                SessionTranscriptPageDirection::Older
+            } else {
+                SessionTranscriptPageDirection::Newer
+            });
         }
+    }
+    fn install_prefetched(&mut self, direction: SessionTranscriptPageDirection) -> bool {
+        let Some((mut request, batch)) = self.prefetched.take() else {
+            return false;
+        };
+        if request.input.direction != direction {
+            return false;
+        }
+        request.prefetch = false;
+        self.page(request, Ok(batch));
+        true
     }
     pub fn can_newer(&self) -> bool {
         self.through < self.wanted && !self.paging && self.error.is_none()
     }
     pub fn request_newer(&mut self) {
+        self.prefetch = None;
+        if self.install_prefetched(SessionTranscriptPageDirection::Newer) {
+            return;
+        }
         self.newer_requested = self.can_newer();
     }
     pub fn latest(&mut self) {
-        if self.through < self.wanted {
+        self.prefetch = None;
+        self.prefetched = None;
+        if self.through < self.wanted || self.paging {
             self.latest_requested = true;
             self.older_requested = false;
             self.newer_requested = false;
@@ -343,6 +385,7 @@ impl Chat {
             && self.view.needs_fill()
             && self.can_older();
         let mut automatic = false;
+        let mut prefetch = false;
         // Reflow can remove a historical viewport's anchor. Only explicit
         // forward input advances that window toward the live tail.
         let (direction, through_sequence, cursor, anchor_sequence) = if tail {
@@ -374,14 +417,35 @@ impl Chat {
                 None,
                 self.through,
             )
+        } else if self.prefetched.is_none()
+            && let Some(direction) = self.prefetch.take()
+        {
+            prefetch = true;
+            match direction {
+                SessionTranscriptPageDirection::Older if self.can_older() => {
+                    let (through, cursor) = self.older.clone()?;
+                    (
+                        direction,
+                        through,
+                        (!cursor.is_empty()).then_some(cursor),
+                        None,
+                    )
+                }
+                SessionTranscriptPageDirection::Newer if self.can_newer() => {
+                    (direction, self.wanted, None, self.through)
+                }
+                _ => return None,
+            }
         } else {
             return None;
         };
+        self.prefetch = None;
         self.paging = true;
         Some(PageRequest {
             tail,
             automatic,
             fill,
+            prefetch,
             generation: self.generation,
             input: SessionTranscriptPageInput {
                 subscription_id,
@@ -393,7 +457,7 @@ impl Chat {
             },
         })
     }
-    pub fn page(&mut self, request: PageRequest, result: Result<TranscriptBatch, String>) {
+    pub fn page(&mut self, mut request: PageRequest, result: Result<TranscriptBatch, String>) {
         if request.generation != self.generation {
             return;
         }
@@ -403,20 +467,33 @@ impl Chat {
         if self.latest_requested {
             return;
         }
+        if request.prefetch
+            && match request.input.direction {
+                SessionTranscriptPageDirection::Older => self.view.at_top(),
+                SessionTranscriptPageDirection::Newer => self.view.following(),
+            }
+        {
+            request.prefetch = false;
+        }
         match result {
             Ok(batch) => {
-                if request.fill || (request.automatic && !self.view.following()) {
+                if request.fill || request.prefetch || (request.automatic && !self.view.following())
+                {
                     let additions: Vec<_> = batch
                         .rows
                         .iter()
                         .filter(|row| !self.rows.contains_key(&row.sequence))
                         .collect();
-                    let extra = additions.iter().try_fold(0, |bytes, row| {
-                        serde_json::to_vec(&row.value).map(|row| bytes + row.len())
-                    });
+                    let extra: usize = additions.iter().map(|row| row_bytes(&row.value)).sum();
                     if self.rows.len() + additions.len() > WINDOW_ROWS
-                        || extra.is_ok_and(|extra| self.bytes + extra > WINDOW_BYTES)
+                        || self.bytes + extra > WINDOW_BYTES
                     {
+                        if request.prefetch {
+                            // Read ahead without evicting a paragraph still on screen.
+                            // One prepared page is retained until explicit edge input.
+                            self.prefetched = Some((request, batch));
+                            return;
+                        }
                         if request.fill {
                             // Do not evict the current tail to fill blank space,
                             // or repeatedly fetch a single oversized prior row.
@@ -479,7 +556,7 @@ impl Chat {
                 }
                 continue;
             }
-            let bytes = serde_json::to_vec(&row.value)?.len();
+            let bytes = row_bytes(&row.value);
             validate_row(&row.value)?;
             let id = row.value["id"].as_str().expect("checked");
             let turn = row.value["turnId"].as_str().expect("checked");
@@ -493,7 +570,6 @@ impl Chat {
                 self.view.new_output();
             }
             self.bytes += bytes;
-            self.context.refresh();
             self.rows.insert(row.sequence, row.value);
         }
         while self.rows.len() > 1 && (self.rows.len() > WINDOW_ROWS || self.bytes > WINDOW_BYTES) {
@@ -515,7 +591,7 @@ impl Chat {
                 removed.1["turnId"].as_str().unwrap(),
                 removed.1["id"].as_str().unwrap(),
             );
-            self.bytes -= serde_json::to_vec(&removed.1)?.len();
+            self.bytes -= row_bytes(&removed.1);
         }
         if self.through >= self.wanted {
             self.reading_history = false;
@@ -540,6 +616,7 @@ impl Chat {
                 ..
             }) => {
                 self.wanted = Some(through_sequence);
+                self.context.refresh();
                 self.view.new_output();
             }
             ObservationFrame::Assistant(AssistantObservationFrame::SessionDelta {
@@ -768,6 +845,26 @@ impl Chat {
     }
 }
 
+// Account retained JSON nodes and owned strings, without serializing or scanning
+// their contents on the input thread. This is a cache budget, not wire size/RSS.
+fn row_bytes(value: &Value) -> usize {
+    std::mem::size_of::<Value>()
+        + match value {
+            Value::String(text) => text.capacity(),
+            Value::Array(items) => {
+                items.iter().map(row_bytes).sum::<usize>()
+                    + (items.capacity() - items.len()) * std::mem::size_of::<Value>()
+            }
+            Value::Object(fields) => fields
+                .iter()
+                .map(|(key, value)| {
+                    std::mem::size_of::<String>() + key.capacity() + row_bytes(value)
+                })
+                .sum(),
+            _ => 0,
+        }
+}
+
 fn validate_row(row: &Value) -> Result<(), Error> {
     let record = row.as_object().ok_or("Transcript row is not a message")?;
     if ["id", "turnId", "type"].into_iter().any(|key| {
@@ -800,17 +897,17 @@ pub async fn open(client: &Client, request: &OpenRequest) -> Result<Opened, Open
         if let Some(range) = request.range {
             reading::restore(client, &snapshot.subscription_id, range).await
         } else {
-            client
-                .complete_transcript_page(
-                    &snapshot.subscription_id,
-                    snapshot
-                        .transcript
-                        .as_ref()
-                        .ok_or("Transcript bootstrap missing")?
-                        .durable
-                        .clone(),
-                )
-                .await
+            media::complete_page(
+                client,
+                &snapshot.subscription_id,
+                snapshot
+                    .transcript
+                    .as_ref()
+                    .ok_or("Transcript bootstrap missing")?
+                    .durable
+                    .clone(),
+            )
+            .await
         }
     }
     .await;
@@ -847,12 +944,14 @@ impl Chat {
 
 #[cfg(test)]
 mod tests {
+    mod paging;
+    mod performance;
     mod preparing;
     use super::*;
     use maka_client::transcript::TranscriptRow;
     use serde_json::json;
     fn batch(start: u64, end: u64, through: u64) -> TranscriptBatch {
-        TranscriptBatch { rows: (start..=end).map(|sequence| TranscriptRow { sequence, value: json!({"type":"user","id":format!("m{sequence}"),"turnId":"turn","text":format!("Row {sequence} 中文🦀")}) }).collect(), next_cursor: None, through_sequence: Some(through) }
+        TranscriptBatch { rows: (start..=end).map(|sequence| TranscriptRow { payload_digest: None, sequence, value: json!({"type":"user","id":format!("m{sequence}"),"turnId":"turn","text":format!("Row {sequence} 中文🦀")}) }).collect(), next_cursor: None, through_sequence: Some(through) }
     }
 
     #[test]
@@ -1101,7 +1200,7 @@ mod tests {
         assert_eq!(chat.rows.len(), 11);
         assert!(chat.view.following());
         assert!(!chat.reading_history);
-        chat.merge(TranscriptBatch { rows: vec![TranscriptRow { sequence: 801, value: json!({"type":"user","id":"giant","turnId":"turn","text":"x".repeat(WINDOW_BYTES + 1)}) }], next_cursor: None, through_sequence: Some(801) }, SessionTranscriptPageDirection::Newer).unwrap();
+        chat.merge(TranscriptBatch { rows: vec![TranscriptRow { payload_digest: None, sequence: 801, value: json!({"type":"user","id":"giant","turnId":"turn","text":"x".repeat(WINDOW_BYTES + 1)}) }], next_cursor: None, through_sequence: Some(801) }, SessionTranscriptPageDirection::Newer).unwrap();
         assert_eq!(
             chat.rows.len(),
             1,
@@ -1222,6 +1321,7 @@ mod tests {
         chat.merge(
             TranscriptBatch {
                 rows: vec![TranscriptRow {
+                    payload_digest: None,
                     sequence: 257,
                     value: row,
                 }],
