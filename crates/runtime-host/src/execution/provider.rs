@@ -37,6 +37,7 @@ pub(super) struct PreparedProvider {
     pub config: ProviderConfig,
     pub options: Value,
     pub supports_vision: bool,
+    pub thinking_levels: Vec<maka_runtime::execution::ThinkingLevel>,
     pub context: ModelRequestContext,
     pub main_output_limit: Option<u64>,
     binding: Arc<auth::Binding>,
@@ -248,6 +249,7 @@ impl Source {
             config,
             options: model.provider_options,
             supports_vision: capabilities.vision.unwrap_or(false),
+            thinking_levels: model.thinking_levels,
             context,
             main_output_limit,
         })

@@ -270,6 +270,7 @@ impl Host {
         crate::plugins::skills::install(&mut setup)?;
         crate::plugins::jev::install(&mut setup)?;
         crate::plugins::session_recap::install(&mut setup)?;
+        crate::plugins::session_title::install(&mut setup)?;
         crate::plugins::goal::install(&mut setup)?;
         crate::plugins::background_health::install(&mut setup)?;
         crate::plugins::computer::install(&mut setup)?;

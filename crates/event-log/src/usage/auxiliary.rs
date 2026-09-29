@@ -47,7 +47,7 @@ struct Observation {
 }
 
 impl EventLog {
-    /// Called inside an already-admitted Host SDK effect, before model dispatch.
+    /// Called before model dispatch, after a Host SDK effect or first user opening.
     /// The source journal supplies the binding; plugins cannot invent accounting
     /// identity by supplying a Session ID or current provider configuration.
     pub async fn begin_auxiliary_model(
@@ -173,6 +173,48 @@ async fn binding(
     source: &Source,
 ) -> Result<(ModelBinding, Option<String>), StoreError> {
     match source {
+        Source::SessionTitle { invocation } => {
+            crate::sessions::removal::require_accepting(connection, &invocation.session_id).await?;
+            let archived: Option<bool> =
+                sqlx::query_scalar("SELECT archived FROM session_control WHERE id=?")
+                    .bind(&invocation.session_id)
+                    .fetch_optional(&mut *connection)
+                    .await?;
+            match archived {
+                Some(false) => {}
+                Some(true) => return Err(StoreError::SessionRetired),
+                None => return Err(StoreError::SessionNotFound),
+            }
+            let used: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM event_log WHERE kind='auxiliary_model_started'
+                 AND json_extract(event_json,'$.source.kind')='session_title'
+                 AND json_extract(event_json,'$.source.invocation.session_id')=?)",
+            )
+            .bind(&invocation.session_id)
+            .fetch_one(&mut *connection)
+            .await?;
+            if used {
+                return Err(invalid("Session title was already attempted"));
+            }
+
+            let opening =
+                crate::message_sources::first_message_opening(connection, &invocation.session_id)
+                    .await?
+                    .ok_or_else(|| invalid("Session title has no committed user opening"))?;
+            if opening.event.invocation != *invocation {
+                return Err(invalid("Session title must use its first user opening"));
+            }
+            match opening.event.fact {
+                maka_runtime::event::Fact::InvocationOpened {
+                    configuration: Some(config),
+                    ..
+                } => config
+                    .model
+                    .map(|binding| (binding, Some(invocation.session_id.clone())))
+                    .ok_or_else(|| invalid("Session title has no frozen model binding")),
+                _ => Err(invalid("Session title has no frozen configuration")),
+            }
+        }
         Source::Agent {
             invocation,
             operation_id,

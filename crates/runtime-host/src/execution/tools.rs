@@ -62,6 +62,7 @@ pub(super) fn reserve_core_names(
     catalog.host_only::<maka_plugins::executor::Executor>()?;
     catalog.host_only::<maka_plugins::input::InputPreparation>()?;
     catalog.host_only::<maka_plugins::session::SessionBehavior>()?;
+    catalog.host_only::<maka_plugins::session::title::SessionTitlePolicy>()?;
     for name in [
         READ_NAME,
         GLOB_NAME,

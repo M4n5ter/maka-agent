@@ -33,7 +33,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 mod generate;
-pub(super) use generate::generate;
+pub(crate) use generate::generate;
 
 impl Executions {
     pub(crate) async fn search_plugin_models(
@@ -329,7 +329,7 @@ impl Executions {
     }
 }
 
-pub(super) fn request(prepared: provider::PreparedProvider, input: Generate) -> ModelRequest {
+pub(crate) fn request(prepared: provider::PreparedProvider, input: Generate) -> ModelRequest {
     let requested = input.max_output_tokens.unwrap_or(2048);
     let max_output_tokens = Some(
         prepared

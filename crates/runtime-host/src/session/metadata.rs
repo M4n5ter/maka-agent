@@ -70,11 +70,10 @@ mod tests {
         let input: SessionCreateInput = serde_json::from_value(json!({
             "sessionId": "metadata-policy",
             "workspace": {"kind": "host_path", "path": "/tmp"},
-            "modelTarget": {"kind": "default"},
-            "name": "café"
+            "modelTarget": {"kind": "default"}
         }))
         .unwrap();
-        PreparedSession::new(input).unwrap().bind(
+        let mut configuration = PreparedSession::new(input).unwrap().bind(
             maka_protocol::session::WorkspaceProjection {
                 target: maka_protocol::session::WorkspaceTarget::HostPath {
                     path: "/tmp".into(),
@@ -89,7 +88,36 @@ mod tests {
                 },
             },
             SandboxMode::ReadOnly,
-        )
+        );
+        configuration.name = "café".into();
+        configuration
+    }
+
+    #[test]
+    fn explicit_default_name_has_a_distinct_creation_identity() {
+        let mut input: SessionCreateInput = serde_json::from_value(json!({
+            "sessionId":"name-origin", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        let automatic = PreparedSession::new(input.clone()).unwrap();
+        input.name = Some("New Chat".into());
+        let manual = PreparedSession::new(input).unwrap();
+        assert_ne!(automatic.fingerprint(), manual.fingerprint());
+        assert_eq!(automatic.legacy_fingerprint(), manual.legacy_fingerprint());
+        assert_ne!(automatic.fingerprint(), automatic.legacy_fingerprint());
+    }
+
+    #[test]
+    fn legacy_configuration_without_title_origin_is_manual() {
+        for name in ["New Chat", "My existing title"] {
+            let mut stored = serde_json::to_value(configuration()).unwrap();
+            stored["name"] = json!(name);
+            stored.as_object_mut().unwrap().remove("title_is_manual");
+            let restored: SessionConfiguration = serde_json::from_value(stored).unwrap();
+            assert!(restored.title_is_manual);
+            assert_eq!(restored.name, name);
+        }
     }
 
     #[test]

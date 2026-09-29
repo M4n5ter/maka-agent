@@ -42,10 +42,26 @@ pub(crate) async fn generate(
     if cancellation.is_cancelled() {
         return Err(failed("model cancelled before dispatch"));
     }
+    let title = matches!(&source, AuxiliarySource::SessionTitle { .. });
     let id = log
         .begin_auxiliary_model(source, Some(quote))
         .await
-        .map_err(persistence)?;
+        .map_err(|error| {
+            if title
+                && matches!(
+                    error,
+                    maka_event_log::StoreError::InvalidTransition(_)
+                        | maka_event_log::StoreError::SessionNotFound
+                        | maka_event_log::StoreError::SessionRetired
+                        | maka_event_log::StoreError::SessionBusy
+                        | maka_event_log::StoreError::PrefixTooLarge
+                )
+            {
+                failed(error)
+            } else {
+                persistence(error)
+            }
+        })?;
     let model_id = request.provider.model.clone();
     let result = async {
         let stream = models

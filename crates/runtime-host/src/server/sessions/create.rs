@@ -46,11 +46,20 @@ pub(super) async fn create(
                 "Host is draining",
             ));
         }
-        if let Some(record) = log
+        let existing = match log
             .probe_session_create(prepared.session_id(), &fingerprint)
             .await
-            .map_err(stored)?
         {
+            Err(maka_event_log::StoreError::SessionConflict) => {
+                // Older receipts did not distinguish an explicit default name.
+                // Return their accepted result unchanged; never rewrite ownership.
+                log.probe_session_create(prepared.session_id(), &prepared.legacy_fingerprint())
+                    .await
+            }
+            result => result,
+        }
+        .map_err(stored)?;
+        if let Some(record) = existing {
             return Ok(item(record));
         }
         let id = prepared.session_id().to_owned();

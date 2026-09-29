@@ -301,7 +301,12 @@ async fn settled(connection: &mut SqliteConnection, session: &str) -> Result<boo
             AND json_extract(request, '$.boundary.boundary.sessionId')=?1)
          OR EXISTS(SELECT 1 FROM interaction_requests r WHERE session_id=?1
             AND NOT EXISTS(SELECT 1 FROM interaction_outcomes o WHERE o.request_id=r.request_id))
-         OR EXISTS(SELECT 1 FROM message_admissions WHERE session_id=?1)",
+         OR EXISTS(SELECT 1 FROM message_admissions WHERE session_id=?1)
+         OR EXISTS(SELECT 1 FROM event_log a WHERE a.kind='auxiliary_model_started'
+            AND json_extract(a.event_json,'$.source.kind')='session_title'
+            AND json_extract(a.event_json,'$.session_id')=?1
+            AND NOT EXISTS(SELECT 1 FROM event_log s WHERE s.kind='auxiliary_model_settled'
+                AND json_extract(s.event_json,'$.request_id')=a.event_id))",
     )
     .bind(session)
     .fetch_one(connection)

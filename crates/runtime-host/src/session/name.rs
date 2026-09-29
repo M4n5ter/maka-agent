@@ -21,7 +21,7 @@ use maka_protocol::{ProtocolError, Result};
 use unicode_normalization::UnicodeNormalization;
 
 /// Matches core/text-sanitize's NFC, control/bidi, invisible and code-point policy.
-pub(super) fn normalize(input: &str) -> Result<String> {
+pub(crate) fn normalize(input: &str) -> Result<String> {
     let cleaned: String = input.nfc().filter_map(|ch| {
         let code = ch as u32;
         if matches!(code, 0x200b..=0x200d | 0x2060..=0x2064 | 0xfeff) {

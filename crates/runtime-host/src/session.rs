@@ -27,6 +27,13 @@ pub use projection::catalog_projection;
 pub(crate) use projection::mutation_projection;
 
 pub use metadata::apply_metadata_patch;
+pub(crate) use name::normalize as normalize_title;
+
+pub(crate) const DEFAULT_NAME: &str = "New Chat";
+
+fn legacy_title_is_manual() -> bool {
+    true
+}
 
 /// Persistent manager ownership survives unload, disabled entries and restart.
 pub(crate) async fn require_unmanaged(
@@ -95,7 +102,7 @@ pub struct SessionConfiguration {
     pub labels: Vec<String>,
     #[serde(default)]
     pub is_flagged: bool,
-    #[serde(default)]
+    #[serde(default = "legacy_title_is_manual")]
     pub title_is_manual: bool,
     #[serde(flatten)]
     pub target: SessionTarget,
@@ -190,6 +197,7 @@ pub struct PreparedSession {
     workspace: WorkspaceTarget,
     target: SessionCreateTarget,
     name: String,
+    title_is_manual: bool,
     labels: Vec<String>,
     sandbox_mode: Option<SandboxMode>,
     approval_policy: ApprovalPolicy,
@@ -234,7 +242,7 @@ impl PreparedSession {
                 "Session creation cannot set reserved execution labels",
             ));
         }
-        let name = name::normalize(input.name.as_deref().unwrap_or("New Chat"))?;
+        let name = name::normalize(input.name.as_deref().unwrap_or(DEFAULT_NAME))?;
         let mut labels = input.labels.clone().unwrap_or_default();
         match input.mode {
             Some(SessionStartMode::Bot) => labels.push("mode:bot".into()),
@@ -250,6 +258,7 @@ impl PreparedSession {
             workspace: input.workspace,
             target: input.target,
             name,
+            title_is_manual: input.name.is_some(),
             labels,
             sandbox_mode,
             approval_policy: input.approval_policy.unwrap_or(ApprovalPolicy::OnRequest),
@@ -271,6 +280,15 @@ impl PreparedSession {
     }
 
     pub fn fingerprint(&self) -> String {
+        self.creation_fingerprint(false)
+    }
+
+    /// Read-only retry compatibility for requests accepted before title ownership.
+    pub(crate) fn legacy_fingerprint(&self) -> String {
+        self.creation_fingerprint(true)
+    }
+
+    fn creation_fingerprint(&self, legacy: bool) -> String {
         let workspace = match &self.workspace {
             WorkspaceTarget::HostPath { path } => json!(["host_path", path]),
             WorkspaceTarget::Project { project_id } => json!(["project", project_id]),
@@ -296,7 +314,7 @@ impl PreparedSession {
             .sandbox_mode
             .map(|mode| json!(mode))
             .unwrap_or_else(|| json!(["runtime_default"]));
-        let identity = json!([
+        let mut identity = json!([
             "session.create.v4",
             self.session_id,
             workspace,
@@ -314,6 +332,13 @@ impl PreparedSession {
             self.collaboration_mode,
             self.orchestration_mode,
         ]);
+        if !legacy {
+            identity[0] = json!("session.create.v5");
+            identity
+                .as_array_mut()
+                .unwrap()
+                .push(json!(self.title_is_manual));
+        }
         format!(
             "sha256:{:x}",
             Sha256::digest(identity.to_string().as_bytes())
@@ -333,7 +358,7 @@ impl PreparedSession {
             name: self.name,
             labels: self.labels,
             is_flagged: false,
-            title_is_manual: false,
+            title_is_manual: self.title_is_manual,
             target: target.into(),
             connection_locked: false,
             thinking_level: self.thinking_level.explicit_level(),
