@@ -790,7 +790,10 @@ mod tests {
                     text.push_str(symbol);
                     x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
                 }
-                assert!(text.contains(icon(&app, &enrollment)), "{locale:?}: {text:?} {rect:?}");
+                assert!(
+                    text.contains(icon(&app, &enrollment)),
+                    "{locale:?}: {text:?} {rect:?}"
+                );
                 assert!(!text.contains('⋯'));
                 assert_eq!(
                     app.chrome.header.input(&click(rect.x, rect.y)).message,
