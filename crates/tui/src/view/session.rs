@@ -91,9 +91,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
     let parts = [parts[0], parts[1], parts[2], parts[4]];
     if inspector && !beside {
         crate::apps::panels::draw_inspector(frame, app, parts[0], id);
-    } else if app.chrome.details {
+    } else if app.chrome.details && !app.pending_new.contains_key(id) {
         let mut lines = crate::pages::sessions::detail_lines(app);
-        if let Detail::Ready(item) = &app.sessions.detail {
+        if let Detail::Ready(item) = &app.sessions.detail
+            && item.id == id
+        {
             lines.push(Line::raw(app.i18n.text(sandbox_key(item))));
         }
         if let Some(context) = app.chat.context.label(&app.i18n) {

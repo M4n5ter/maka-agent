@@ -84,12 +84,20 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
     };
     let mut rows = vec![];
     let mut lines = 0;
-    if models.for_default && (!catalog.ready() || !catalog.rows.is_empty() || catalog.has_default) {
+    if models.for_draft
+        || models.for_default
+            && (!catalog.ready() || !catalog.rows.is_empty() || catalog.has_default)
+    {
+        let (label_key, command) = if models.for_draft {
+            ("session-model-use-default", Command::UseDefault)
+        } else {
+            ("default-model-none", Command::ClearDefault)
+        };
         let label = format!(
             "{} {}{}",
             marker(models.clear_default),
-            app.i18n.text("default-model-none"),
-            if catalog.revision().is_some() && !catalog.has_default {
+            app.i18n.text(label_key),
+            if models.for_default && catalog.revision().is_some() && !catalog.has_default {
                 current.as_str()
             } else {
                 ""
@@ -97,7 +105,7 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
         );
         rows.push(choose(
             Node::text("none", vec![(label, Tone::Normal)]).clip(),
-            Command::ClearDefault,
+            command,
         ));
         lines += 1;
     }

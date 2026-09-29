@@ -39,6 +39,8 @@ pub struct Snapshot {
     pub root: String,
     tabs: Vec<String>,
     drafts: BTreeMap<String, Saved>,
+    #[serde(default)]
+    pending_new: BTreeMap<String, maka_protocol::session::SessionCreateInput>,
     attachments: BTreeMap<String, Vec<crate::pages::attachments::Saved>>,
     directories: BTreeMap<String, Vec<maka_protocol::turn::DirectoryReference>>,
     skills: BTreeMap<String, Vec<crate::pages::skills::Picked>>,
@@ -92,6 +94,11 @@ impl Snapshot {
                 .iter()
                 .map(|(id, editor)| (id.clone(), editor.save()))
                 .collect(),
+            pending_new: app
+                .pending_new
+                .iter()
+                .map(|(id, input)| (id.clone(), input.clone()))
+                .collect(),
             completion: app.completion_checkpoint(),
             unresolved,
             locale: app.i18n.preference,
@@ -125,6 +132,7 @@ impl Snapshot {
             || self.root != root
             || self.tabs.len() > LIMIT
             || self.drafts.len() > LIMIT
+            || self.pending_new.len() > LIMIT
             || self.unresolved.len() > LIMIT
             || self.readings.len() > LIMIT
             || self.pages.len() > crate::navigation::state::PAGE_LIMIT
@@ -132,6 +140,15 @@ impl Snapshot {
             return Err("Unsupported or mismatched TUI checkpoint".into());
         }
         let tabs: HashSet<_> = self.tabs.iter().collect();
+        if self.pending_new.iter().any(|(id, input)| {
+            id != &input.session_id
+                || !self.drafts.contains_key(id)
+                || !serde_json::to_value(input).is_ok_and(|value| {
+                    maka_protocol::session::decode_session_create_input(&value).is_ok()
+                })
+        }) {
+            return Err("Invalid pending session creation".into());
+        }
         if tabs.len() != self.tabs.len()
             || self
                 .tabs
@@ -336,6 +353,7 @@ impl Snapshot {
         app.attachments.saved = self.attachments;
         app.directories = self.directories;
         app.skills.saved = self.skills;
+        app.pending_new = self.pending_new.into_iter().collect();
         for (id, saved) in self.drafts {
             app.drafts.insert(id, Editor::restore(saved)?);
         }
@@ -392,6 +410,31 @@ mod tests {
             epoch: "old-epoch".into(),
         };
         app
+    }
+    #[test]
+    fn pending_session_and_first_message_identity_survive_checkpoint() {
+        let mut original = app();
+        let input = maka_protocol::session::decode_session_create_input(&serde_json::json!({
+            "sessionId":"draft", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        original
+            .pending_new
+            .insert(input.session_id.clone(), input.clone());
+        original.apply(Action::Visit(Route::Session("draft".into())));
+        original
+            .drafts
+            .get_mut("draft")
+            .unwrap()
+            .insert("first message");
+        let request = original.submission().unwrap();
+        let saved = Snapshot::capture(&original, "root");
+        saved.validate("root").unwrap();
+        let mut reopened = app();
+        saved.restore(&mut reopened, false).unwrap();
+        assert_eq!(reopened.pending_new.get("draft"), Some(&input));
+        assert_eq!(reopened.retry_submission(), Some(request));
     }
     #[test]
     fn many_small_plugin_drafts_restore_by_bytes_without_a_tab_count_gate() {

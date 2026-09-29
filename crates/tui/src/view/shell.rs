@@ -120,6 +120,7 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .width
         .saturating_sub(left_width + if balanced { side } else { right_width });
     let mut title = match (&app.navigation.current(), &app.sessions.detail) {
+        (Route::Session(id), _) if app.pending_new.contains_key(id) => app.i18n.text("session-new"),
         (Route::Session(id), Detail::Ready(item)) if *id == item.id => safe(&item.name),
         (Route::App(key), _) => app
             .apps

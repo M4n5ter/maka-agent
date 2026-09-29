@@ -151,14 +151,12 @@ enum Completed {
     Reconciled(
         pages::sending::Submission,
         Result<Option<maka_protocol::message::ExecutionResolution>, maka_client::RequestFailure>,
-    ),
-    Created(
-        navigation::Route,
-        Result<Box<maka_protocol::session::SessionCatalogProjection>, String>,
+        Option<bool>,
     ),
     Submitted(
         pages::sending::Submission,
         Result<maka_protocol::message::SubmitResult, maka_client::RequestFailure>,
+        bool,
     ),
     ChatOpened(
         pages::chat::OpenRequest,
@@ -545,7 +543,13 @@ where
                     )
                 });
             }
-            if let Some(id) = app.chat.select(&app.navigation.current()) {
+            let chat_route = match app.navigation.current() {
+                navigation::Route::Session(ref id) if app.pending_new.contains_key(id) => {
+                    navigation::Route::Workspace
+                }
+                route => route,
+            };
+            if let Some(id) = app.chat.select(&chat_route) {
                 close_observation(&mut jobs, client.clone(), id);
             }
             if history_job.is_none()
@@ -851,6 +855,10 @@ where
                     continue;
                 }
                 Action::Manage(pages::manage::Command::Save) => {
+                    if app.save_draft_model() {
+                        dirty = true;
+                        continue;
+                    }
                     if let Some(client) = client.clone()
                         && let Some(ticket) = app.management_request()
                     {
@@ -1057,41 +1065,89 @@ where
                     if let Some(client) = client.clone()
                         && let Some(request) = app.reconciliation()
                     {
+                        let pending_create = app.pending_new.contains_key(&request.session);
                         jobs.spawn(async move {
+                            if pending_create {
+                                return match client.session(&request.session).await {
+                                    Ok(Some(_)) => Completed::Reconciled(
+                                        request.clone(),
+                                        client
+                                            .message_execution(&request.session, &request.id)
+                                            .await,
+                                        Some(true),
+                                    ),
+                                    Ok(None) => {
+                                        Completed::Reconciled(request, Ok(None), Some(false))
+                                    }
+                                    Err(error) => Completed::Reconciled(request, Err(error), None),
+                                };
+                            }
                             let result = client
                                 .message_execution(&request.session, &request.id)
                                 .await;
-                            Completed::Reconciled(request, result)
+                            Completed::Reconciled(request, result, None)
                         });
                     }
                     dirty = true;
                     continue;
                 }
                 Action::CreateSession | Action::Project(pages::projects::Command::Create(_)) => {
-                    if let Some(client) = client.clone() {
-                        let origin = app.navigation.current();
-                        jobs.spawn(async move {
-                            let result = async {
-                                let workspace = match action {
-                                    Action::Project(pages::projects::Command::Create(id)) => {
-                                        json!({"kind":"project", "projectId":id})
-                                    }
-                                    _ => {
-                                        json!({"kind":"host_path","path":std::env::current_dir()?})
-                                    }
-                                };
-                                let input =
-                                    maka_protocol::session::decode_session_create_input(&json!({
-                                        "sessionId":uuid::Uuid::new_v4().to_string(),
-                                        "workspace":workspace,
-                                        "modelTarget":{"kind":"default"}
-                                    }))?;
-                                Ok::<_, Error>(Box::new(client.create_session(input).await?))
+                    if action == Action::CreateSession
+                        && let navigation::Route::Session(id) = app.navigation.current()
+                        && app.pending_new.contains_key(&id)
+                        && app
+                            .drafts
+                            .get(&id)
+                            .is_some_and(|draft| draft.text().is_empty())
+                        && !app.attachments.has(&id)
+                        && !app.has_directories(&id)
+                        && !app.has_skills(&id)
+                        && !app.completion_requires_idle(&id)
+                    {
+                        app.creating = false;
+                        app.focus = app::Focus::Composer;
+                        dirty = true;
+                        continue;
+                    }
+                    if action == Action::CreateSession
+                        && let Some(id) = app
+                            .pending_new
+                            .keys()
+                            .filter(|id| !app.tabs.contains(id))
+                            .min()
+                            .cloned()
+                    {
+                        app.creating = false;
+                        app.apply(Action::Visit(navigation::Route::Session(id)));
+                        dirty = true;
+                        continue;
+                    }
+                    let input = (|| -> Result<_, Error> {
+                        let workspace = match action {
+                            Action::Project(pages::projects::Command::Create(id)) => {
+                                json!({"kind":"project", "projectId":id})
                             }
-                            .await
-                            .map_err(|e| e.to_string());
-                            Completed::Created(origin, result)
-                        });
+                            _ => json!({"kind":"host_path","path":std::env::current_dir()?}),
+                        };
+                        Ok(maka_protocol::session::decode_session_create_input(
+                            &json!({
+                                "sessionId":uuid::Uuid::new_v4().to_string(),
+                                "workspace":workspace,
+                                "modelTarget":{"kind":"default"}
+                            }),
+                        )?)
+                    })();
+                    app.creating = false;
+                    match input {
+                        Ok(input) => {
+                            let id = input.session_id.clone();
+                            app.pending_new.insert(id.clone(), input);
+                            app.apply(Action::Visit(navigation::Route::Session(id.clone())));
+                            if app.navigation.current() != navigation::Route::Session(id.clone()) {
+                                app.pending_new.remove(&id);
+                            }
+                        }
+                        Err(error) => app.notice = Some(Notice::CreateFailed(error.to_string())),
                     }
                     dirty = true;
                     continue;
@@ -1314,9 +1370,32 @@ where
                 for request in written.requests {
                     if app.after_checkpoint(&request, &written.result)
                         && let Some(client) = client.clone() {
+                        let create = app.pending_new.get(&request.session).cloned();
                         jobs.spawn(async move {
+                            let mut created = false;
+                            if let Some(input) = create {
+                                match client.create_session(input).await {
+                                    Ok(_) => created = true,
+                                    Err(maka_client::RequestFailure::Rejected(
+                                        maka_client::ClientError::Rejected(error),
+                                    )) if matches!(
+                                        error.code,
+                                        maka_protocol::OperationErrorCode::OutcomeUnknown
+                                            | maka_protocol::OperationErrorCode::CommitOutcomeUnknown
+                                    ) => {
+                                        return Completed::Submitted(
+                                            request,
+                                            Err(maka_client::RequestFailure::Unknown(
+                                                maka_client::ClientError::Rejected(error),
+                                            )),
+                                            false,
+                                        );
+                                    }
+                                    Err(error) => return Completed::Submitted(request, Err(error), false),
+                                }
+                            }
                             let result = client.submit_message(request.input()).await;
-                            Completed::Submitted(request, result)
+                            Completed::Submitted(request, result, created)
                         });
                     }
                 }
@@ -1499,25 +1578,52 @@ where
                         let (ticket, result) = *result;
                         app.interaction_completed(ticket, result);
                     }
-                    Some(Ok(Completed::Reconciled(request, result))) => {
-                        app.reconciled(request, result);
+                    Some(Ok(Completed::Reconciled(request, result, creation_exists))) => {
+                        if !creation_exists.is_some_and(|exists| {
+                            app.reconciled_pending_creation(&request, exists)
+                        }) {
+                            app.reconciled(request, result);
+                        }
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                     }
-                    Some(Ok(Completed::Created(origin, result))) => {
-                        app.creating = false;
-                        match result {
-                            Ok(session) => {
-                                app.sessions.refresh();
-                                if app.navigation.current() == origin {
-                                    app.apply(Action::Visit(navigation::Route::Session(session.id)));
-                                }
-                                if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
+                    Some(Ok(Completed::Submitted(request, result, created))) => {
+                        let definite_create_failure = matches!(
+                            &result,
+                            Err(maka_client::RequestFailure::NotDispatched(_))
+                        ) || matches!(
+                            &result,
+                            Err(maka_client::RequestFailure::Rejected(
+                                maka_client::ClientError::Rejected(error)
+                            )) if !matches!(error.code,
+                                maka_protocol::OperationErrorCode::OutcomeUnknown
+                                    | maka_protocol::OperationErrorCode::CommitOutcomeUnknown)
+                        );
+                        let rejected_create = !created
+                            && app.pending_new.contains_key(&request.session)
+                            && definite_create_failure
+                            && app.sending.get(&request.session).is_some_and(|sent| {
+                                matches!(sent.delivery, pages::sending::Delivery::Pending)
+                            });
+                        let create_error = if rejected_create {
+                            result.as_ref().err().map(ToString::to_string)
+                        } else {
+                            None
+                        };
+                        if created && app.pending_new.remove(&request.session).is_some() {
+                            if matches!(app.notice, Some(Notice::CreateFailed(_))) {
+                                app.notice = None;
                             }
-                            Err(error) => app.notice = Some(Notice::CreateFailed(error)),
+                            app.sessions.refresh();
+                            if app.navigation.current() == navigation::Route::Session(request.session.clone()) {
+                                app.sessions.open(&request.session);
+                            }
                         }
-                    }
-                    Some(Ok(Completed::Submitted(request, result))) => {
+                        let session = request.session.clone();
                         app.submitted(request, result);
+                        if let Some(error) = create_error {
+                            app.sending.remove(&session);
+                            app.notice = Some(Notice::CreateFailed(error));
+                        }
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                     }
                     Some(Ok(Completed::ChatOpened(request, result))) => {
@@ -1578,7 +1684,8 @@ where
                         app.projects.refresh();
                         app.connections.refresh();
                         app.providers.refresh();
-                        if let navigation::Route::Session(id) = app.navigation.current() { app.sessions.open(&id); }
+                        if let navigation::Route::Session(id) = app.navigation.current()
+                            && !app.pending_new.contains_key(&id) { app.sessions.open(&id); }
                         effect = app.apply(Action::Refresh);
                     }
                     Some(Ok(Completed::Connected(Err(error)))) => app.connection = ConnectionState::Failed(error.to_string()),

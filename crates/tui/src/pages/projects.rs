@@ -285,6 +285,7 @@ impl App {
             Command::Select(id) => self.projects.items.iter().any(|item| item.id == *id),
             Command::Create(id) => {
                 self.enabled(&Action::CreateSession)
+                    && self.can_allocate_new_draft()
                     && self
                         .projects
                         .items

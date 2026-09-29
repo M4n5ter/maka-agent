@@ -335,6 +335,42 @@ impl App {
         Some(sent.request.clone())
     }
 
+    /// Catalog absence is conclusive only after the dispatching Host epoch ended.
+    pub(crate) fn reconciled_pending_creation(
+        &mut self,
+        request: &Submission,
+        exists: bool,
+    ) -> bool {
+        if !self.pending_new.contains_key(&request.session)
+            || !self.sending.get(&request.session).is_some_and(|sent| {
+                sent.request == *request && matches!(sent.delivery, Delivery::Checking)
+            })
+        {
+            return false;
+        }
+        if exists {
+            self.pending_new.remove(&request.session);
+            if matches!(self.notice, Some(crate::app::Notice::CreateFailed(_))) {
+                self.notice = None;
+            }
+            self.sessions.refresh();
+            if self.navigation.current()
+                == crate::navigation::Route::Session(request.session.clone())
+            {
+                self.sessions.open(&request.session);
+            }
+            return false;
+        }
+        if matches!(&self.connection, crate::app::ConnectionState::Connected { root_id, epoch }
+            if *root_id == request.root_id && *epoch != request.origin_epoch)
+        {
+            self.sending.remove(&request.session);
+            self.notice = Some(crate::app::Notice::Local("chat-send-not-admitted"));
+            return true;
+        }
+        false
+    }
+
     pub fn reconciled(
         &mut self,
         request: Submission,
@@ -645,6 +681,58 @@ mod tests {
             assert!(app.enabled(&Action::SendMessage));
             assert!(!app.enabled(&Action::RetrySubmission));
         }
+    }
+    #[test]
+    fn pending_creation_reconciles_only_after_catalog_and_epoch_evidence() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "first".into(),
+        };
+        let input = maka_protocol::session::decode_session_create_input(&serde_json::json!({
+            "sessionId":"draft", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        app.pending_new.insert("draft".into(), input);
+        app.apply(Action::Visit(Route::Session("draft".into())));
+        app.drafts.get_mut("draft").unwrap().insert("first message");
+        let first = app.submission().unwrap();
+        app.submitted(first, Err(RequestFailure::Unknown(ClientError::Timeout)));
+
+        let checking = app.reconciliation().unwrap();
+        assert!(!app.reconciled_pending_creation(&checking, false));
+        app.reconciled(checking, Ok(None));
+        assert!(app.sending.contains_key("draft"));
+
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "second".into(),
+        };
+        let checking = app.reconciliation().unwrap();
+        assert!(app.reconciled_pending_creation(&checking, false));
+        assert!(app.pending_new.contains_key("draft"));
+        assert!(!app.sending.contains_key("draft"));
+        assert!(app.enabled(&Action::SendMessage));
+
+        let second = app.submission().unwrap();
+        app.submitted(
+            second.clone(),
+            Err(RequestFailure::Unknown(ClientError::Timeout)),
+        );
+        let checking = app.reconciliation().unwrap();
+        assert!(!app.reconciled_pending_creation(&checking, true));
+        assert!(!app.pending_new.contains_key("draft"));
+        app.reconciled(
+            checking,
+            Ok(Some(ExecutionResolution::NotAdmitted {
+                message_id: second.id,
+            })),
+        );
+        assert!(app.enabled(&Action::SendMessage));
     }
     #[test]
     fn reconciliation_preserves_uncertain_drafts_and_recovers_only_authoritative_outcomes() {

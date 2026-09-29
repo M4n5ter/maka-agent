@@ -153,13 +153,13 @@ pub(crate) fn session_commands(app: &App) -> Vec<(Action, &'static str)> {
     let Route::Session(id) = app.navigation.current() else {
         return vec![];
     };
-    let mut commands = vec![
-        (
-            Action::Search(crate::ui::transcript::search::Command::Open),
-            "chat-search",
-        ),
-        (Action::RefreshSession, "command-refresh"),
-    ];
+    let mut commands = vec![(
+        Action::Search(crate::ui::transcript::search::Command::Open),
+        "chat-search",
+    )];
+    if !app.pending_new.contains_key(&id) {
+        commands.push((Action::RefreshSession, "command-refresh"));
+    }
     commands.extend(app.management_commands());
     commands.extend(app.branch_commands());
     commands.extend(app.side_branch_commands());

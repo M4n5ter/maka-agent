@@ -40,6 +40,7 @@ pub enum Command {
     Connections,
     Select(Choice),
     ClearDefault,
+    UseDefault,
     Refresh,
     Previous,
     Next,
@@ -53,6 +54,7 @@ impl Command {
             Self::Connections => "route-connections",
             Self::Select(_) => "session-model-change",
             Self::ClearDefault => "default-model-none",
+            Self::UseDefault => "session-model-use-default",
             Self::Refresh => "command-refresh",
             Self::Previous => "sessions-previous",
             Self::Next => "sessions-next",
@@ -72,6 +74,7 @@ pub(super) struct Models {
     search: Editor,
     search_engaged: bool,
     pub for_default: bool,
+    pub for_draft: bool,
     pub clear_default: bool,
     pub thinking: Option<ThinkingLevel>,
 }
@@ -85,6 +88,7 @@ impl Models {
             search: Editor::bounded(128, "session-model-search-limit"),
             search_engaged: false,
             for_default,
+            for_draft: false,
             clear_default: false,
             thinking: None,
         }
@@ -94,7 +98,9 @@ impl Models {
     }
     pub fn can_submit(&self) -> bool {
         self.selection().is_some()
-            || (self.for_default && self.clear_default && self.catalog.revision().is_some())
+            || ((self.for_default || self.for_draft)
+                && self.clear_default
+                && self.catalog.revision().is_some())
     }
     fn has_thinking(&self) -> bool {
         !self.for_default
@@ -172,6 +178,7 @@ impl App {
                     && !models.catalog.searching()
             }
             Command::ClearDefault => models.for_default && models.catalog.revision().is_some(),
+            Command::UseDefault => models.for_draft && models.catalog.revision().is_some(),
             Command::Select(choice) => models.catalog.rows.iter().any(|r| r.choice == *choice),
             Command::Refresh => !models.catalog.loading,
             Command::Previous => models.catalog.can_previous(),
@@ -215,7 +222,7 @@ impl App {
                 models.clear_default = false;
                 models.catalog.selected = Some(choice);
             }
-            Command::ClearDefault => {
+            Command::ClearDefault | Command::UseDefault => {
                 models.clear_default = true;
                 models.catalog.selected = None;
             }
@@ -682,6 +689,100 @@ mod tests {
         defaults.thinking = Some(ThinkingLevel::High);
         assert!(!defaults.has_thinking());
         assert_eq!(defaults.thinking_level(), None);
+    }
+    #[test]
+    fn pending_conversation_model_selection_updates_only_its_creation_input() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        let input = maka_protocol::session::decode_session_create_input(&json!({
+            "sessionId":"draft", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        app.pending_new.insert("draft".into(), input);
+        app.apply(Action::Visit(crate::navigation::Route::Session(
+            "draft".into(),
+        )));
+        app.apply(app.model_action().unwrap());
+        let request = app.models_request().unwrap();
+        let mut data = page("selected-model");
+        data["items"][2]["entry"]["thinkingLevels"] = json!(["high"]);
+        app.models_completed(request, Ok(data));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let choice = app
+            .management
+            .dialog
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap()
+            .catalog
+            .rows[0]
+            .choice
+            .clone();
+        app.apply(Action::Manage(Manage::Models(Command::Select(
+            choice.clone(),
+        ))));
+        app.apply(Action::Manage(Manage::Models(Command::Thinking(Some(
+            ThinkingLevel::High,
+        )))));
+        assert_eq!(
+            app.apply(Action::Manage(Manage::Save)),
+            Some(Action::Manage(Manage::Save))
+        );
+        assert!(app.save_draft_model());
+        let input = &app.pending_new["draft"];
+        assert_eq!(
+            input.target,
+            maka_protocol::session::SessionCreateTarget::Model {
+                model_target: maka_protocol::session::SessionModelTarget::Explicit {
+                    connection_id: choice.connection_id,
+                    connection_slug: choice.slug,
+                    model: choice.model,
+                },
+            }
+        );
+        assert_eq!(
+            input.thinking_level.explicit_level(),
+            Some(ThinkingLevel::High)
+        );
+        assert!(app.management.dialog.is_none());
+
+        app.apply(app.model_action().unwrap());
+        let request = app.models_request().unwrap();
+        app.models_completed(request, Ok(page("selected-model")));
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        app.apply(Action::Manage(Manage::Models(Command::UseDefault)));
+        assert_eq!(
+            app.apply(Action::Manage(Manage::Save)),
+            Some(Action::Manage(Manage::Save))
+        );
+        assert!(app.save_draft_model());
+        assert_eq!(
+            app.pending_new["draft"].target,
+            maka_protocol::session::SessionCreateTarget::Model {
+                model_target: maka_protocol::session::SessionModelTarget::Default,
+            }
+        );
+        assert_eq!(
+            app.pending_new["draft"].thinking_level.explicit_level(),
+            None
+        );
+        app.drafts.get_mut("draft").unwrap().insert("first message");
+        assert!(app.submission().is_some());
+        assert!(app.model_action().is_none());
     }
     #[test]
     fn default_model_requires_explicit_fresh_intent_and_preserves_unknown_write_guard() {
