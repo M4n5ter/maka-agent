@@ -1302,6 +1302,15 @@ impl App {
             .management
             .dialog
             .as_ref()
+            .is_some_and(|dialog| dialog.models.is_some())
+            && let Some(result) = self.models_sheet_input(event)
+        {
+            return Some(result);
+        }
+        if self
+            .management
+            .dialog
+            .as_ref()
             .is_some_and(|dialog| dialog.kind == Kind::Oauth)
         {
             return oauth::sheet_input(self, event);

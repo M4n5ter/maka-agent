@@ -34,8 +34,13 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
     let models = dialog.models.as_ref().expect("model chooser");
     let catalog = &models.catalog;
     let enabled = !dialog.blocked && !busy;
+    let search_visible = app
+        .frame_size
+        .is_none_or(|(width, height)| width >= 60 && height >= 20);
     // Rows arriving are a new step: focus moves into the list.
-    let step = if catalog.rows.is_empty() {
+    let step = if search_visible && models.search_engaged {
+        "search"
+    } else if catalog.rows.is_empty() {
         "empty"
     } else {
         "list"
@@ -46,6 +51,24 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
     );
     if !models.for_default {
         sheet = sheet.text("name", &safe(&dialog.target.name), Tone::Normal);
+    }
+    if search_visible {
+        sheet = sheet.body(Node::row(
+            "search",
+            vec![
+                Node::text(
+                    "icon",
+                    vec![(format!("{} ", app.chrome.symbol("⌕", "/")), Tone::Muted)],
+                )
+                .size(Size::Fixed(2)),
+                Node::slot("input", 1)
+                    .on(On::Activate(Action::Manage(Manage::Models(
+                        Command::Search,
+                    ))))
+                    .enabled(enabled)
+                    .size(Size::Fill),
+            ],
+        ));
     }
     let marker = |selected: bool| match (selected, app.chrome.ascii) {
         (true, false) => "›",
@@ -61,7 +84,7 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
     };
     let mut rows = vec![];
     let mut lines = 0;
-    if models.for_default {
+    if models.for_default && (!catalog.ready() || !catalog.rows.is_empty() || catalog.has_default) {
         let label = format!(
             "{} {}{}",
             marker(models.clear_default),
@@ -116,12 +139,29 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
         );
     }
     if catalog.rows.is_empty() && !catalog.error {
-        let key = match (catalog.ready(), catalog.can_previous()) {
-            (true, true) => "session-model-page-empty",
-            (true, false) => "session-model-empty",
-            _ => "session-model-loading",
-        };
-        sheet = sheet.text("empty", &app.i18n.text(key), Tone::Subtle);
+        if models.for_default && catalog.ready() && !catalog.searching() {
+            sheet = sheet.body(
+                Node::text(
+                    "connections",
+                    vec![(app.i18n.text("session-model-enable-chat"), Tone::Accent)],
+                )
+                .on(On::Activate(Action::Manage(Manage::Models(
+                    Command::Connections,
+                ))))
+                .enabled(enabled),
+            );
+        } else {
+            let key = if catalog.ready() && catalog.searching() {
+                "session-model-search-empty"
+            } else {
+                match (catalog.ready(), catalog.can_previous()) {
+                    (true, true) => "session-model-page-empty",
+                    (true, false) => "session-model-empty",
+                    _ => "session-model-loading",
+                }
+            };
+            sheet = sheet.text("empty", &app.i18n.text(key), Tone::Subtle);
+        }
     }
     if let Some(row) = models.selection().filter(|_| models.has_thinking()) {
         let level = models.thinking_level();
@@ -170,6 +210,8 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
         (error, Tone::Warning)
     } else if catalog.error {
         ("session-model-load-failed", Tone::Warning)
+    } else if let Some(error) = models.search.error {
+        (error, Tone::Warning)
     } else if models.for_default && models.clear_default {
         ("default-model-clear-note", Tone::Subtle)
     } else if models.for_default {
@@ -239,6 +281,9 @@ pub(in crate::pages::manage) fn sheet(app: &App, dialog: &Dialog) -> Sheet<Actio
         );
     if models.for_default && models.clear_default {
         return sheet.focus_node("list/rows/none");
+    }
+    if search_visible && models.search_engaged {
+        return sheet.focus_node("search/input");
     }
     match catalog
         .rows
