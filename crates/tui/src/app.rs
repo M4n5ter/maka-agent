@@ -190,6 +190,8 @@ pub struct App {
     pub sending: HashMap<String, crate::pages::sending::Sending>,
     // Local to this Root/client instance. Reconnects must not discard drafts.
     pub drafts: HashMap<String, crate::editor::Editor>,
+    /// Creation intents for local conversation drafts, keyed by stable session ID.
+    pub(crate) pending_new: HashMap<String, maka_protocol::session::SessionCreateInput>,
     pub palette: Option<usize>,
     palette_sequence: u64,
     pub command_palette: crate::pages::commands::State,
@@ -292,6 +294,7 @@ impl App {
             queue: Default::default(),
             sending: HashMap::new(),
             drafts: HashMap::new(),
+            pending_new: HashMap::new(),
             palette: None,
             palette_sequence: 0,
             command_palette: Default::default(),
@@ -1188,7 +1191,11 @@ impl App {
             Action::Refresh => connected && !self.refreshing,
             Action::Connect => !matches!(self.connection, ConnectionState::Connecting),
             Action::RefreshSessions => connected && !self.catalog().loading,
-            Action::RefreshSession => connected && self.sessions.can_refresh_detail(),
+            Action::RefreshSession => {
+                connected
+                    && !matches!(self.navigation.current(), Route::Session(id) if self.pending_new.contains_key(&id))
+                    && self.sessions.can_refresh_detail()
+            }
             Action::OlderMessages => connected && self.chat.can_older(),
             Action::NewerMessages => connected && self.chat.can_newer(),
             Action::LatestMessages => !self.chat.view.following(),
@@ -1197,18 +1204,8 @@ impl App {
                 connected
                     && !self.creating
                     && self.tabs.entries.len() < crate::navigation::tabs::LIMIT
-                    && (self.drafts.len() < crate::navigation::tabs::LIMIT
-                        || self.drafts.iter().any(|(id, editor)| {
-                            editor.text().is_empty()
-                                && !self.attachments.has(id)
-                                && !self.has_directories(id)
-                                && !(self.has_skills(id) || self.completion_requires_idle(id))
-                                && !self.tabs.contains(id)
-                                && !self
-                                    .sending
-                                    .get(id)
-                                    .is_some_and(|sent| sent.delivery.blocks_send())
-                        }))
+                    && (self.pending_new.keys().any(|id| !self.tabs.contains(id))
+                        || self.can_allocate_new_draft())
             }
             Action::ReconcileSubmission | Action::RetrySubmission => {
                 let Route::Session(id) = self.navigation.current() else {
@@ -1380,7 +1377,9 @@ impl App {
     fn sync_route(&mut self) {
         self.invalidate_editor_geometry();
         let route = self.navigation.current();
-        if let Route::Session(id) = &route {
+        if let Route::Session(id) = &route
+            && !self.pending_new.contains_key(id)
+        {
             self.sessions.open(id);
         }
         if let Route::App(key) = &route {
@@ -1404,6 +1403,21 @@ impl App {
         {
             self.drafts.entry(id).or_default();
         }
+    }
+
+    pub(crate) fn can_allocate_new_draft(&self) -> bool {
+        self.drafts.len() < crate::navigation::tabs::LIMIT
+            || self.drafts.iter().any(|(id, editor)| {
+                editor.text().is_empty()
+                    && !self.attachments.has(id)
+                    && !self.has_directories(id)
+                    && !(self.has_skills(id) || self.completion_requires_idle(id))
+                    && !self.tabs.contains(id)
+                    && !self
+                        .sending
+                        .get(id)
+                        .is_some_and(|sent| sent.delivery.blocks_send())
+            })
     }
 
     pub(crate) fn catalog(&self) -> &crate::pages::sessions::Sessions {
@@ -1454,6 +1468,7 @@ impl App {
                 self.directories.remove(&empty);
                 self.skills.saved.remove(&empty);
                 self.sending.remove(&empty);
+                self.pending_new.remove(&empty);
             } else {
                 self.notice = Some(Notice::Local("tabs-drafts-limit"));
                 return false;
@@ -2264,6 +2279,34 @@ mod tests {
     use crossterm::event::KeyEvent;
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+    #[test]
+    fn closed_pending_conversation_can_reopen_when_draft_slots_are_full() {
+        let mut app = App::new(
+            "/unused".into(),
+            crate::i18n::I18n::new(crate::LocalePreference::Auto, crate::Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        let input = maka_protocol::session::decode_session_create_input(&serde_json::json!({
+            "sessionId":"draft", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        app.pending_new.insert("draft".into(), input);
+        app.apply(Action::Visit(Route::Session("draft".into())));
+        app.drafts.get_mut("draft").unwrap().insert("unsent");
+        app.apply(Action::CloseTab("draft".into()));
+        for index in 0..crate::navigation::tabs::LIMIT - 1 {
+            app.drafts
+                .entry(format!("other-{index}"))
+                .or_default()
+                .insert("kept");
+        }
+        assert!(!app.can_allocate_new_draft());
+        assert!(app.enabled(&Action::CreateSession));
     }
     #[test]
     fn composer_shortcuts_preserve_multiline_drafts_and_respect_input_scopes() {

@@ -210,9 +210,35 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn metadata(app: &App, width: u16) -> Option<Node<Action>> {
+    let crate::navigation::Route::Session(id) = app.navigation.current() else {
+        return None;
+    };
+    if let Some(input) = app.pending_new.get(&id) {
+        let label = match &input.target {
+            maka_protocol::session::SessionCreateTarget::Model {
+                model_target: maka_protocol::session::SessionModelTarget::Explicit { model, .. },
+            } => safe(model),
+            _ => app.i18n.text("default-model-title"),
+        };
+        let mut model = Node::text(
+            "model",
+            vec![(fit(&label, usize::from(width)), Tone::Subtle)],
+        )
+        .clip();
+        if let Some(action) = app.model_action() {
+            model = model
+                .enabled(app.enabled(&action))
+                .hint(action_label(app, &action))
+                .on(On::Activate(action));
+        }
+        return Some(Node::row("metadata", vec![model]));
+    }
     let Detail::Ready(item) = &app.sessions.detail else {
         return None;
     };
+    if item.id != id {
+        return None;
+    }
     let sandbox = app.i18n.text(sandbox_key(item));
     let context = app
         .chat

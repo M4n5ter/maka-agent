@@ -804,6 +804,53 @@ mod tests {
     }
 
     #[test]
+    fn unsent_conversation_has_a_composer_but_no_sidebar_session() {
+        let mut app = App::new(
+            "/unused".into(),
+            crate::i18n::I18n::new(
+                crate::LocalePreference::Explicit(crate::Locale::En),
+                crate::Locale::En,
+            ),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        let input = maka_protocol::session::decode_session_create_input(&serde_json::json!({
+            "sessionId":"draft", "workspace":{"kind":"host_path","path":"/tmp"},
+            "modelTarget":{"kind":"default"}
+        }))
+        .unwrap();
+        app.pending_new.insert(input.session_id.clone(), input);
+        app.apply(Action::Visit(Route::Session("draft".into())));
+        let mut previous = crate::pages::sessions::tests::item("previous");
+        previous.model = "STALE_MODEL".into();
+        app.sessions.detail = crate::pages::sessions::Detail::Ready(Box::new(previous));
+        let terminal = render(&mut app, 100, 30);
+        let mut displayed = String::new();
+        for y in 0..30 {
+            for x in 0..100 {
+                displayed.push_str(terminal.backend().buffer()[(x, y)].symbol());
+            }
+        }
+        assert!(!displayed.contains("STALE_MODEL"));
+        assert!(
+            app.chrome
+                .composer
+                .rect(crate::view::session::composer::EDITOR)
+                .is_some()
+        );
+        assert!(
+            app.sidebar
+                .surface
+                .rect("sidebar/list/rows/session-draft")
+                .is_none()
+        );
+        app.drafts.get_mut("draft").unwrap().insert("hello");
+        assert!(app.enabled(&Action::SendMessage));
+    }
+
+    #[test]
     fn modal_consumes_enter_and_outside_click_without_page_activation() {
         let mut app = App::new(
             "/unconfigured".into(),

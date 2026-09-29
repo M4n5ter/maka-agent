@@ -64,6 +64,7 @@ impl Target {
 pub(super) enum Entity {
     Oauth,
     Defaults,
+    Draft(String),
     SandboxDefaults,
     NetworkProxy,
     Session {
@@ -439,6 +440,9 @@ impl App {
     fn management_identity(&self, target: &Target) -> bool {
         matches!(&self.connection, ConnectionState::Connected {root_id, epoch} if *root_id == target.root && *epoch == target.epoch)
             && !matches!(&target.entity, Entity::Session { id, .. } if self.session_is_managed(id))
+            && !matches!(&target.entity, Entity::Draft(id)
+                if !self.pending_new.contains_key(id)
+                    || self.sending.contains_key(id))
     }
     pub fn management_commands(&self) -> Vec<(Action, &'static str)> {
         let ConnectionState::Connected { root_id, epoch } = &self.connection else {
@@ -460,6 +464,25 @@ impl App {
                         .map(|action| (action, "proxy-title")),
                 )
                 .collect();
+        }
+        if let Route::Session(id) = self.navigation.current()
+            && self.pending_new.contains_key(&id)
+        {
+            // The Host may have accepted creation even if its reply was lost.
+            // Keep the same creation fingerprint after the first send attempt.
+            if self.sending.contains_key(&id) {
+                return vec![];
+            }
+            let target = Target {
+                root: root_id.clone(),
+                epoch: epoch.clone(),
+                name: self.i18n.text("session-new"),
+                entity: Entity::Draft(id),
+            };
+            return vec![(
+                Action::Manage(Command::Open(target, Kind::Model)),
+                "session-model-change",
+            )];
         }
         let item = match self.navigation.current() {
             Route::Session(id) => match &self.sessions.detail {
@@ -567,6 +590,7 @@ impl App {
                             | (Entity::Registration, Kind::Register)
                             | (Entity::Input(_), Kind::Reference)
                             | (Entity::Defaults, Kind::Model)
+                            | (Entity::Draft(_), Kind::Model)
                             | (Entity::SandboxDefaults, Kind::Sandbox)
                             | (Entity::NetworkProxy, Kind::NetworkProxy)
                             | (
@@ -739,6 +763,29 @@ impl App {
                         self.management.models_sequence,
                         target.is_default_model(),
                     );
+                    if let Entity::Draft(id) = &target.entity
+                        && let Some(input) = self.pending_new.get(id)
+                    {
+                        models.for_draft = true;
+                        if let maka_protocol::session::SessionCreateTarget::Model {
+                            model_target:
+                                maka_protocol::session::SessionModelTarget::Explicit {
+                                    connection_id,
+                                    connection_slug,
+                                    model,
+                                },
+                        } = &input.target
+                        {
+                            models.catalog.selected = Some(models::Choice {
+                                connection_id: connection_id.clone(),
+                                slug: connection_slug.clone(),
+                                model: model.clone(),
+                            });
+                        } else {
+                            models.clear_default = true;
+                        }
+                        models.thinking = input.thinking_level.explicit_level();
+                    }
                     if let Entity::Session { id, revision, .. } = &target.entity {
                         let detail = match &self.sessions.detail {
                             super::sessions::Detail::Ready(item) => Some(item.as_ref()),
@@ -975,6 +1022,47 @@ impl App {
         };
         self.management.pending = Some(ticket.clone());
         Some(ticket)
+    }
+
+    pub(crate) fn save_draft_model(&mut self) -> bool {
+        let Some(dialog) = self.management.dialog.as_ref() else {
+            return false;
+        };
+        let Entity::Draft(id) = &dialog.target.entity else {
+            return false;
+        };
+        if dialog.kind != Kind::Model || !self.management_enabled(&Command::Save) {
+            return true;
+        }
+        let Some(models) = dialog.models.as_ref() else {
+            return true;
+        };
+        let choice = models.selection().map(|row| row.choice.clone());
+        let thinking = models.thinking_level();
+        let Some(input) = self.pending_new.get_mut(id) else {
+            return true;
+        };
+        let model_target = if models.clear_default {
+            maka_protocol::session::SessionModelTarget::Default
+        } else {
+            let Some(choice) = choice else {
+                return true;
+            };
+            maka_protocol::session::SessionModelTarget::Explicit {
+                connection_id: choice.connection_id,
+                connection_slug: choice.slug,
+                model: choice.model,
+            }
+        };
+        input.target = maka_protocol::session::SessionCreateTarget::Model { model_target };
+        input.thinking_level = if models.clear_default {
+            maka_protocol::session::SessionThinkingPreference::ModelDefault
+        } else {
+            thinking.into()
+        };
+        self.management.dialog = None;
+        self.hits.clear();
+        true
     }
     pub fn management_completed(
         &mut self,

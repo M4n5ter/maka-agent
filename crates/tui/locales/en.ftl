@@ -595,6 +595,7 @@ project-edit-missing = This project is no longer available. Close and refresh th
 
 default-model-title = Default model
 default-model-none = No default model
+session-model-use-default = Use default model
 default-model-current = Current default
 default-model-note = Used by new sessions that request the Host default. Existing sessions stay unchanged.
 default-model-clear-note = New sessions must choose a model explicitly. Existing sessions stay unchanged.

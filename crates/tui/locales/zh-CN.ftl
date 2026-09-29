@@ -595,6 +595,7 @@ project-edit-missing = 此项目已不可用，请关闭并刷新列表。
 
 default-model-title = 默认模型
 default-model-none = 不使用默认模型
+session-model-use-default = 使用默认模型
 default-model-current = 当前默认
 default-model-note = 用于选择 Host 默认模型的新会话。已有会话不变。
 default-model-clear-note = 新会话需明确选择模型。已有会话不变。
