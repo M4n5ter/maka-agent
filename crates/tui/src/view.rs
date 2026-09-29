@@ -508,6 +508,16 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
             _,
             crate::pages::manage::Kind::Locations,
         )) => ("ⓘ", "i"),
+        Action::Manage(crate::pages::manage::Command::Open(
+            target,
+            crate::pages::manage::Kind::Oauth,
+        )) if target.is_enrollment() => {
+            if app.management.oauth.enrollment_label() == "oauth-resume" {
+                ("↻", "R")
+            } else {
+                ("↪", "L")
+            }
+        }
         Action::Manage(_) => ("⋯", "."),
         Action::Attachment(_) => ("⊕", "+"),
         Action::References => ("▱", "/"),
@@ -558,6 +568,10 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
 }
 
 pub(crate) fn action_label(app: &App, action: &Action) -> String {
+    if matches!(action, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment())
+    {
+        return app.i18n.text(app.management.oauth.enrollment_label());
+    }
     if matches!(
         action,
         Action::Manage(crate::pages::manage::Command::Open(
@@ -749,6 +763,48 @@ mod tests {
             row: y,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    #[test]
+    fn connection_enrollment_is_labeled_and_keeps_its_target_on_resize() {
+        for locale in crate::Locale::ALL {
+            let mut app = App::new(
+                "/unused".into(),
+                crate::i18n::I18n::new(crate::LocalePreference::Explicit(locale), locale),
+            );
+            app.connection = ConnectionState::Connected {
+                root_id: "root".into(),
+                epoch: "epoch".into(),
+            };
+            app.providers = crate::providers::fixtures::catalog();
+            app.apply(Action::Visit(Route::Connections));
+            let enrollment = app.oauth_commands()[0].0.clone();
+            let path = format!("header/right/{enrollment:?}");
+            for width in [120, 48] {
+                let terminal = render(&mut app, width, 24);
+                let rect = app.chrome.header.rect(&path).unwrap();
+                let mut text = String::new();
+                let mut x = rect.x;
+                while x < rect.right() {
+                    let symbol = terminal.backend().buffer()[(x, rect.y)].symbol();
+                    text.push_str(symbol);
+                    x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
+                }
+                if width >= 80 {
+                    assert!(
+                        text.contains(&app.i18n.text("oauth-connect-short")),
+                        "{locale:?}: {text:?} {rect:?}"
+                    );
+                } else {
+                    assert!(text.contains(icon(&app, &enrollment)));
+                    assert!(!text.contains('⋯'));
+                }
+                assert_eq!(
+                    app.chrome.header.input(&click(rect.x, rect.y)).message,
+                    Some(enrollment.clone())
+                );
+            }
+        }
     }
 
     #[test]

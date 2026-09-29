@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+oauth-connect-short = 帳號 / API key
 oauth-title = 使用帳號或 API key 連線
 oauth-identity = 連線詳情
 oauth-name = 顯示名稱

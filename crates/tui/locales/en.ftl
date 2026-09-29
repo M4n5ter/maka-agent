@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+oauth-connect-short = Account / API key
 oauth-title = Connect with an account or API key
 oauth-identity = Connection details
 oauth-name = Display name

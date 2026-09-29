@@ -199,6 +199,14 @@ pub struct State {
 }
 
 impl State {
+    pub(crate) fn enrollment_label(&self) -> &'static str {
+        if self.attempt.is_some() {
+            "oauth-resume"
+        } else {
+            "oauth-title"
+        }
+    }
+
     fn terminal(&self) -> bool {
         self.projection.as_ref().is_some_and(|projection| {
             matches!(
@@ -365,11 +373,7 @@ impl App {
                 },
                 Kind::Oauth,
             )),
-            if self.management.oauth.attempt.is_some() {
-                "oauth-resume"
-            } else {
-                "oauth-title"
-            },
+            self.management.oauth.enrollment_label(),
         )];
         if self.navigation.current() == Route::Connections
             && let Some(command) = self
