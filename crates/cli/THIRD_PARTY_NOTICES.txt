@@ -2,15 +2,15 @@ Third-party notices for the Maka native distribution
 
 Dependency sources and alternative license texts are preserved below. Source URLs identify the exact distributed versions.
 
-@ai-sdk/anthropic@4.0.53 (Apache-2.0)
-@ai-sdk/openai-compatible@3.0.48 (Apache-2.0)
-@ai-sdk/openai@4.0.66 (Apache-2.0)
-@ai-sdk/provider@4.0.14 (Apache-2.0)
+@ai-sdk/anthropic@4.0.68 (Apache-2.0)
+@ai-sdk/openai-compatible@3.0.59 (Apache-2.0)
+@ai-sdk/openai@4.0.80 (Apache-2.0)
+@ai-sdk/provider@4.0.19 (Apache-2.0)
 
-https://registry.npmjs.org/@ai-sdk/anthropic/-/anthropic-4.0.53.tgz :: LICENSE
-https://registry.npmjs.org/@ai-sdk/openai-compatible/-/openai-compatible-3.0.48.tgz :: LICENSE
-https://registry.npmjs.org/@ai-sdk/openai/-/openai-4.0.66.tgz :: LICENSE
-https://registry.npmjs.org/@ai-sdk/provider/-/provider-4.0.14.tgz :: LICENSE
+https://registry.npmjs.org/@ai-sdk/anthropic/-/anthropic-4.0.68.tgz :: LICENSE
+https://registry.npmjs.org/@ai-sdk/openai-compatible/-/openai-compatible-3.0.59.tgz :: LICENSE
+https://registry.npmjs.org/@ai-sdk/openai/-/openai-4.0.80.tgz :: LICENSE
+https://registry.npmjs.org/@ai-sdk/provider/-/provider-4.0.19.tgz :: LICENSE
 
 Copyright 2023 Vercel, Inc.
 
@@ -28,9 +28,9 @@ limitations under the License.
 
 ================================================================================
 
-@ai-sdk/provider-utils@5.0.40 (Apache-2.0)
+@ai-sdk/provider-utils@5.0.51 (Apache-2.0)
 
-https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-5.0.40.tgz :: src/to-json-schema/zod3-to-json-schema/LICENSE
+https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-5.0.51.tgz :: src/to-json-schema/zod3-to-json-schema/LICENSE
 
 ISC License
 
@@ -12975,9 +12975,9 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 
 ================================================================================
 
-eventsource-parser@3.0.8 (MIT)
+eventsource-parser@3.1.1 (MIT)
 
-https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.0.8.tgz :: LICENSE
+https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.1.tgz :: LICENSE
 
 MIT License
 

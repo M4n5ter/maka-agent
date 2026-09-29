@@ -51,9 +51,8 @@
     "crates/tui/Cargo.toml": "144712c6aa8568b307112b494162ff3a0b374355011200efe1ad3ccdf281ad7b",
     "crates/web/Cargo.toml": "3edbc2ea947e2f3c857c4cd4333b47a481ecc1c2c1c58a6ac80b2824f6d3ad57",
     "crates/workhub/Cargo.toml": "eebc5612198fa5f163de00c5f74b38df63f93b5576fa9397ad1f57a1e12e70b9",
-    "package-lock.json": "2fe7f04353cec484f67144a879404373e34f1ce5bc2151b43d07d71682a599c6",
-    "package.json": "3ac842a39fa8c398744d374f51e98a8cd7df29a0ab50304eeede11dee4d51c69",
-    "patches/@ai-sdk+provider-utils+5.0.40.patch": "6b9ce7e55994e83f788073c67a21e6b60d615c20a9aa2014f99a9e937ddbb501",
+    "package-lock.json": "92432f9a98b40985b4c180539e5553cc28aba0bd315b01b9306b16682697a586",
+    "package.json": "c947c90709e917012063c3a67c6a131739615256e5e0d78d9acb012833977ea9",
     "patches/zod+4.6.5.patch": "5a6cbff1b31ca2a5d2b7c006abb7b1002241dbf4ae42c315c27940201f52b081",
     "scripts/apply-dependency-patches.mjs": "67e548835b0de28e3753be559abb5cb2efbe94a46d72e0b756c23f944896d4bd",
     "scripts/rust/build-v8.mjs": "8fc2026062e1cfdec89d545ff11802d61be05952013bdeadcd506c08fbde651d",
@@ -70,5 +69,5 @@
     "scripts/rust/v8-prebuilts.json": "44e8700ccdbda523b1bc0a47a2cdfc26e4c6bc355572dde05a7f10474896cb89",
     "scripts/rust/v8-source.json": "c8bac739fa6361d8c3ca5f7e30021241f5d6cd9e4dc2c1183b97d96c05a59c11"
   },
-  "sha256": "9eba7c8bcfcc7562970e606c46b71c9b9602f0ae1ad4ce937aa78afd5aa302aa"
+  "sha256": "1dee676ca32c4c8e76bccbc58448bccfc0afc7d9abe48ce6ea31825499a83d74"
 }

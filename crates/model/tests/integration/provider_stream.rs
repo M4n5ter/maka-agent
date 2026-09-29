@@ -282,6 +282,66 @@ async fn chat_tool_media_follow_the_complete_parallel_result_group_on_the_wire()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_tool_deltas_keep_arguments_separate_when_gateways_omit_or_reuse_ids() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let executor = ModelExecutor::new(1, Duration::from_secs(10)).unwrap();
+        let cases = [
+            vec![
+                json!({"type":"function","function":{"name":"echo","arguments":"{\"value\":"}}),
+                json!({"function":{"arguments":"\"first\"}"}}),
+                json!({"id":" ","type":"function","function":{"name":"echo","arguments":"{\"value\":\"second\"}"}}),
+            ],
+            vec![
+                json!({"index":1,"id":"shared","type":"function","function":{"name":"echo","arguments":"{\"value\":"}}),
+                json!({"index":0,"id":"shared","type":"function","function":{"name":"echo","arguments":"{\"value\":"}}),
+                json!({"index":0,"function":{"arguments":"\"first\"}"}}),
+                json!({"index":1,"function":{"arguments":"\"second\"}"}}),
+            ],
+            vec![
+                json!({"index":0,"id":"first","type":"function","function":{"name":"echo","arguments":"{\"value\":"}}),
+                json!({"index":0,"id":"second","type":"function","function":{"name":"echo","arguments":"{\"value\":"}}),
+                json!({"index":0,"id":"first","function":{"arguments":"\"first\"}"}}),
+                json!({"index":0,"id":"second","function":{"arguments":"\"second\"}"}}),
+            ],
+        ];
+        for kind in [ProviderKind::OpenaiChat, ProviderKind::OpenaiCompatible { name: "fixture".into() }] {
+            for deltas in &cases {
+                // OpenAI requires indices; compatible gateways may omit them.
+                if matches!(kind, ProviderKind::OpenaiChat) && deltas.iter().any(|delta| delta.get("index").is_none()) {
+                    continue;
+                }
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base = format!("http://{}/v1", listener.local_addr().unwrap());
+                let mut chunks: Vec<_> = deltas.iter().map(|delta| json!({"id":"reply","created":1,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[delta]},"finish_reason":null}]})).collect();
+                chunks.push(json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}));
+                let body = sse(&chunks) + "data: [DONE]\n\n";
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    read_request(&mut socket).await;
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                });
+                let mut stream = executor.stream(request(kind.clone(), base), CancellationToken::new()).await.unwrap();
+                let mut builder = StepBuilder::default();
+                while let Some(event) = stream.next().await {
+                    builder.push(event.unwrap()).unwrap();
+                }
+                stream.cancel_and_wait().await;
+                let step = builder.finish().unwrap();
+                let calls: Vec<_> = step.tool_calls().collect();
+                assert_eq!(calls.len(), 2, "{kind:?}: {deltas:?}");
+                assert_ne!(calls[0].id, calls[1].id);
+                assert!(calls.iter().all(|call| !call.id.trim().is_empty() && call.name == "echo"));
+                let mut values: Vec<_> = calls.iter().map(|call| call.input["value"].as_str().unwrap()).collect();
+                values.sort_unstable();
+                assert_eq!(values, ["first", "second"], "{kind:?}: {deltas:?}");
+                assert_eq!(step.finish_reason, maka_runtime::model::ModelFinishReason::ToolCalls);
+                server.await.unwrap();
+            }
+        }
+    }).await.expect("gateway tool streams must make bounded progress");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn malformed_provider_tool_identity_cannot_complete_a_model_step() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let executor = ModelExecutor::new(1, Duration::from_secs(15)).unwrap();
