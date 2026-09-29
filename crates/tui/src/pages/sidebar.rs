@@ -38,6 +38,7 @@ pub enum Message {
     Open(String),
     Group(String),
     Filter(bool),
+    Search,
     Close,
     Refresh,
     More,
@@ -270,6 +271,20 @@ fn tree(app: &App, orbit: Option<&'static str>, height: u16, drawer: bool) -> No
             )
             .on(On::Activate(Message::Filter(true)))
             .current(app.sidebar.pending_only),
+            Node::text(
+                "search",
+                vec![(
+                    format!(
+                        "{} {}",
+                        app.chrome.symbol("⌕", "/"),
+                        i18n.text("sidebar-search")
+                    ),
+                    Tone::Muted,
+                )],
+            )
+            .on(On::Activate(Message::Search))
+            .enabled(connected)
+            .hint(i18n.text("sidebar-search-sessions")),
         ],
     )
     .gap(2)
@@ -522,6 +537,7 @@ impl App {
                 | Message::Settings
                 | Message::Projects
                 | Message::Host
+                | Message::Search
         ) {
             self.sidebar.drawer = false;
         }
@@ -540,6 +556,7 @@ impl App {
                 self.catalog_mut().restart();
                 None
             }
+            Message::Search => self.apply(Action::Palette),
             Message::New => self.apply(Action::CreateSession),
             Message::Action(action) => self.apply(*action),
             Message::Open(id) => self.apply(Action::Visit(Route::Session(id))),
@@ -700,5 +717,43 @@ mod tests {
             assert_eq!(app.drafts["draft"].text(), "Keep this?");
             assert!(app.i18n.diagnostics().is_empty());
         }
+    }
+
+    #[test]
+    fn sidebar_search_opens_the_palette_in_the_narrow_drawer() {
+        use crossterm::event::{
+            Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        let mut app = App::new(
+            "/unused".into(),
+            crate::i18n::I18n::new(
+                crate::LocalePreference::Explicit(crate::Locale::En),
+                crate::Locale::En,
+            ),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(44, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL,
+        )));
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let search = app.layer.rect("sidebar/filter/search").unwrap();
+        app.input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: search.x,
+            row: search.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!app.sidebar.drawer);
+        assert!(app.palette.is_some());
     }
 }

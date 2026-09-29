@@ -27,6 +27,8 @@ The sidebar groups sessions by workspace. **Needs you** filters that directory w
 
 `Enter` sends a message, or queues it for the next turn while the model is working. `Shift+Enter` inserts a new line on terminals with enhanced keyboard support; `Ctrl+J` works on legacy terminals, including Windows Terminal through WSL. Pasting multiple lines never sends them. `Ctrl+K` opens commands, `Ctrl+F` searches the conversation, and `Ctrl+N` creates a session. Dialogs and search keep their own input scope.
 
+The sidebar's Search opens the command palette. It scans the Host's paged session directory by name, workspace, ID and displayed labels; **More matching sessions** continues a broad search. Model choosers search enabled chat models across catalog pages.
+
 When the Host has no model connection or default model, the workspace home offers the missing setup step; `Ctrl+N` opens that step. Existing sessions remain available.
 
 Chat and plugin transcripts share Markdown, selection, search and streaming presentation. New streamed text briefly fades to its final color without delaying the received content or changing its layout. Reduced motion and terminal-owned colors display it immediately.

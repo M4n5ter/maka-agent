@@ -17,6 +17,9 @@
  * under the License.
  */
 
+mod session_search;
+pub(crate) use session_search::Request as SessionSearchRequest;
+
 use crate::{
     app::{Action, App},
     i18n::I18n,
@@ -35,12 +38,16 @@ const ROWS: &str = "list/rows";
 pub enum Label {
     Key(&'static str),
     Text(String),
+    Session { name: String, workspace: String },
 }
 impl Label {
     pub fn text(&self, i18n: &I18n) -> String {
         match self {
             Self::Key(key) => i18n.text(key),
             Self::Text(text) => text.clone(),
+            Self::Session { name, workspace } => {
+                format!("{} · {name} · {workspace}", i18n.text("palette-session"))
+            }
         }
     }
 }
@@ -54,25 +61,59 @@ impl From<&'static str> for Label {
 pub struct State {
     items: Vec<(Action, Label)>,
     query: String,
+    sessions: session_search::State,
 }
 
 impl State {
-    pub fn new(items: Vec<(Action, Label)>) -> Self {
+    pub fn new(items: Vec<(Action, Label)>, instance: u64) -> Self {
         Self {
             items,
+            sessions: session_search::State::new(instance),
             ..Self::default()
         }
     }
     pub fn filtered(&self, i18n: &I18n) -> Vec<(Action, Label)> {
         let query = self.query.to_lowercase();
-        self.items
+        let mut items: Vec<_> = self
+            .items
             .iter()
             .filter(|(_, label)| {
                 let text = label.text(i18n).to_lowercase();
                 query.split_whitespace().all(|word| text.contains(word))
             })
             .cloned()
-            .collect()
+            .collect();
+        items.extend(self.sessions.results.iter().cloned());
+        if self.sessions.can_more() {
+            items.push((
+                Action::PaletteMoreSessions,
+                Label::Key("palette-more-sessions"),
+            ));
+        }
+        items
+    }
+    pub fn session_request(&mut self, root: &str, epoch: &str) -> Option<session_search::Request> {
+        self.sessions.request(root, epoch)
+    }
+    pub fn session_completed(
+        &mut self,
+        request: &session_search::Request,
+        result: Result<maka_protocol::session::SessionCatalogQueryResult, String>,
+        host: Option<(&str, &str)>,
+    ) -> bool {
+        self.sessions.complete(request, result, host)
+    }
+    pub fn session_search_loading(&self) -> bool {
+        self.sessions.loading()
+    }
+    pub fn session_search_error(&self) -> bool {
+        self.sessions.error
+    }
+    pub fn can_more_sessions(&self) -> bool {
+        self.sessions.can_more()
+    }
+    pub fn more_sessions(&mut self) {
+        self.sessions.more();
     }
     fn insert(&mut self, text: &str) {
         for ch in text.chars().filter(|ch| !ch.is_control()) {
@@ -106,9 +147,16 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         ],
     ));
     let sheet = if items.is_empty() {
-        sheet.text("empty", &app.i18n.text("palette-empty"), Tone::Subtle)
+        let key = if app.command_palette.session_search_loading() {
+            "palette-searching-sessions"
+        } else if app.command_palette.session_search_error() {
+            "palette-session-search-failed"
+        } else {
+            "palette-empty"
+        };
+        sheet.text("empty", &app.i18n.text(key), Tone::Subtle)
     } else {
-        let rows = items
+        let mut rows: Vec<_> = items
             .iter()
             .enumerate()
             .map(|(index, (action, label))| {
@@ -122,6 +170,20 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                 .current(index == selected)
             })
             .collect();
+        if app.command_palette.session_search_loading() {
+            rows.push(Node::text(
+                "session-searching",
+                vec![(app.i18n.text("palette-searching-sessions"), Tone::Subtle)],
+            ));
+        } else if app.command_palette.session_search_error() {
+            rows.push(Node::text(
+                "session-search-failed",
+                vec![(
+                    app.i18n.text("palette-session-search-failed"),
+                    Tone::Warning,
+                )],
+            ));
+        }
         sheet.body(
             Node::scroll("list", Node::column("rows", rows))
                 .size(Size::Upto(height.saturating_sub(10).clamp(3, 20))),
@@ -217,6 +279,9 @@ impl App {
                         if !self.enabled(&action) {
                             return Some((false, None));
                         }
+                        if action == Action::PaletteMoreSessions {
+                            return Some((true, self.apply(action)));
+                        }
                         self.palette = None;
                         return Some((true, self.apply(action)));
                     }
@@ -242,6 +307,9 @@ impl App {
         // A new query lists from its first match, typed into the field; the
         // old rows retire before another click can reach them.
         self.palette = Some(0);
+        self.command_palette
+            .sessions
+            .restart(&self.command_palette.query);
         self.layer.reveal(&format!("{ROWS}/0"));
         self.layer.focus(SEARCH);
         self.layer.retire();
@@ -274,6 +342,54 @@ mod tests {
             row: y,
             modifiers: KeyModifiers::NONE,
         })
+    }
+    #[test]
+    fn palette_search_opens_a_session_outside_the_loaded_sidebar_page() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = crate::app::ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.apply(Action::Palette);
+        frame(&mut app, 80, 24);
+        for ch in "deep".chars() {
+            app.palette_sheet_input(&key(KeyCode::Char(ch)));
+        }
+        let request = app
+            .command_palette
+            .session_request("root", "epoch")
+            .unwrap();
+        let found = crate::pages::sessions::tests::item("deep-session");
+        assert!(app.command_palette.session_completed(
+            &request,
+            Ok(maka_protocol::session::SessionCatalogQueryResult::Page {
+                revision: "revision".into(),
+                sessions: vec![found],
+                next_cursor: None,
+            }),
+            Some(("root", "epoch")),
+        ));
+        let route = Action::Visit(Route::Session("deep-session".into()));
+        let index = app
+            .commands()
+            .iter()
+            .position(|(action, _)| *action == route)
+            .unwrap();
+        app.palette = Some(index);
+        frame(&mut app, 80, 24);
+        app.palette_sheet_input(&key(KeyCode::Enter));
+        assert!(app.palette.is_none());
+        assert_eq!(
+            app.navigation.current(),
+            Route::Session("deep-session".into())
+        );
+        assert!(
+            app.sessions.items.is_empty(),
+            "search does not populate the sidebar catalog"
+        );
     }
     #[test]
     fn search_and_drag_preserve_captured_commands_drafts_and_published_geometry() {
