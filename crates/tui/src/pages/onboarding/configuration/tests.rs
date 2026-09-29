@@ -227,6 +227,8 @@ fn onboarding197_switching_provider_replaces_both_modes_and_their_edit_history()
         .unwrap()
         .providers
         .push(other);
+    app.apply(Action::Onboard(Command::PickProvider));
+    paint(&mut app, 80, 28);
     app.apply(Action::Onboard(Command::Provider(1)));
     paint(&mut app, 80, 28);
     let form = app.onboarding.dialog.as_ref().unwrap();

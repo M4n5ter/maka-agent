@@ -1476,3 +1476,7 @@ controls-create-workspace = 工作区
 controls-create-found = 已找到会话，可以打开查看当前状态。此次创建的结果尚未确认。
 controls-create-missing = 暂时无法找到会话，此次创建的结果仍未确定。
 controls-open-created = 打开找到的会话
+
+providers-search = 搜索提供商
+providers-search-hint = 名称、提供商 ID 或登录方式
+providers-no-matches = 没有匹配的提供商

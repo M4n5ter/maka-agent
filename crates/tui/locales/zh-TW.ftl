@@ -1476,3 +1476,7 @@ controls-create-workspace = 工作區
 controls-create-found = 已找到對話，可以開啟檢視目前狀態。此次建立的結果尚未確認。
 controls-create-missing = 暫時無法找到對話，此次建立的結果仍未確定。
 controls-open-created = 開啟找到的對話
+
+providers-search = 搜尋供應商
+providers-search-hint = 名稱、供應商 ID 或登入方式
+providers-no-matches = 沒有符合的供應商

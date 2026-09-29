@@ -1476,3 +1476,7 @@ controls-create-workspace = Workspace
 controls-create-found = The session exists. Open it to inspect its current state; the creation result remains unconfirmed.
 controls-create-missing = The session is not available. The creation result remains unknown.
 controls-open-created = Open found session
+
+providers-search = Search providers
+providers-search-hint = Name, provider ID or sign-in method
+providers-no-matches = No matching providers

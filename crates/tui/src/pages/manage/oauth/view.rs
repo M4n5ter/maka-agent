@@ -73,6 +73,26 @@ fn label_width(app: &App) -> u16 {
 /// a sign-in; closing only hides an attempt, which keeps running.
 pub(in crate::pages::manage) fn sheet(app: &App) -> Sheet<Action> {
     let state = &app.management.oauth;
+    if state.picker.open {
+        return state.picker.sheet(
+            app,
+            format!("oauth:{}:providers", state.generation),
+            state
+                .choices
+                .iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    (
+                        choice.label(),
+                        choice.provider.identity.name.clone(),
+                        action(Command::Provider(index)),
+                    )
+                })
+                .collect(),
+            action(Command::BackProvider),
+            app.oauth_enabled(Command::BackProvider),
+        );
+    }
     let step = if state.terminal() || state.not_found {
         "done"
     } else if state.attempt.is_some() {
@@ -158,16 +178,7 @@ pub(in crate::pages::manage) fn sheet(app: &App) -> Sheet<Action> {
 
 /// The provider and method, chosen from a pop-up of every one offered.
 fn provider(app: &App, state: &State) -> Node<Action> {
-    let enabled = app.oauth_enabled(Command::Provider(state.provider));
-    let choices = state
-        .choices
-        .iter()
-        .enumerate()
-        .map(|(index, choice)| ui::Choice {
-            label: choice.label(),
-            action: action(Command::Provider(index)),
-        })
-        .collect();
+    let enabled = app.oauth_enabled(Command::PickProvider);
     Node::row(
         "choice",
         vec![
@@ -192,10 +203,7 @@ fn provider(app: &App, state: &State) -> Node<Action> {
             .size(Size::Fill),
         ],
     )
-    .on(On::Choose {
-        choices,
-        current: Some(state.provider),
-    })
+    .on(On::Activate(action(Command::PickProvider)))
     .enabled(enabled)
 }
 
