@@ -1080,11 +1080,12 @@ where
                                         json!({"kind":"host_path","path":std::env::current_dir()?})
                                     }
                                 };
-                                let input = maka_protocol::session::decode_session_create_input(&json!({
-                                    "sessionId":uuid::Uuid::new_v4().to_string(),
-                                    "workspace":workspace,
-                                    "modelTarget":{"kind":"default"}
-                                }))?;
+                                let input =
+                                    maka_protocol::session::decode_session_create_input(&json!({
+                                        "sessionId":uuid::Uuid::new_v4().to_string(),
+                                        "workspace":workspace,
+                                        "modelTarget":{"kind":"default"}
+                                    }))?;
                                 Ok::<_, Error>(Box::new(client.create_session(input).await?))
                             }
                             .await
