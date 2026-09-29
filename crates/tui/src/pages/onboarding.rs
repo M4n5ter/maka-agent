@@ -34,6 +34,8 @@ use std::collections::BTreeSet;
 pub enum Command {
     Open,
     Close,
+    PickProvider,
+    BackProvider,
     Provider(usize),
     /// Focuses a setup field.
     Field(usize),
@@ -50,7 +52,7 @@ impl Command {
         match self {
             Self::Open => "onboard-title",
             Self::Close => "session-cancel",
-            Self::Provider(_) => "onboard-provider",
+            Self::PickProvider | Self::Provider(_) => "onboard-provider",
             Self::Field(_) => "onboard-title",
             Self::ConfigurationField(_) | Self::ConfigurationChoice(_, _) => {
                 "connection-preferences"
@@ -60,7 +62,7 @@ impl Command {
             Self::Verify => "onboard-verify",
             Self::Toggle(_) => "onboard-models",
             Self::Save => "onboard-save",
-            Self::Back => "onboard-back",
+            Self::Back | Self::BackProvider => "onboard-back",
         }
     }
 }
@@ -113,6 +115,7 @@ impl Onboarding {
 pub struct Form {
     ticket: Ticket,
     provider: usize,
+    picker: crate::providers::picker::Picker,
     providers: Vec<maka_protocol::model_provider::Entry>,
     default_slug: String,
     fields: [Editor; 3],
@@ -176,7 +179,14 @@ impl App {
         if !form.visible || form.blocked || !identity || form.providers.is_empty() {
             return false;
         }
+        if *c == Command::BackProvider {
+            return form.picker.open;
+        }
+        if form.picker.open && !matches!(c, Command::Provider(_)) {
+            return false;
+        }
         match c {
+            Command::PickProvider => form.models.is_none(),
             Command::Verify => {
                 form.models.is_none()
                     && form.fields[0].error.is_none()
@@ -220,7 +230,9 @@ impl App {
             Command::Advanced(advanced) => {
                 form.models.is_none() && *advanced != form.configuration.advanced()
             }
-            Command::Provider(index) => form.models.is_none() && *index < form.providers.len(),
+            Command::Provider(index) => {
+                form.models.is_none() && *index < form.providers.len() && form.picker.offers(*index)
+            }
             _ => false,
         }
     }
@@ -239,6 +251,7 @@ impl App {
                         save: false,
                     },
                     provider: 0,
+                    picker: Default::default(),
                     providers: Vec::new(),
                     default_slug: format!("connection-{}", uuid::Uuid::new_v4().simple()),
                     fields: [
@@ -267,7 +280,10 @@ impl App {
                 };
                 f.error = None;
                 match c {
+                    Command::PickProvider => f.picker.open(),
+                    Command::BackProvider => f.picker.open = false,
                     Command::Provider(index) => {
+                        f.picker.open = false;
                         if index == f.provider {
                             return None;
                         }
@@ -674,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chooser_open_over_a_field_takes_the_click() {
+    fn provider_search_returns_to_the_form_without_editing_hidden_fields() {
         let mut app = App::new(
             "/unused".into(),
             I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
@@ -687,27 +703,42 @@ mod tests {
         app.apply(Action::Onboard(Command::Open));
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
-        app.layer.focus_path("form/rows/provider");
-        app.input(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
+        app.apply(Action::Onboard(Command::Field(0)));
+        app.input(Event::Paste("Keep my name".into()));
+        app.apply(Action::Onboard(Command::PickProvider));
         terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
-        assert!(app.layer.captures());
-        // The chooser's first row lies over another editable field.
-        let owner = app.layer.rect("form/rows/provider").unwrap();
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.input(Event::Mouse(MouseEvent {
-                kind,
-                column: owner.right() - 3,
-                row: owner.y + 2,
-                modifiers: KeyModifiers::NONE,
-            }));
-        }
-        assert!(!app.layer.captures(), "the choice was made");
-        assert_eq!(app.layer.focused_path(), Some("form/rows/provider"));
+        assert!(!app.onboarding_enabled(&Command::Verify));
+        app.input(Event::Paste("NO MATCH".into()));
+        terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .contains("No matching providers")
+        );
+        assert!(app.layer.rect("providers/rows/0").is_none());
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        )));
+        app.input(Event::Paste("OPENAI".into()));
+        terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
+        assert!(app.layer.rect("providers/rows/0").is_some());
+        app.input(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        terminal.draw(|f| crate::view::draw(f, &mut app)).unwrap();
+        let form = app.onboarding.dialog.as_ref().unwrap();
+        assert!(!form.picker.open);
+        assert_eq!(form.fields[0].text(), "Keep my name");
+        assert_eq!(form.provider, 0);
+        assert!(!app.onboarding_enabled(&Command::Provider(0)));
+        app.apply(Action::Onboard(Command::Provider(0)));
+        assert_eq!(
+            app.onboarding.dialog.as_ref().unwrap().fields[0].text(),
+            "Keep my name"
+        );
     }
 }

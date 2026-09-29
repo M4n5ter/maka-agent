@@ -73,6 +73,27 @@ fn label_width(app: &App) -> u16 {
 /// Esc) returns to the form from the models.
 pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     let f = app.onboarding.dialog.as_ref()?;
+    if f.picker.open {
+        return Some(
+            f.picker.sheet(
+                app,
+                format!("onboard:{}:providers", f.ticket.generation),
+                f.providers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, provider)| {
+                        (
+                            provider.descriptor.label.clone(),
+                            provider.identity.name.clone(),
+                            action(Command::Provider(index)),
+                        )
+                    })
+                    .collect(),
+                action(Command::BackProvider),
+                app.onboarding_enabled(&Command::BackProvider),
+            ),
+        );
+    }
     let step = if f.models.is_some() {
         "models"
     } else if f.providers.is_empty() {
@@ -131,16 +152,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             );
     } else {
         let provider = f.providers.get(f.provider);
-        let choices = f
-            .providers
-            .iter()
-            .enumerate()
-            .map(|(index, provider)| ui::Choice {
-                label: provider.descriptor.label.clone(),
-                action: action(Command::Provider(index)),
-            })
-            .collect();
-        let enabled = app.onboarding_offered(&Command::Provider(f.provider));
+        let enabled = app.onboarding_offered(&Command::PickProvider);
         let mut rows = vec![
             Node::row(
                 "provider",
@@ -171,10 +183,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                     .size(Size::Fill),
                 ],
             )
-            .on(On::Choose {
-                choices,
-                current: Some(f.provider),
-            })
+            .on(On::Activate(action(Command::PickProvider)))
             .enabled(enabled),
         ];
         let field_width = ui::content_width(app.frame_size.map_or(80, |(width, _)| width))

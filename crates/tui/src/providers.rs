@@ -17,6 +17,8 @@
  * under the License.
  */
 
+pub(crate) mod picker;
+
 use maka_client::ProviderDirectory;
 use maka_protocol::model_provider::{Entry, Identity};
 

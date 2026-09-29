@@ -445,7 +445,7 @@ impl<M: Clone> Layer<M> {
                         | KeyModifiers::SUPER
                         | KeyModifiers::META,
                 ) {
-                    return Outcome::ignored();
+                    return self.surface.input(event);
                 }
                 if key.code == KeyCode::Esc && !self.surface.captures() {
                     return Outcome::emit(back.unwrap_or(dismiss));
@@ -475,6 +475,7 @@ impl<M: Clone> Layer<M> {
                 }
                 consumed(self.surface.input(event))
             }
+            Event::Paste(_) => consumed(self.surface.input(event)),
             Event::Resize(..) | Event::FocusLost | Event::FocusGained => self.surface.input(event),
             _ => Outcome::handled(false),
         }

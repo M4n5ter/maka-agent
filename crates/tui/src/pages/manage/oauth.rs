@@ -56,6 +56,8 @@ impl Choice {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    PickProvider,
+    BackProvider,
     Provider(usize),
     Identity,
     Field(usize),
@@ -69,7 +71,8 @@ pub enum Command {
 impl Command {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Provider(_) => "onboard-provider",
+            Self::PickProvider | Self::Provider(_) => "onboard-provider",
+            Self::BackProvider => "onboard-back",
             Self::Identity => "oauth-identity",
             Self::Field(0) => "oauth-name",
             Self::Field(1) => "oauth-slug",
@@ -174,6 +177,7 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Reque
 pub struct State {
     root: String,
     provider: usize,
+    picker: crate::providers::picker::Picker,
     choices: Vec<Choice>,
     existing: Option<maka_protocol::configuration::ConnectionCredentialTarget>,
     connection_label: String,
@@ -232,6 +236,7 @@ impl State {
     }
 
     fn reset(&mut self) {
+        self.picker.open = false;
         self.attempt = None;
         self.prepared = None;
         self.projection = None;
@@ -295,6 +300,7 @@ impl State {
 
 impl State {
     fn refresh_choices(&mut self, catalog: &crate::providers::Providers) {
+        self.picker.open = false;
         self.choices = catalog
             .entries()
             .iter()
@@ -456,6 +462,12 @@ impl App {
         {
             return false;
         }
+        if command == Command::BackProvider {
+            return state.picker.open;
+        }
+        if state.picker.open && !matches!(command, Command::Provider(_)) {
+            return false;
+        }
         match command {
             Command::CopyLink => state.display.is_some(),
             Command::CopyCode => state
@@ -475,7 +487,11 @@ impl App {
             // user may be focused on: asking again queues behind it, and an
             // availability answer is kept only for the provider it was for.
             _ if state.requested.is_some() => false,
-            Command::Provider(index) => index < state.choices.len() && state.attempt.is_none(),
+            Command::PickProvider => !state.choices.is_empty() && state.attempt.is_none(),
+            Command::BackProvider => false,
+            Command::Provider(index) => {
+                index < state.choices.len() && state.attempt.is_none() && state.picker.offers(index)
+            }
             Command::Cancel => state.attempt.is_some() && !state.terminal(),
             Command::Check => !state.terminal(),
             _ if state.pending.is_some() => false,
@@ -493,7 +509,10 @@ impl App {
         let state = &mut self.management.oauth;
         state.copy_note = None;
         match command {
+            Command::PickProvider => state.picker.open(),
+            Command::BackProvider => state.picker.open = false,
             Command::Provider(index) => {
+                state.picker.open = false;
                 if state.provider == index {
                     return None;
                 }
@@ -795,6 +814,47 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn provider_search_selects_original_index_and_cancels_without_changes() {
+        let mut app = app();
+        render(&mut app, 80, 24);
+        app.apply(Action::Manage(Manage::Oauth(Command::PickProvider)));
+        render(&mut app, 80, 24);
+        app.input(Event::Paste("API KEY".into()));
+        assert!(
+            !app.oauth_enabled(Command::Provider(0)),
+            "filtered rows are immediately disabled before repaint"
+        );
+        app.apply(Action::Manage(Manage::Oauth(Command::Provider(0))));
+        assert!(app.management.oauth.picker.open);
+        render(&mut app, 80, 24);
+        assert!(!app.oauth_enabled(Command::Begin));
+        assert!(app.layer.rect("providers/rows/0").is_none());
+        let hit = app.layer.rect("providers/rows/3").unwrap();
+        app.input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        render(&mut app, 80, 24);
+        assert_eq!(app.management.oauth.provider, 3);
+        assert!(!app.management.oauth.picker.open);
+        let name = app.management.oauth.identity.fields[0].text().to_owned();
+        app.apply(Action::Manage(Manage::Oauth(Command::PickProvider)));
+        render(&mut app, 44, 22);
+        app.input(Event::Paste("copilot".into()));
+        render(&mut app, 44, 22);
+        assert!(app.layer.rect("providers/rows/1").is_some());
+        app.input(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        render(&mut app, 80, 24);
+        assert_eq!(app.management.oauth.provider, 3);
+        assert_eq!(app.management.oauth.identity.fields[0].text(), name);
+        assert!(!app.oauth_enabled(Command::Provider(1)));
+        app.apply(Action::Manage(Manage::Oauth(Command::Provider(1))));
+        assert_eq!(app.management.oauth.provider, 3);
+    }
+
     fn login(app: &App, phase: Phase) -> LoginProjection {
         let attempt = app.management.oauth.attempt.as_ref().unwrap();
         let (provider, slug) = match &attempt.target {
@@ -813,6 +873,10 @@ mod tests {
     }
 
     fn act(app: &mut App, command: Command) {
+        if matches!(command, Command::Provider(_)) {
+            app.apply(Action::Manage(Manage::Oauth(Command::PickProvider)));
+            render(app, 80, 24);
+        }
         assert!(app.oauth_enabled(command), "{command:?}");
         app.apply(Action::Manage(Manage::Oauth(command)));
     }
