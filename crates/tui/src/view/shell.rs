@@ -25,6 +25,7 @@ use crate::{
     ui::{Align, Context, Node, On, Size, Tone},
 };
 use ratatui::{Frame, layout::Rect};
+use unicode_width::UnicodeWidthStr;
 
 pub(crate) mod controls;
 mod input;
@@ -106,7 +107,37 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             }),
         _ => None,
     };
-    let right_width = (actions.len() as u16 + 1 + u16::from(object_menu.is_some())) * 3 + 5;
+    let actions: Vec<_> = actions
+        .into_iter()
+        .map(|value| {
+            let key = format!("{value:?}");
+            if area.width >= 80
+                && matches!(&value, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment())
+            {
+                let label = app.i18n.text(if app.management.oauth.enrollment_label() == "oauth-resume" {
+                    "oauth-resume"
+                } else {
+                    "oauth-connect-short"
+                });
+                let width = label.width() as u16 + 2;
+                let node = controls::compact(
+                    key,
+                    label,
+                    Tone::Muted,
+                    value.clone(),
+                    app.enabled(&value),
+                    action_label(app, &value),
+                )
+                .size(Size::Fixed(width));
+                (node, width)
+            } else {
+                (action(app, key, value), 3)
+            }
+        })
+        .collect();
+    let right_width = actions.iter().map(|(_, width)| width).sum::<u16>()
+        + (1 + u16::from(object_menu.is_some())) * 3
+        + 5;
     let side = right_width.max(6);
     let balanced = session && area.width >= side.saturating_mul(2).saturating_add(8);
     let left_width = if balanced { side } else { 6 };
@@ -180,11 +211,7 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if balanced && side > right_width {
         right.push(Node::text("space", vec![]).size(Size::Fixed(side - right_width)));
     }
-    right.extend(
-        actions
-            .into_iter()
-            .map(|value| action(app, format!("{value:?}"), value)),
-    );
+    right.extend(actions.into_iter().map(|(node, _)| node));
     if let Some(menu) = object_menu {
         right.push(menu);
     }
