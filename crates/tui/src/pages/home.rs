@@ -30,6 +30,7 @@ use ratatui::{Frame, layout::Rect};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     New,
+    RetrySetup,
     Open(String),
     Connect,
     Host,
@@ -78,12 +79,49 @@ fn tree(app: &App, width: u16, directory: bool) -> Node<Message> {
     ];
     match &app.connection {
         ConnectionState::Connected { .. } => {
-            content.push(button(
-                "new",
-                format!("+ {}", i18n.text("sidebar-new-session")),
-                "Ctrl+N",
-                Message::New,
-            ));
+            use crate::pages::connections::Setup;
+            match app.connections.setup() {
+                Setup::Loading => content.push(
+                    Node::text(
+                        "setup-loading",
+                        vec![(i18n.text("connections-loading"), Tone::Subtle)],
+                    )
+                    .align(Align::Center),
+                ),
+                Setup::Failed => {
+                    content.push(
+                        Node::text(
+                            "setup-failed",
+                            vec![(i18n.text("home-setup-failed"), Tone::Warning)],
+                        )
+                        .align(Align::Center),
+                    );
+                    content.push(button(
+                        "retry-setup",
+                        i18n.text("home-retry"),
+                        "",
+                        Message::RetrySetup,
+                    ));
+                }
+                Setup::NeedsConnection | Setup::NeedsDefault => {
+                    let (note, action) = if app.connections.setup() == Setup::NeedsConnection {
+                        ("home-needs-connection", "route-connections")
+                    } else {
+                        ("home-needs-default", "default-model-title")
+                    };
+                    content.push(
+                        Node::text("setup-note", vec![(i18n.text(note), Tone::Subtle)])
+                            .align(Align::Center),
+                    );
+                    content.push(button("setup", i18n.text(action), "Ctrl+N", Message::New));
+                }
+                Setup::Ready => content.push(button(
+                    "new",
+                    format!("+ {}", i18n.text("sidebar-new-session")),
+                    "Ctrl+N",
+                    Message::New,
+                )),
+            }
             if let Some(action) = app.new_executor_session_action() {
                 content.push(
                     button(
@@ -234,6 +272,10 @@ impl App {
     pub(crate) fn home_action(&mut self, message: Message) -> Option<Action> {
         match message {
             Message::New => self.apply(Action::CreateSession),
+            Message::RetrySetup => {
+                self.connections.refresh();
+                None
+            }
             Message::Open(id) => self.apply(Action::Visit(Route::Session(id))),
             Message::Connect => self.apply(Action::Connect),
             Message::Host => self.apply(Action::Host),

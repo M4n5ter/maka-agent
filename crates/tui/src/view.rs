@@ -157,6 +157,8 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         }
     } else if let Some(Notice::Clipboard { key, .. } | Notice::Local(key)) = &app.notice {
         app.i18n.text(key)
+    } else if let Some(Notice::CreateFailed(_)) = &app.notice {
+        app.i18n.text("session-create-failed")
     } else if let Some(Notice::Diagnostic(_)) = &app.notice {
         app.i18n.text("feedback-host-failed")
     } else if app
@@ -934,6 +936,20 @@ mod tests {
             root_id: "root".into(),
             epoch: "epoch".into(),
         };
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Ok(serde_json::json!({
+            "kind":"page", "revision":1, "connectionCount":1,
+            "defaultTarget":{"connectionId":"connection", "modelId":"model"},
+            "nextCursor":null,
+            "items":[
+                {"kind":"connection", "connectionIndex":0,
+                 "connectionId":"connection", "revision":1, "slug":"provider",
+                 "name":"Provider", "provider":crate::providers::fixtures::entry("openai-compatible", false).identity,
+                 "configuration":{}, "enabled":true, "enabledModelIdCount":1},
+                {"kind":"enabled_model_id", "connectionIndex":0, "itemIndex":0, "modelId":"model"}
+            ]
+        })));
         let mut terminal = render(&mut app, 120, 40);
         let anchor = app.chrome.header.rect("header/left/sidebar").unwrap();
         let covered = locate(&terminal, "New session");

@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-oauth-title = 登录服务商账号
+oauth-title = 使用账号或 API key 连接
 oauth-identity = 连接详情
 oauth-name = 显示名称
 oauth-slug = 连接标识
@@ -285,6 +285,7 @@ chat-send-unconfirmed = 尚未确认 · 草稿已保留；Ctrl+R 再次核对 ·
 chat-send-cancelled = Host 已确认取消 · 草稿已保留；Enter 作为新消息发送
 chat-send-not-admitted = 未送达 · 草稿已保留；Enter 发送
 session-create = 在当前目录新建会话 · Ctrl+N
+session-create-failed = 新建会话失败 · 查看详情
 session-new = 新对话
 shell-error = 错误 · { $error }
 interaction-open = 审阅待处理请求 · 编辑器外 Ctrl+A
@@ -944,6 +945,9 @@ sidebar-host-disconnected = 未连接
 sidebar-host-hint = 查看 Host 详情
 sidebar-project = 项目
 home-recent = 最近
+home-needs-connection = 添加模型连接后即可新建会话。
+home-needs-default = 选择默认模型后即可新建会话。
+home-setup-failed = 未能读取模型连接。
 home-host-failed = Host 未能启动
 home-retry = 重试
 list-retry = 重试

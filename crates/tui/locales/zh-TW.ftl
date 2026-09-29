@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-oauth-title = 登入服務商帳號
+oauth-title = 使用帳號或 API key 連線
 oauth-identity = 連線詳情
 oauth-name = 顯示名稱
 oauth-slug = 連線識別
@@ -285,6 +285,7 @@ chat-send-unconfirmed = 尚未確認 · 草稿已保留；Ctrl+R 再次核對 ·
 chat-send-cancelled = Host 已確認取消 · 草稿已保留；Enter 作為新訊息傳送
 chat-send-not-admitted = 未送達 · 草稿已保留；Enter 傳送
 session-create = 在目前目錄建立工作階段 · Ctrl+N
+session-create-failed = 建立工作階段失敗 · 查看詳情
 session-new = 新對話
 shell-error = 錯誤 · { $error }
 interaction-open = 審閱待處理請求 · 編輯器外 Ctrl+A
@@ -944,6 +945,9 @@ sidebar-host-disconnected = 未連線
 sidebar-host-hint = 查看 Host 詳情
 sidebar-project = 專案
 home-recent = 最近
+home-needs-connection = 新增模型連線後即可建立工作階段。
+home-needs-default = 選擇預設模型後即可建立工作階段。
+home-setup-failed = 無法讀取模型連線。
 home-host-failed = Host 無法啟動
 home-retry = 重試
 list-retry = 重試

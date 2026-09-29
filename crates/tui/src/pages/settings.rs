@@ -647,7 +647,7 @@ fn host(app: &App) -> Vec<Node<Message>> {
         details.push(safe(error));
     }
     match &app.notice {
-        Some(Notice::Diagnostic(error)) => details.push(safe(error)),
+        Some(Notice::Diagnostic(error) | Notice::CreateFailed(error)) => details.push(safe(error)),
         Some(Notice::Catalog { kind, revision }) => details.push(i18n.format(
             "host-notification",
             &[("kind", &safe(kind)), ("revision", &safe(revision))],

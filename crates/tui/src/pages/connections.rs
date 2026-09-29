@@ -67,6 +67,15 @@ pub struct Row {
     pub default_model: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setup {
+    Loading,
+    NeedsConnection,
+    NeedsDefault,
+    Ready,
+    Failed,
+}
+
 /// A bounded overview, not a second model inventory or credential store.
 #[derive(Default)]
 pub struct Connections {
@@ -75,6 +84,7 @@ pub struct Connections {
     pub selected: Option<String>,
     pub loading: bool,
     pub error: bool,
+    summary: Option<(u64, bool)>,
     loaded: bool,
     requested: bool,
     restart: bool,
@@ -87,6 +97,15 @@ pub struct Connections {
     previous: VecDeque<u64>,
 }
 impl Connections {
+    pub fn setup(&self) -> Setup {
+        match self.summary {
+            Some((0, _)) => Setup::NeedsConnection,
+            Some((_, false)) => Setup::NeedsDefault,
+            Some((_, true)) => Setup::Ready,
+            None if self.error => Setup::Failed,
+            None => Setup::Loading,
+        }
+    }
     pub fn model_query(&self, id: &str) -> Option<Query> {
         self.ready().then_some(())?;
         let index = self.rows.iter().position(|row| row.id == id)?;
@@ -100,6 +119,8 @@ impl Connections {
     pub fn refresh(&mut self) {
         self.restart = true;
         self.requested = true;
+        self.error = false;
+        self.summary = None;
     }
     pub fn ready(&self) -> bool {
         self.loaded && !self.loading && !self.requested && !self.error
@@ -179,6 +200,7 @@ impl Connections {
         }
         self.revision = page["revision"].as_u64();
         let count = page["connectionCount"].as_u64().expect("checked count");
+        let summary = (count, !page["defaultTarget"].is_null());
         for item in page["items"].as_array().expect("checked page") {
             if item["kind"] == "enabled_model_id" {
                 let Some(row) = self.partial.as_mut().filter(|row| {
@@ -234,6 +256,7 @@ impl Connections {
                 break;
             }
         }
+        self.summary = Some(summary);
         // The existing typed cursor supports seeking a known connection header
         // within this revision. Do not fetch/store all its discovery models.
         self.next = (self.scan < count).then_some(self.scan);
@@ -338,6 +361,102 @@ mod tests {
     }
 
     #[test]
+    fn new_session_routes_to_the_missing_model_setup_without_creating_a_session() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.connections.refresh();
+        assert_eq!(app.connections.setup(), Setup::Loading);
+        assert!(app.apply(Action::CreateSession).is_none());
+        assert!(!app.creating);
+
+        assert_eq!(app.connections.query(), Some(Query::Start));
+        app.connections.complete(Ok(json!({
+            "kind":"page", "revision":1, "connectionCount":0,
+            "defaultTarget":null, "items":[], "nextCursor":null
+        })));
+        assert_eq!(app.connections.setup(), Setup::NeedsConnection);
+        app.apply(Action::CreateSession);
+        assert_eq!(app.navigation.current(), Route::Connections);
+        assert!(!app.creating);
+
+        app.apply(Action::Visit(Route::Workspace));
+        app.connections.refresh();
+        assert_eq!(app.connections.query(), Some(Query::Start));
+        let mut configured = page(2, 0, 1, 1);
+        configured["defaultTarget"] = Value::Null;
+        app.connections.complete(Ok(configured));
+        assert_eq!(app.connections.setup(), Setup::NeedsDefault);
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.management.dialog.is_some());
+        assert!(!app.creating);
+    }
+
+    #[test]
+    fn failed_or_replaced_catalog_read_never_authorizes_session_creation() {
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.connections.refresh();
+        app.connections.query();
+        app.connections.complete(Err("catalog unavailable".into()));
+        assert_eq!(app.connections.setup(), Setup::Failed);
+        assert!(app.apply(Action::CreateSession).is_none());
+        assert!(!app.creating);
+
+        app.connections.query();
+        app.connections.refresh();
+        app.connections.complete(Ok(page(1, 0, 1, 1)));
+        assert_eq!(app.connections.setup(), Setup::Loading);
+        app.connections.query();
+        app.connections.complete(Ok(page(2, 0, 1, 1)));
+        assert_eq!(app.connections.setup(), Setup::Ready);
+        assert_eq!(
+            app.apply(Action::CreateSession),
+            Some(Action::CreateSession)
+        );
+    }
+
+    #[test]
+    fn overview_page_failure_does_not_discard_validated_setup_metadata() {
+        let mut connections = Connections::default();
+        connections.refresh();
+        assert_eq!(connections.query(), Some(Query::Start));
+        let mut partial = page(7, 0, 1, 18);
+        partial["items"][0]["enabledModelIdCount"] = json!(2);
+        connections.complete(Ok(partial));
+        assert_eq!(connections.setup(), Setup::Ready);
+        assert!(connections.query().is_some());
+        connections.complete(Err("later page unavailable".into()));
+        assert_eq!(connections.setup(), Setup::Ready);
+        assert!(!connections.ready());
+    }
+
+    #[test]
+    fn malformed_first_page_does_not_authorize_session_creation() {
+        let mut connections = Connections::default();
+        connections.refresh();
+        assert_eq!(connections.query(), Some(Query::Start));
+        let mut malformed = page(7, 0, 1, 1);
+        malformed["items"][0]["connectionIndex"] = json!(1);
+        connections.complete(Ok(malformed));
+        assert_eq!(connections.setup(), Setup::Failed);
+    }
+
+    #[test]
     fn connection_overview_skips_inventory_bounds_pages_and_preserves_nested_navigation() {
         let mut app = App::new(
             "/unused".into(),
@@ -360,6 +479,8 @@ mod tests {
         let mut partial = page(7, 0, 1, 18);
         partial["items"][0]["enabledModelIdCount"] = json!(2);
         app.connections.complete(Ok(partial));
+        assert_eq!(app.connections.setup(), Setup::Ready);
+        assert!(!app.connections.ready());
         assert_eq!(
             app.connections.query(),
             Some(Query::Continue {
