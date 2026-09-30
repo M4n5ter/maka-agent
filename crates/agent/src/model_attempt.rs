@@ -219,16 +219,27 @@ pub(super) async fn execute(
         .await;
         let delay = match &result {
             Err(RunError::Model(maka_model::ModelError::Provider(failure)))
-                if failure.replay_safe() && failures < 9 =>
+                if failure.replay_safe() =>
             {
-                let base_ms = 1_000u64 << failures.min(5);
-                failure.retry_after().unwrap_or_else(|| {
-                    std::time::Duration::from_millis(base_ms + fastrand::u64(0..=base_ms / 4))
-                })
+                if failures >= 9 {
+                    if cancellation.is_cancelled() {
+                        return Err(RunError::Cancelled);
+                    }
+                    if !lane.try_switch_fallback_transport() {
+                        return result;
+                    }
+                    failures = 0;
+                    failure.retry_after().unwrap_or_default()
+                } else {
+                    let base_ms = 1_000u64 << failures.min(5);
+                    failures += 1;
+                    failure.retry_after().unwrap_or_else(|| {
+                        std::time::Duration::from_millis(base_ms + fastrand::u64(0..=base_ms / 4))
+                    })
+                }
             }
             _ => return result,
         };
-        failures += 1;
         // execute_once has drained the worker and committed ModelInterrupted.
         // A local/storage error cannot reach this wait or authorize another send.
         tokio::select! {

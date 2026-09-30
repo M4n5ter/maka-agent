@@ -33,6 +33,14 @@ struct BoundSession {
     session: Arc<dyn Session>,
 }
 impl Conversation {
+    pub fn try_switch_fallback_transport(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|bound| bound.session.try_switch_fallback_transport())
+    }
+
     pub(crate) async fn session(
         &self,
         binding: &Binding,

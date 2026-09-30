@@ -47,6 +47,13 @@ struct Native {
     lane: Option<Lane>,
 }
 impl Session for Native {
+    fn try_switch_fallback_transport(&self) -> bool {
+        self.lane.as_ref().is_some_and(|lane| {
+            lane.transport
+                .try_switch_fallback_transport(&self.transport)
+        })
+    }
+
     fn stream(&self, request: Request, context: Context) -> BoxFuture<'static, Result<(), Error>> {
         Box::pin(crate::stream(
             request,

@@ -298,3 +298,82 @@ async fn http_ok(listener: &TcpListener) -> Value {
     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
     body
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_reads_preserve_diagnostics_and_decoder_replay_safety() {
+    use maka_runtime::model::error::{ModelError, ProviderFailureReason};
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    tokio::time::timeout(Duration::from_secs(15), async {
+        for mode in ["empty", "text", "final_text", "local_intent", "provider_effect", "policy", "size", "reset"] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/v1", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut socket = accept(&listener).await;
+                wire(&mut socket, "interrupted").await;
+                match mode {
+                    "text" | "final_text" => {
+                        for event in events("partial", "partial text").into_iter().take(if mode == "text" {3} else {4}) {
+                            socket.send(Message::Text(event.to_string().into())).await.unwrap();
+                        }
+                    }
+                    "local_intent" => {
+                        socket.send(Message::Text(json!({"type":"response.output_item.done","item":{"type":"function_call","id":"intent","call_id":"unaccepted","name":"echo","arguments":"{}"}}).to_string().into())).await.unwrap();
+                    }
+                    "provider_effect" => {
+                        socket.send(Message::Text(json!({"type":"response.future_call.in_progress"}).to_string().into())).await.unwrap();
+                    }
+                    _ => {}
+                }
+                if mode == "reset" {
+                    socket.get_ref().set_zero_linger().unwrap();
+                    return;
+                }
+                socket.send(Message::Close(Some(CloseFrame {
+                    code: match mode { "policy" => CloseCode::Policy, "size" => CloseCode::Size, _ => CloseCode::Restart },
+                    reason: if mode == "policy" { "request refused" } else { "provider restarting" }.into(),
+                }))).await.unwrap();
+                let _ = socket.next().await;
+                if mode == "size" {
+                    http_ok(&listener).await;
+                    http_ok(&listener).await;
+                } else {
+                    assert!(listener.accept().now_or_never().is_none(), "transport itself never replays");
+                }
+            });
+            let executor = ModelExecutor::new(1, Duration::from_secs(5)).unwrap();
+            let lane = Conversation::default();
+            assert!(!lane.try_switch_fallback_transport());
+            let input = || {
+                let mut input = request(&base, "interrupted");
+                if mode == "size" { input.provider.adapter = Some(maka_providers::codex::ADAPTER.into()); }
+                input
+            };
+            let mut stream = executor.stream_in_conversation(input(), CancellationToken::new(), Some(lane.clone())).await.unwrap();
+            let mut failure = None;
+            while let Some(event) = stream.next().await {
+                if let Err(error) = event { failure = Some(error); break; }
+            }
+            stream.cancel_and_wait().await;
+            let failure = failure.expect("interrupted request must not fabricate completion");
+            if mode == "policy" {
+                assert!(matches!(&failure, ModelError::Adapter(message) if message.contains("1008") && message.contains("request refused")), "{failure}");
+            } else {
+                let ModelError::Provider(failure) = failure else { panic!("{failure}"); };
+                assert_eq!(failure.reason(), ProviderFailureReason::StreamTruncated);
+                assert_eq!(failure.replay_safe(), matches!(mode, "empty" | "text" | "size" | "reset"));
+                if mode != "reset" {
+                    assert!(failure.to_string().contains(if mode == "size" {"1009"} else {"1012"}) && failure.to_string().contains("provider restarting"), "{failure}");
+                }
+            }
+            if mode == "size" {
+                // The retry owner chooses fallback, including through the
+                // subscription wrapper. Selection is one-way and route scoped.
+                assert!(lane.try_switch_fallback_transport());
+                assert!(!lane.try_switch_fallback_transport());
+                generate(&executor, &lane, input()).await;
+                generate(&executor, &Conversation::default(), input()).await;
+            }
+            server.await.unwrap();
+        }
+    }).await.unwrap();
+}

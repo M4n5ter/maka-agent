@@ -47,6 +47,7 @@ pub struct ResponsesLane(Arc<Mutex<Lane>>);
 #[derive(Default)]
 struct Lane {
     idle: Option<Idle>,
+    route: Option<u64>,
     fallback: bool,
     busy: bool,
 }
@@ -56,10 +57,23 @@ struct Idle {
     headers: BTreeMap<String, String>,
     network: u64,
     baseline: Option<Baseline>,
-    route: u64,
 }
 
 impl ResponsesLane {
+    pub fn try_switch_fallback_transport(&self, transport: &Shared) -> bool {
+        let mut lane = self.0.lock().unwrap();
+        if lane.busy || lane.fallback {
+            return false;
+        }
+        let Some(route) = lane.route else {
+            return false;
+        };
+        lane.fallback = true;
+        lane.idle.take();
+        transport.defer(route, Instant::now());
+        true
+    }
+
     pub fn response_id(&self) -> Option<String> {
         let lane = self.0.lock().unwrap();
         if lane.busy || lane.fallback {
@@ -134,6 +148,7 @@ impl Exchange {
                 return Ok(Some(Prepared::new(body, None)?.full));
             }
             lane.busy = true;
+            lane.route = Some(route);
             self.owns_lane.store(true, Ordering::Release);
             lane.idle.take()
         };
@@ -152,7 +167,9 @@ impl Exchange {
         }
         let reuse = idle.is_some();
         if !reuse && self.transport.deferred(route, Instant::now()) {
-            self.lane.0.lock().unwrap().busy = false;
+            let mut lane = self.lane.0.lock().unwrap();
+            lane.busy = false;
+            lane.fallback = true;
             self.owns_lane.store(false, Ordering::Release);
             return Ok(Some(prepared.full));
         }
@@ -165,7 +182,6 @@ impl Exchange {
                     headers,
                     network: self.network.identity(),
                     baseline: None,
-                    route,
                 },
                 _ => {
                     if !self.cancellation.is_cancelled() {
@@ -246,13 +262,20 @@ impl Exchange {
                 Ok(Some(text))
             }
             Err(error) => {
-                if matches!(error, ReadError::Transport(_)) && !self.cancellation.is_cancelled() {
-                    self.transport.defer(connection.route, Instant::now());
-                }
+                let reconnect = matches!(error, ReadError::Interrupted(_));
                 active.take();
                 let mut lane = self.lane.0.lock().unwrap();
+                if !reconnect
+                    && !matches!(error, ReadError::Cancelled)
+                    && !self.cancellation.is_cancelled()
+                    && let Some(route) = lane.route
+                {
+                    self.transport.defer(route, Instant::now());
+                }
                 lane.busy = false;
-                lane.fallback = true;
+                // A retry gets a fresh socket and full request. Only the caller
+                // can select fallback after exhausting its stream retry budget.
+                lane.fallback = !reconnect;
                 self.owns_lane.store(false, Ordering::Release);
                 Err(error.into_error())
             }

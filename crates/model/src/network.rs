@@ -286,7 +286,7 @@ impl Socket for Connection {
             tokio::select! {
                 biased;
                 _ = self.cancelled.cancelled() => Err(Error::Cancelled),
-                result = write.send(frame) => result.map_err(|_| Error::Adapter("model WebSocket send failed".into())),
+                result = write.send(frame) => result.map_err(|cause| Error::Adapter(format!("model WebSocket send failed: {cause}"))),
             }
         })
     }
@@ -312,15 +312,39 @@ impl Socket for Connection {
                             tokio::select! {
                                 biased;
                                 _ = self.cancelled.cancelled() => return Err(Error::Cancelled),
-                                result = write.flush() => result.map_err(|_| {
-                                    Error::Adapter("model WebSocket pong failed".into())
-                                })?,
+                                result = write.flush() => result.map_err(|cause| websocket_read_failure("pong", cause))?,
                             }
                         }
                     }
                     Some(Ok(Wire::Pong(_))) => {}
-                    Some(Ok(Wire::Close(_))) | None => return Ok(None),
-                    _ => return Err(Error::Adapter("model WebSocket receive failed".into())),
+                    Some(Ok(Wire::Close(close))) => {
+                        let interrupted = close.as_ref().is_none_or(|close| {
+                            matches!(u16::from(close.code), 1000 | 1001 | 1009 | 1011..=1014)
+                        });
+                        let detail = close.map_or_else(
+                            || "without a close status".into(),
+                            |close| {
+                                format!("with code {}: {}", u16::from(close.code), close.reason)
+                            },
+                        );
+                        let message = format!("model WebSocket closed {detail}");
+                        if !interrupted {
+                            return Err(Error::Adapter(message));
+                        }
+                        return Err(Error::Provider(ProviderFailure::new(
+                            ProviderFailureReason::StreamTruncated,
+                            message,
+                            false, // The protocol decoder, not socket I/O, decides replay safety.
+                            None,
+                        )));
+                    }
+                    None => return Ok(None),
+                    Some(Err(cause)) => return Err(websocket_read_failure("receive", cause)),
+                    Some(Ok(_)) => {
+                        return Err(Error::Adapter(
+                            "model WebSocket returned an unsupported frame".into(),
+                        ));
+                    }
                 }
             }
         })
@@ -334,8 +358,47 @@ impl Socket for Connection {
         })
     }
 }
+fn websocket_read_failure(operation: &str, cause: tokio_tungstenite::tungstenite::Error) -> Error {
+    use tokio_tungstenite::tungstenite::{Error as WsError, error::ProtocolError};
+    let transient = match &cause {
+        WsError::ConnectionClosed
+        | WsError::AlreadyClosed
+        | WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => true,
+        WsError::Io(cause) => transient_io(cause.kind()),
+        _ => false,
+    };
+    let message = format!("model WebSocket {operation} failed: {cause}");
+    if transient {
+        Error::Provider(ProviderFailure::new(
+            ProviderFailureReason::Network,
+            message,
+            false,
+            None,
+        ))
+    } else {
+        Error::Adapter(message)
+    }
+}
+
+fn transient_io(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        kind,
+        ErrorKind::ConnectionRefused
+            | ErrorKind::UnexpectedEof
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::NotConnected
+            | ErrorKind::BrokenPipe
+            | ErrorKind::TimedOut
+            | ErrorKind::HostUnreachable
+            | ErrorKind::NetworkUnreachable
+            | ErrorKind::NetworkDown
+    )
+}
+
 pub(super) fn failure(error: reqwest::Error) -> Error {
-    use std::{error::Error as _, io::ErrorKind};
+    use std::error::Error as _;
     let mut transient = error.is_timeout() || error.is_dns();
     let mut cause = error.source();
     while let Some(error) = cause {
@@ -343,19 +406,7 @@ pub(super) fn failure(error: reqwest::Error) -> Error {
             transient |= error.is_closed() || error.is_incomplete_message();
         }
         if let Some(error) = error.downcast_ref::<std::io::Error>() {
-            transient |= matches!(
-                error.kind(),
-                ErrorKind::ConnectionRefused
-                    | ErrorKind::UnexpectedEof
-                    | ErrorKind::ConnectionReset
-                    | ErrorKind::ConnectionAborted
-                    | ErrorKind::NotConnected
-                    | ErrorKind::BrokenPipe
-                    | ErrorKind::TimedOut
-                    | ErrorKind::HostUnreachable
-                    | ErrorKind::NetworkUnreachable
-                    | ErrorKind::NetworkDown
-            );
+            transient |= transient_io(error.kind());
         }
         cause = error.source();
     }

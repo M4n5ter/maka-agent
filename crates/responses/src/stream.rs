@@ -133,9 +133,20 @@ async fn run(
         {
             Some(full) => body = full,
             None => {
-                while let Some(frame) = wait(idle_timeout, exchange.next())
-                    .await?
-                    .map_err(failure)?
+                while let Some(frame) =
+                    wait(idle_timeout, exchange.next())
+                        .await?
+                        .map_err(|error| match error {
+                            crate::Error::Interrupted(message) => {
+                                ModelError::Provider(ProviderFailure::new(
+                                    ProviderFailureReason::StreamTruncated,
+                                    message,
+                                    decoder.replay_safe,
+                                    None,
+                                ))
+                            }
+                            error => failure(error),
+                        })?
                 {
                     sender.progress();
                     let value = serde_json::from_str(&frame).map_err(|_| {

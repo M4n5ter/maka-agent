@@ -83,6 +83,12 @@ pub struct Confirmation {
 /// Disposable per-conversation optimization state, never a history authority.
 pub trait Session: Send + Sync {
     fn stream(&self, request: Request, context: Context) -> BoxFuture<'static, Result<(), Error>>;
+    /// Select an unused fallback after the caller exhausts replay-safe retries
+    /// and drains the failed stream. Returns true only when transport changes;
+    /// this never sends a request or authorizes replay itself.
+    fn try_switch_fallback_transport(&self) -> bool {
+        false
+    }
     fn needs_confirmation(&self) -> bool {
         false
     }

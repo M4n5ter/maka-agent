@@ -74,6 +74,10 @@ impl ProviderAdapter for Codex {
 
 struct Subscription(Arc<dyn Session>);
 impl Session for Subscription {
+    fn try_switch_fallback_transport(&self) -> bool {
+        self.0.try_switch_fallback_transport()
+    }
+
     fn stream(
         &self,
         mut request: Request,

@@ -376,6 +376,13 @@ impl Decoder {
         if text.len() > part.text.len() {
             self.delta(id.clone(), text[part.text.len()..].into(), kind, out)?;
         }
+        // The canonical retry boundary cannot discard opaque replay carriers.
+        // Plain text deltas remain replayable; finalized provider metadata does not.
+        if options.as_ref().is_some_and(|value| {
+            !value.is_null() && value.as_object().is_none_or(|fields| !fields.is_empty())
+        }) {
+            self.replay_safe = false;
+        }
         self.open.remove(&id);
         self.done.insert(id.clone());
         out.push(ModelEvent::PartFinished {
@@ -401,6 +408,7 @@ impl Decoder {
         } = annotation
             && self.citations.insert(id.clone())
         {
+            self.replay_safe = false;
             out.push(ModelEvent::Source(ModelSource::Url {
                 id,
                 url,
@@ -490,6 +498,7 @@ impl Decoder {
                 }
                 self.tool_calls = true;
                 self.observed_output = true;
+                self.replay_safe = false; // The emitted call includes opaque provider metadata.
                 let input = serde_json::from_str(&arguments)
                     .map_err(|_| Self::invalid("invalid Responses function arguments"))?;
                 out.push(ModelEvent::ToolCall(ModelToolCall {
@@ -513,6 +522,7 @@ impl Decoder {
                 }
                 self.tool_calls = true;
                 self.observed_output = true;
+                self.replay_safe = false; // The emitted call includes opaque provider metadata.
                 out.push(ModelEvent::ToolCall(ModelToolCall {
                     id: call_id,
                     name: crate::request::local_name(&name).into(),

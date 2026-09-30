@@ -62,6 +62,10 @@ impl ProviderFailure {
             retry_after_ms: retry_after_ms.filter(|value| (1..=2_147_483_647).contains(value)),
         }
     }
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn reason(&self) -> ProviderFailureReason {
         self.reason
     }

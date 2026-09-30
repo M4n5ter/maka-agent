@@ -19,39 +19,56 @@
 
 use super::error;
 use maka_plugins::model::{Frame, Socket};
+use maka_runtime::model::error::{ModelError, ProviderFailureReason};
 use serde_json::Value;
 
 pub(super) enum ReadError {
     Cancelled,
-    Transport(&'static str),
+    Interrupted(String),
+    Invalid(String),
 }
 
 impl ReadError {
     pub fn into_error(self) -> crate::Error {
-        error(match self {
-            Self::Cancelled => "Responses WebSocket cancelled",
-            Self::Transport(message) => message,
-        })
+        match self {
+            Self::Cancelled => error("Responses WebSocket cancelled"),
+            Self::Interrupted(message) => crate::Error::Interrupted(message),
+            Self::Invalid(message) => crate::Error::Invalid(message),
+        }
     }
 }
 
 pub(super) async fn receive(
     socket: &dyn Socket,
 ) -> std::result::Result<(String, bool, bool, Value), ReadError> {
-    use ReadError::Transport;
+    use ReadError::{Interrupted, Invalid};
     let frame = socket
         .receive()
         .await
-        .map_err(|_| Transport("Responses WebSocket frame failed or exceeded 8 MiB"))?
-        .ok_or(Transport("Responses WebSocket ended before completion"))?;
+        .map_err(|cause| match cause {
+            ModelError::Cancelled => ReadError::Cancelled,
+            ModelError::Provider(ref failure)
+                if matches!(
+                    failure.reason(),
+                    ProviderFailureReason::Network | ProviderFailureReason::StreamTruncated
+                ) =>
+            {
+                Interrupted(failure.message().to_owned())
+            }
+            ModelError::Adapter(message) => Invalid(message),
+            cause => Invalid(cause.to_string()),
+        })?
+        .ok_or_else(|| Interrupted("Responses WebSocket ended before completion".into()))?;
     let Frame::Text(text) = frame else {
-        return Err(Transport("Responses WebSocket expected a JSON text frame"));
+        return Err(Invalid(
+            "Responses WebSocket expected a JSON text frame".into(),
+        ));
     };
     let event: Value = serde_json::from_str(&text)
-        .map_err(|_| Transport("Responses WebSocket returned invalid JSON"))?;
+        .map_err(|_| Invalid("Responses WebSocket returned invalid JSON".into()))?;
     let kind = event["type"]
         .as_str()
-        .ok_or(Transport("Responses WebSocket event has no type"))?;
+        .ok_or(Invalid("Responses WebSocket event has no type".into()))?;
     let reusable = matches!(kind, "response.completed" | "response.done")
         || (kind == "response.incomplete"
             && event["response"]["incomplete_details"]["reason"] == "max_output_tokens");
