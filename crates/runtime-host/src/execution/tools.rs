@@ -140,7 +140,7 @@ fn registrations(
             definition: ToolDefinition {
                 freeform: None, output_schema: None, provider: None,
                 name: READ_NAME.into(),
-                description: "Read a supplied user attachment from this conversation. Filesystem paths and archives are unavailable. Follow next to continue a bounded page.".into(),
+                description: "Read a supplied user attachment from this conversation. Prefer attachment:<id-prefix>: retain the fixed attachment- ID prefix and the next 12 characters. Prefixes must be unique in this Session; exact IDs take precedence, and ambiguity requires more characters. Filesystem paths, tasks and archives are unavailable. Pass the complete next object unchanged to continue a bounded page.".into(),
                 input_schema: read::schema(),
             },
             handler: ToolHandler::Prepared(Arc::new(read::SessionRead::attachments(native.log.clone()))),

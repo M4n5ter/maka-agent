@@ -40,6 +40,13 @@ The request also appears above the composer: click it or press `Ctrl+G` to
 review it. This opens the existing review without answering automatically.
 **Back to latest** appears in the same area when reading earlier messages.
 
+Read tool rows show compact resource addresses; expanded arguments preserve the
+original input. `Read.path` accepts `task:<id-prefix>`, `attachment:<id-prefix>`
+and `archive:<event-id-prefix>`, as well as full resource URLs. Prefer 12 ID
+characters after any fixed ID prefix (for example `attachment-`). Exact matches
+win; other prefixes must resolve uniquely among this Session's readable resources.
+Pass the complete returned `next` object unchanged for subsequent pages.
+
 In the composer, `Ctrl+V` or **+ → Paste from clipboard** reads images, copied
 files, or text from the local clipboard on macOS, Windows and Linux. Terminal
 pastes consisting of absolute file paths or local `file://` URLs become

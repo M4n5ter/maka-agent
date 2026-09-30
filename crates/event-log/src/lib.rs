@@ -44,6 +44,7 @@ pub mod observation;
 pub mod plugins;
 mod prefix;
 pub mod projects;
+mod read_resources;
 pub mod recovery;
 pub mod root;
 pub mod run_prefix;
@@ -68,6 +69,10 @@ use sqlx::sqlite::SqliteConnectOptions;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error(
+        "Resource prefix is ambiguous in this Session; use a longer prefix or the full reference"
+    )]
+    AmbiguousReadResource,
     #[error(transparent)]
     Project(#[from] projects::ProjectError),
     #[error(transparent)]

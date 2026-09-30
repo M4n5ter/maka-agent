@@ -324,3 +324,67 @@ async fn catalog_fault_rolls_back_payload_metadata_and_delete_as_one_commit() {
     );
     log.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn read_prefixes_are_literal_session_scoped_and_follow_artifact_visibility() {
+    use maka_runtime::read::ResourceAddress::Attachment;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("prefix.sqlite");
+    let log = EventLog::open(&path).await.unwrap();
+    for session in ["session", "other"] {
+        log.create_session(session, session, &json!({}), 1)
+            .await
+            .unwrap();
+    }
+    for id in ["part_a", "part_ab", "partX", "Case"] {
+        log.commit_artifact(artifact(id, b"data"), b"data")
+            .await
+            .unwrap();
+    }
+    let mut hidden = artifact("part_hidden", b"hidden");
+    hidden.source = ArtifactSource::ToolResult;
+    log.commit_artifact(hidden, b"hidden").await.unwrap();
+    for (prefix, expected) in [
+        ("part_a", Some("part_a")),
+        ("part_ab", Some("part_ab")),
+        ("part_h", None),
+        ("case", None),
+    ] {
+        assert_eq!(
+            log.resolve_read_resource("session", Attachment(prefix.into()))
+                .await
+                .unwrap(),
+            expected.map(|id| Attachment(id.into()))
+        );
+    }
+    assert!(matches!(
+        log.resolve_read_resource("session", Attachment("part_".into()))
+            .await,
+        Err(StoreError::AmbiguousReadResource)
+    ));
+    assert!(
+        log.resolve_read_resource("other", Attachment("part_a".into()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        log.delete_user_artifact("session", "part_a").await.unwrap(),
+        ArtifactDeletion::Deleted
+    );
+    assert_eq!(
+        log.resolve_read_resource("session", Attachment("part_".into()))
+            .await
+            .unwrap(),
+        Some(Attachment("part_ab".into()))
+    );
+    log.close().await.unwrap();
+    let log = EventLog::open(&path).await.unwrap();
+    assert_eq!(
+        log.resolve_read_resource("session", Attachment("part_".into()))
+            .await
+            .unwrap(),
+        Some(Attachment("part_ab".into()))
+    );
+    log.close().await.unwrap();
+}

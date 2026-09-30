@@ -20,10 +20,9 @@
 use maka_event_log::EventLog;
 use maka_fs_tools::{READ_NAME, ReadExecutor, ReadOutput};
 use maka_runtime::{
-    archive::ToolResultAddress,
     artifact::{ArtifactKind, ArtifactSource},
-    attachment::{StorageRef, parse_resource_ref},
-    read::{ReadError, ReadInput, ReadRequest},
+    attachment::StorageRef,
+    read::{ReadError, ReadInput, ReadRequest, ResourceAddress},
     tool_output::{DurableToolProjection, ImageOutput, ToolOutput, ToolSuccess},
     tools::ToolError,
 };
@@ -89,9 +88,27 @@ impl ToolPreparer for SessionRead {
                         return Err(failed("unsupported tool"));
                     }
                     let input: ReadInput = serde_json::from_value(input).map_err(failed)?;
-                    let request = input.resolve().map_err(failed)?;
-                    match (target(request.path())?, access) {
-                        (Target::File, Access::Session(filesystem)) => {
+                    let mut request = input.resolve().map_err(failed)?;
+                    let mut resource = ResourceAddress::parse(request.path()).map_err(failed)?;
+                    if matches!(access, Access::Attachments)
+                        && !matches!(resource, Some(ResourceAddress::Attachment(_)))
+                    {
+                        return Err(failed(
+                            "Read accepts only this conversation's attachment references",
+                        ));
+                    }
+                    if !request.is_continuation()
+                        && let Some(address) = &resource
+                        && let Some(resolved) = log
+                            .resolve_read_resource(&context.invocation.session_id, address.clone())
+                            .await
+                            .map_err(failed)?
+                    {
+                        request.bind_resource(&resolved).map_err(failed)?;
+                        resource = Some(resolved);
+                    }
+                    match (resource, access) {
+                        (None, Access::Session(filesystem)) => {
                             match filesystem.read(request, cancellation).await? {
                                 ReadOutput::Text(page) => {
                                     Ok(serde_json::to_value(page).expect("ReadPage is JSON").into())
@@ -101,21 +118,21 @@ impl ToolPreparer for SessionRead {
                                 }
                             }
                         }
-                        (Target::Attachment(id), _) => {
+                        (Some(ResourceAddress::Attachment(id)), _) => {
                             read_attachment(
                                 &log,
                                 &context.invocation.session_id,
-                                id,
+                                &id,
                                 &request,
                                 &cancellation,
                             )
                             .await
                         }
-                        (Target::Shell(id), Access::Session(_)) => {
+                        (Some(ResourceAddress::Task(id)), Access::Session(_)) => {
                             let snapshot = super::shell::read(
                                 &log,
                                 &context.invocation.session_id,
-                                id,
+                                &id,
                                 &cancellation,
                             )
                             .await?;
@@ -127,11 +144,11 @@ impl ToolPreparer for SessionRead {
                                 projection,
                             ))
                         }
-                        (Target::ToolResult(address), Access::Session(_)) => {
+                        (Some(ResourceAddress::ToolResult(id)), Access::Session(_)) => {
                             super::archive::read(
                                 &log,
                                 &context.invocation.session_id,
-                                address,
+                                &id,
                                 &request,
                                 &cancellation,
                             )
@@ -146,33 +163,6 @@ impl ToolPreparer for SessionRead {
             Ok(effect)
         })
     }
-}
-
-enum Target<'a> {
-    File,
-    Attachment(&'a str),
-    Shell(&'a str),
-    ToolResult(ToolResultAddress),
-}
-
-fn target(path: &str) -> Result<Target<'_>, ToolError> {
-    if path.starts_with("archive:") || path.starts_with("maka://runtime/tool-results/") {
-        return ToolResultAddress::parse(path)
-            .map(Target::ToolResult)
-            .map_err(failed);
-    }
-    if let Some(id) = parse_resource_ref(path) {
-        return Ok(Target::Attachment(id));
-    }
-    if let Some(id) = super::shell::parse_ref(path) {
-        return Ok(Target::Shell(id));
-    }
-    if path.contains("://") {
-        return Err(failed(
-            "Unsupported Maka address; use a path returned by a tool",
-        ));
-    }
-    Ok(Target::File)
 }
 
 fn read_projection(page: Result<impl serde::Serialize, ReadError>) -> DurableToolProjection {
@@ -260,11 +250,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn unified_paths_reject_resource_aliases_and_preserve_continuation_targets() {
+    fn resource_paths_preserve_literal_identity_and_continuation_targets() {
         for path in [
             "file",
             "C:\\work\\file",
             "maka://runtime/attachments/item",
+            "attachment:item",
+            "task:shell_1",
             "maka://runtime/background-tasks/shell_1",
         ] {
             let input: ReadInput = serde_json::from_value(json!({"path":path})).unwrap();
@@ -277,11 +269,11 @@ mod tests {
                 .unwrap();
             let request = next.resolve().unwrap();
             assert_eq!(request.path(), path);
-            match target(request.path()).unwrap() {
-                Target::File => assert!(!path.starts_with("maka:")),
-                Target::Attachment(id) => assert_eq!(id, "item"),
-                Target::Shell(id) => assert_eq!(id, "shell_1"),
-                Target::ToolResult(_) => panic!("unexpected archive"),
+            match ResourceAddress::parse(request.path()).unwrap() {
+                None => assert!(!path.starts_with("maka:")),
+                Some(ResourceAddress::Attachment(id)) => assert_eq!(id, "item"),
+                Some(ResourceAddress::Task(id)) => assert_eq!(id, "shell_1"),
+                Some(ResourceAddress::ToolResult(_)) => panic!("unexpected archive"),
             }
         }
         for path in [
@@ -292,7 +284,7 @@ mod tests {
             "maka://runtime/background-tasks/shell?x=1",
             "maka://runtime/background-tasks/shell/other",
         ] {
-            assert!(target(path).is_err(), "{path}");
+            assert!(ResourceAddress::parse(path).is_err(), "{path}");
         }
         assert!(
             serde_json::from_value::<ReadInput>(json!({"ref":"maka://runtime/attachments/item"}))

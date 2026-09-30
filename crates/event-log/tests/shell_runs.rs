@@ -361,3 +361,52 @@ async fn recovery_commit_is_atomic_under_real_sqlite_faults() {
     assert_eq!(log.recover_shell_runs(60).await.unwrap(), 2);
     log.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn read_prefixes_exclude_user_only_and_foreign_tasks_and_prefer_exact_ids() {
+    use maka_runtime::read::ResourceAddress::Task;
+    let temp = tempfile::tempdir().unwrap();
+    let log = EventLog::open(&temp.path().join("prefix.sqlite"))
+        .await
+        .unwrap();
+    for session in ["session", "other"] {
+        log.create_session(session, session, &json!({}), 1)
+            .await
+            .unwrap();
+    }
+    for id in ["task_a", "task_ab"] {
+        log.create_shell_run(starting(id)).await.unwrap();
+    }
+    let mut hidden = starting("task_hidden");
+    hidden.visibility = ShellVisibility::User;
+    log.create_shell_run(hidden).await.unwrap();
+    let mut foreign = starting("task_foreign");
+    foreign.session_id = "other".into();
+    log.create_shell_run(foreign).await.unwrap();
+    assert_eq!(
+        log.resolve_read_resource("session", Task("task_a".into()))
+            .await
+            .unwrap(),
+        Some(Task("task_a".into()))
+    );
+    assert!(matches!(
+        log.resolve_read_resource("session", Task("task_".into()))
+            .await,
+        Err(StoreError::AmbiguousReadResource)
+    ));
+    for prefix in ["task_h", "task_f", "TASK_A"] {
+        assert!(
+            log.resolve_read_resource("session", Task(prefix.into()))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        log.resolve_read_resource("other", Task("task_".into()))
+            .await
+            .unwrap(),
+        Some(Task("task_foreign".into()))
+    );
+    log.close().await.unwrap();
+}

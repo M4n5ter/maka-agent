@@ -24,7 +24,6 @@ pub use project::{local_state, local_update};
 use serde::{Deserialize, Serialize};
 
 pub const SNAPSHOT_MAX_BYTES: usize = 48 * 1024;
-pub const RESOURCE_REF_PREFIX: &str = "maka://runtime/background-tasks/";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

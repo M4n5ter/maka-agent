@@ -21,6 +21,8 @@
 use crate::{shell_run::PipeStream, terminal::TerminalCursor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+pub const RESOURCE_REF_PREFIX: &str = "maka://runtime/background-tasks/";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellMode {

@@ -18,9 +18,7 @@
  */
 
 use maka_event_log::{EventLog, StoreError, archive::ArchiveError};
-use maka_runtime::{
-    archive::ToolResultAddress, read::ReadRequest, tool_output::ToolSuccess, tools::ToolError,
-};
+use maka_runtime::{read::ReadRequest, tool_output::ToolSuccess, tools::ToolError};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -43,11 +41,11 @@ struct Unavailable {
 pub(super) async fn read(
     log: &EventLog,
     session: &str,
-    address: ToolResultAddress,
+    event_id: &str,
     request: &ReadRequest,
     cancellation: &CancellationToken,
 ) -> Result<ToolSuccess, ToolError> {
-    let result = log.read_tool_result(session, address.event_id()).await;
+    let result = log.read_tool_result(session, event_id).await;
     if cancellation.is_cancelled() {
         return Err(ToolError::Failed("Read cancelled".into()));
     }

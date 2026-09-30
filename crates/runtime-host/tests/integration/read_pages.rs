@@ -28,7 +28,7 @@ use maka_runtime::{
     archive::ToolResultAddress,
     artifact::content_digest,
     event::{Fact, StoredEvent, ToolOutcome},
-    read::ReadInput,
+    read::{ReadInput, ResourceAddress},
     tool_output::{DurableToolProjection, ToolOutput},
 };
 use maka_runtime_host::server::{Host, local::LocalListener};
@@ -50,6 +50,7 @@ async fn scenario() {
     let source = "中😀A".repeat(2500);
     let mut next = Value::Null;
     let mut first_page = Value::Null;
+    let mut attachment_path = String::new();
     let mut prefix: Vec<StoredEvent> = Vec::new();
     for reopened in [false, true] {
         let host = Host::open(fixture.owner()).await.unwrap();
@@ -89,7 +90,11 @@ async fn scenario() {
                 )
                 .await;
             assert_eq!(uploaded["result"]["kind"], "committed", "{uploaded}");
-            next = json!({"path":format!("maka://runtime/attachments/{}", uploaded["result"]["attachment"]["ref"]["relativePath"].as_str().unwrap())});
+            let id = uploaded["result"]["attachment"]["ref"]["relativePath"]
+                .as_str()
+                .unwrap();
+            attachment_path = format!("maka://runtime/attachments/{id}");
+            next = json!({"path":format!("attachment:{}", &id[.."attachment-".len() + 12])});
         }
         let turn = if reopened { "continue" } else { "initial" };
         start(&mut peer, "reader", turn).await;
@@ -110,8 +115,13 @@ async fn scenario() {
                 .is_none()
         );
         let input: ReadInput = serde_json::from_value(next.clone()).unwrap();
-        let expected =
-            serde_json::to_value(input.resolve().unwrap().page(&source).unwrap()).unwrap();
+        let mut resolved = input.resolve().unwrap();
+        if !reopened {
+            resolved
+                .bind_resource(&ResourceAddress::parse(&attachment_path).unwrap().unwrap())
+                .unwrap();
+        }
+        let expected = serde_json::to_value(resolved.page(&source).unwrap()).unwrap();
         request.reply.send(call(next.clone())).unwrap();
         let response = requests.recv().await.unwrap();
         let values = pages(&response.body);
@@ -121,6 +131,14 @@ async fn scenario() {
             first_page = expected.clone();
             next = expected["next"].clone();
             assert!(!next.is_null());
+            assert_eq!(
+                serde_json::from_value::<ReadInput>(next.clone())
+                    .unwrap()
+                    .resolve()
+                    .unwrap()
+                    .path(),
+                attachment_path
+            );
         } else {
             assert_eq!(expected["next"], Value::Null);
             assert_eq!(
@@ -141,9 +159,10 @@ async fn scenario() {
                 .unwrap()
                 .event
                 .id;
-            let event_input = json!({"path":ToolResultAddress::event_path(event_id).unwrap()});
+            let event_input = json!({"path":format!("archive:{}", &event_id[..12])});
+            let full_event_input = json!({"path":ToolResultAddress::event_path(event_id).unwrap()});
             let expected_event_page = serde_json::to_value(
-                serde_json::from_value::<ReadInput>(event_input.clone())
+                serde_json::from_value::<ReadInput>(full_event_input)
                     .unwrap()
                     .resolve()
                     .unwrap()
@@ -251,6 +270,33 @@ async fn scenario() {
         }
         assert_eq!(reads, if reopened { 2 } else { 1 });
         prefix = events;
+        if !reopened {
+            // A later resource shares both the original short prefix and full ID prefix.
+            // The already-issued continuation must still read the original resource.
+            use maka_runtime::artifact::{Artifact, ArtifactKind, ArtifactSource};
+            let id = ResourceAddress::parse(&attachment_path)
+                .unwrap()
+                .unwrap()
+                .id()
+                .to_owned();
+            log.commit_artifact(
+                Artifact {
+                    id: format!("{id}-collision"),
+                    session_id: "reader".into(),
+                    turn_id: "upload".into(),
+                    created_at: 1,
+                    name: "different.txt".into(),
+                    kind: ArtifactKind::File,
+                    size_bytes: 5,
+                    mime_type: Some("text/plain".into()),
+                    source: ArtifactSource::UserUpload,
+                    summary: Some(content_digest(b"other")),
+                },
+                b"other",
+            )
+            .await
+            .unwrap();
+        }
         log.close().await.unwrap();
     }
 }

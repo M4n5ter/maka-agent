@@ -19,9 +19,11 @@
 
 //! Bounded text pages. A continuation identifies content, never read authority.
 mod page;
+mod resource;
 mod shell;
 mod tool_result;
 pub use page::ReadPage;
+pub use resource::ResourceAddress;
 pub use shell::ReadMetadata;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -29,7 +31,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::num::NonZeroUsize;
 
 pub const MAX_PAGE_CHARS: usize = 7_500;
-pub const DESCRIPTION: &str = "Read a file or a Maka resource using path. PNG, JPEG, GIF and WebP files return images. Text returns one bounded page; offset is a zero-based starting line and limit is a positive line count. A large limit cannot bypass the response-size cap. If next is non-null, pass that object to Read to continue the requested range. partialLine means a line spans pages. Continuations reject changed content; restart with the original path.";
+pub const DESCRIPTION: &str = "Read a file or a Maka resource using path. Resource shortcuts: task:<id>, attachment:<id>, archive:<event-id>. Prefer short prefixes: retain any fixed ID prefix (such as attachment-) and keep the next 12 ID characters, e.g. task:fd427bd7-8a6 or attachment:attachment-8ac3b2615d42. Prefixes must be unique within this Session; exact IDs take precedence and ambiguous prefixes require more characters. Files require their actual paths. PNG, JPEG, GIF and WebP files return images. Text returns one bounded page; offset is a zero-based starting line and limit is a positive line count. A large limit cannot bypass the response-size cap. If next is non-null, pass that complete object unchanged to Read to continue the requested range. partialLine means a line spans pages. Continuations reject changed content; restart with the original path.";
 const PREFIX: &str = "maka://read/";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -155,6 +157,21 @@ impl ReadInput {
 }
 
 impl ReadRequest {
+    pub fn is_continuation(&self) -> bool {
+        matches!(self.start, Start::Continuation { .. })
+    }
+
+    /// Bind a first page to its resolved identity before issuing continuations.
+    pub fn bind_resource(&mut self, address: &ResourceAddress) -> Result<(), ReadError> {
+        if self.is_continuation() {
+            return Err(ReadError::InvalidContinuation);
+        }
+        self.path = address
+            .canonical_path()
+            .map_err(|_| ReadError::InvalidInput)?;
+        Ok(())
+    }
+
     pub fn path(&self) -> &str {
         &self.path
     }

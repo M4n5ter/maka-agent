@@ -183,6 +183,17 @@ async fn archive_atomic_retry_reopen_scope_and_source_integrity() {
         .unwrap(),
         SessionCopyResult::Committed(_)
     ));
+    assert_eq!(
+        log.resolve_read_resource(
+            "unpruned-copy",
+            maka_runtime::read::ResourceAddress::ToolResult("result-st".into())
+        )
+        .await
+        .unwrap(),
+        Some(maka_runtime::read::ResourceAddress::ToolResult(
+            target.event().id.clone()
+        ))
+    );
     open(&log, "writer", false).await;
     let source = log
         .read_model_context("session", Some("writer"), 100, 64 * 1024)
@@ -937,3 +948,75 @@ async fn bounded_prune_candidates_do_not_materialize_the_old_tail() {
 mod automatic;
 #[path = "archive/summary.rs"]
 mod summary;
+
+#[tokio::test]
+async fn read_prefixes_keep_literal_archive_ids_and_session_scope() {
+    use maka_runtime::read::ResourceAddress::ToolResult;
+    let directory = tempfile::tempdir().unwrap();
+    let log = EventLog::open(&directory.path().join("prefix.sqlite"))
+        .await
+        .unwrap();
+    log.create_session("session", "create", &json!({}), 1)
+        .await
+        .unwrap();
+    open(&log, "run", false).await;
+    for step in ["shared", "shared-long", "literal_*?[tail", "literal-other"] {
+        tool(&log, "run", step, "content".into()).await;
+    }
+    let hidden = event(
+        "run",
+        Fact::ToolDispatched {
+            title: None,
+            operation_id: "hidden".into(),
+            call: ToolCallIdentity::standalone("hidden-call".into()),
+            name: "Read".into(),
+            input: json!({}),
+        },
+    );
+    log.append(&hidden).await.unwrap();
+    let (hidden_result, _) = EventWrite::tool_success(
+        "result-literal_hidden".into(),
+        std::time::SystemTime::now(),
+        hidden.event().invocation.clone(),
+        "hidden".into(),
+        ToolSuccess::from(json!("hidden")),
+    )
+    .unwrap();
+    log.append(&hidden_result).await.unwrap();
+    assert_eq!(
+        log.resolve_read_resource("session", ToolResult("result-literal_".into()))
+            .await
+            .unwrap(),
+        Some(ToolResult("result-literal_*?[tail".into()))
+    );
+    assert_eq!(
+        log.resolve_read_resource("session", ToolResult("result-shared".into()))
+            .await
+            .unwrap(),
+        Some(ToolResult("result-shared".into()))
+    );
+    assert!(matches!(
+        log.resolve_read_resource("session", ToolResult("result-shar".into()))
+            .await,
+        Err(StoreError::AmbiguousReadResource)
+    ));
+    assert_eq!(
+        log.resolve_read_resource("session", ToolResult("result-literal_*?[".into()))
+            .await
+            .unwrap(),
+        Some(ToolResult("result-literal_*?[tail".into()))
+    );
+    for (session, prefix) in [
+        ("other", "result-shar"),
+        ("session", "Result-shared"),
+        ("session", "result-shared\0x"),
+    ] {
+        assert!(
+            log.resolve_read_resource(session, ToolResult(prefix.into()))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    log.close().await.unwrap();
+}

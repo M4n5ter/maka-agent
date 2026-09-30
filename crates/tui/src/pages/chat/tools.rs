@@ -190,8 +190,12 @@ impl Card<'_> {
             {
                 text.push_str(" · ");
                 let start = text.len();
-                text.push_str(&preview(summary));
+                let resource = (name == Some("Read"))
+                    .then(|| read_resource_label(summary))
+                    .flatten();
+                text.push_str(&preview(resource.as_deref().unwrap_or(summary)));
                 if !trace
+                    && resource.is_none()
                     && matches!(call["origin"].as_str(), Some("provider" | "code_mode"))
                     && matches!(name, Some("Read" | "Edit" | "Write" | "apply_patch"))
                     && crate::files::valid_path(summary)
@@ -427,6 +431,20 @@ fn preview(value: &str) -> String {
         .join(" ")
 }
 
+fn read_resource_label(path: &str) -> Option<String> {
+    let request = maka_runtime::read::ReadInput {
+        path: path.into(),
+        offset: None,
+        limit: None,
+    }
+    .resolve()
+    .ok()?;
+    maka_runtime::read::ResourceAddress::parse(request.path())
+        .ok()??
+        .compact_path()
+        .ok()
+}
+
 /// Only unique, same-Turn identities pair. Ambiguous or future-schema rows
 /// remain independent raw records instead of disappearing behind a guessed card.
 pub(super) struct Index<'a> {
@@ -600,6 +618,45 @@ mod tests {
             }
         }
         assert_eq!(result, original);
+        let full = "maka://runtime/background-tasks/fd427bd7-8a69-4de8-9eb2-f8871fcbc0b6";
+        let continuation = maka_runtime::read::ReadInput {
+            path: full.into(),
+            offset: None,
+            limit: None,
+        }
+        .resolve()
+        .unwrap()
+        .page(&"x".repeat(20_000))
+        .unwrap()
+        .next
+        .unwrap()
+        .path;
+        for path in [full, "task:fd427bd7-8a6", continuation.as_str()] {
+            let mut call = call.clone();
+            call["args"]["path"] = json!(path);
+            let card = Card {
+                call: Some((1, &call)),
+                ..card
+            };
+            let i18n = I18n::new(LocalePreference::Explicit(Locale::En), Locale::En);
+            let shown = card.text(State::Returned, &i18n, false);
+            assert!(
+                shown
+                    .text
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .starts_with("Read · task:fd427bd7-8a6")
+            );
+            assert!(
+                shown.text.contains(path),
+                "expanded arguments retain the complete input"
+            );
+            assert!(
+                shown.file.is_none(),
+                "resource references are not filesystem links"
+            );
+        }
     }
 
     #[test]
