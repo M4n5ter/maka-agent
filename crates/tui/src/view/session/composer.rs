@@ -190,26 +190,6 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .hint(action_label(app, &Action::ToggleDetails));
     }
     let mut children = vec![notice];
-    if app.enabled(&Action::LatestMessages) {
-        children.insert(
-            0,
-            Node::button(
-                "latest",
-                format!(
-                    "{} {}",
-                    app.chrome.symbol("↓", "v"),
-                    app.i18n.text(if app.chat.view.unseen {
-                        "chat-latest-unseen"
-                    } else {
-                        "chat-latest-button"
-                    })
-                ),
-                crate::ui::Role::Normal,
-            )
-            .on(On::Activate(Action::LatestMessages))
-            .hint(action_label(app, &Action::LatestMessages)),
-        );
-    }
     let count = app.queue_rows().len();
     if count > 0 {
         let action = Action::Queue(crate::pages::queue::Command::Focus);
@@ -227,6 +207,33 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         );
     }
     let mut rows = vec![Node::row("status", children).size(Size::Fixed(1))];
+    if app.enabled(&Action::LatestMessages) {
+        rows.push(
+            Node::row(
+                "navigation",
+                vec![
+                    Node::text("before", vec![]).size(Size::Fill),
+                    Node::button(
+                        "latest",
+                        format!(
+                            "{} {}",
+                            app.chrome.symbol("↓", "v"),
+                            app.i18n.text(if app.chat.view.unseen {
+                                "chat-latest-unseen"
+                            } else {
+                                "chat-latest-button"
+                            })
+                        ),
+                        crate::ui::Role::Normal,
+                    )
+                    .on(On::Activate(Action::LatestMessages))
+                    .hint(action_label(app, &Action::LatestMessages)),
+                    Node::text("after", vec![]).size(Size::Fill),
+                ],
+            )
+            .size(Size::Fixed(1)),
+        );
+    }
     if let Some((key, detail)) = app.interaction_prompt() {
         let title = format!("{} {}", app.chrome.symbol("◇", "!"), app.i18n.text(key));
         let action = app.i18n.text("interaction-review-action");

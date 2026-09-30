@@ -79,7 +79,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
     let parts = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(super::queue::height(app, area.height)),
-        Constraint::Length(1 + u16::from(app.has_interaction())),
+        Constraint::Length(
+            1 + u16::from(app.has_interaction()) + u16::from(app.enabled(&Action::LatestMessages)),
+        ),
         Constraint::Length(status_rows),
         Constraint::Length(
             editor_height + 2 + attachment_rows + directory_rows + skill_rows + completion_rows,

@@ -597,7 +597,11 @@ mod tests {
         app.chat.view.first();
         app.chat.view.unseen = true;
         draw(&mut app, 80, 24);
-        let latest = app.chrome.feedback.rect("feedback/status/latest").unwrap();
+        let latest = app
+            .chrome
+            .feedback
+            .rect("feedback/navigation/latest")
+            .unwrap();
         let review = app.chrome.feedback.rect("feedback/review").unwrap();
         let editor = app
             .chrome
@@ -613,7 +617,12 @@ mod tests {
         }));
         draw(&mut app, 80, 24);
         assert!(app.chat.view.following());
-        assert!(app.chrome.feedback.rect("feedback/status/latest").is_none());
+        assert!(
+            app.chrome
+                .feedback
+                .rect("feedback/navigation/latest")
+                .is_none()
+        );
         assert!(app.chrome.feedback.rect("feedback/review").is_some());
         assert_eq!(app.drafts["a"].text(), "keep draft");
         assert!(app.has_interaction());
