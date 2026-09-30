@@ -234,7 +234,9 @@ impl Pending {
         let Some(checkpoint) = checkpoint else {
             return Ok(false);
         };
+        let session = checkpoint.invocation.session_id.clone();
         inner.log.append(&EventWrite::plain(checkpoint)?).await?;
+        inner.clear_loaded(&session);
         Ok(true)
     }
 }

@@ -88,7 +88,7 @@ async fn scratch_store_survives_turns_and_is_released_with_the_session() {
         );
         for index in 0..3 {
             if index == 2 {
-                engine.release_code_store("session");
+                engine.release_session_state("session");
             }
             engine
                 .run(

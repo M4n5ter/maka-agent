@@ -28,11 +28,33 @@ use std::{
 
 pub const SEARCH: &str = "tool_search";
 
+/// Session-owned discovery preferences, never executable capabilities. Runs
+/// borrow this one source; each request still captures the current catalog.
+#[derive(Clone, Default)]
+pub struct LoadedTools(Arc<Mutex<BTreeSet<String>>>);
+
+impl LoadedTools {
+    pub fn clear(&self) {
+        self.0.lock().unwrap().clear();
+    }
+
+    /// Immutable discovery evidence; inspection must not mutate the Session.
+    pub fn snapshot(&self) -> BTreeSet<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl From<BTreeSet<String>> for LoadedTools {
+    fn from(names: BTreeSet<String>) -> Self {
+        Self(Arc::new(Mutex::new(names)))
+    }
+}
+
 #[derive(Clone)]
 pub struct Availability {
     catalog: ToolCatalog,
     behavior: Option<maka_runtime::execution::BehaviorId>,
-    active: Arc<Mutex<BTreeSet<String>>>,
+    loaded: LoadedTools,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -103,22 +125,29 @@ impl Availability {
         } else {
             Default::default()
         };
+        // Only the complete, successfully bound catalog is authoritative here.
+        // Base and nested-only views would erase live plugin/DirectOnly names.
+        self.loaded
+            .0
+            .lock()
+            .unwrap()
+            .retain(|name| catalog.contains(name));
         Ok((
             Self {
                 catalog,
                 behavior: self.behavior.clone(),
-                active: self.active.clone(),
+                loaded: self.loaded.clone(),
             },
             captured,
             context,
         ))
     }
 
-    pub fn new(catalog: ToolCatalog) -> Self {
+    pub fn new(catalog: ToolCatalog, loaded: LoadedTools) -> Self {
         Self {
             catalog,
             behavior: None,
-            active: Arc::default(),
+            loaded,
         }
     }
     pub fn set_behavior(&mut self, behavior: maka_runtime::execution::BehaviorId) {
@@ -135,7 +164,7 @@ impl Availability {
         Self {
             catalog: self.catalog.nested(),
             behavior: self.behavior.clone(),
-            active: self.active.clone(),
+            loaded: self.loaded.clone(),
         }
     }
 
@@ -149,7 +178,7 @@ impl Availability {
         if !self.enabled() {
             return self.catalog.clone();
         }
-        let active = self.active.lock().unwrap();
+        let active = self.loaded.0.lock().unwrap();
         self.catalog
             .select(|name| self.direct(name) || active.contains(name))
     }
@@ -158,23 +187,12 @@ impl Availability {
     pub fn all(&self) -> ToolCatalog {
         self.catalog.clone()
     }
-    pub fn clear(&self) {
-        self.active.lock().unwrap().clear();
-    }
-
     pub fn checkpoint(&self) -> maka_runtime::handoff::HandoffTools {
         maka_runtime::handoff::HandoffTools {
             catalog_digest: self.catalog.digest(),
-            // A successor samples dynamic plugins again. Their executable
-            // identities are not promised across Host handoff or restart.
-            loaded: self
-                .active
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|name| self.catalog.contains(name))
-                .cloned()
-                .collect(),
+            // Names survive handoff; implementations and grants do not. The
+            // successor intersects them with its freshly bound capabilities.
+            loaded: self.loaded.0.lock().unwrap().clone(),
         }
     }
 
@@ -183,15 +201,15 @@ impl Availability {
         checkpoint: &maka_runtime::handoff::HandoffTools,
     ) -> Result<(), ToolError> {
         if checkpoint.catalog_digest != self.catalog.digest()
-            || (!checkpoint.loaded.is_empty() && !self.enabled())
+            || checkpoint.loaded.len() > 128
             || checkpoint
                 .loaded
                 .iter()
-                .any(|name| self.direct(name) || !self.catalog.contains(name))
+                .any(|name| name.is_empty() || name.len() > 128)
         {
             return Err(ToolError::Failed("handoff tool catalog changed".into()));
         }
-        *self.active.lock().unwrap() = checkpoint.loaded.clone();
+        *self.loaded.0.lock().unwrap() = checkpoint.loaded.clone();
         Ok(())
     }
     pub fn definition(&self) -> Option<ToolDefinition> {
@@ -210,7 +228,7 @@ impl Availability {
             provider: None,
             name: SEARCH.into(),
             description: format!(
-                "Search available capabilities by name or description. Activated tools become callable on the next model step, never in the same batch or JavaScript cell. A successful context compaction unloads them. Inventory: {}.",
+                "Search available capabilities by name or description. Activated tools become callable on the next model step, never in the same batch or JavaScript cell. Loaded names persist across turns in this Session until successful context compaction or Host restart. Current permissions and tool availability still apply. Inventory: {}.",
                 names.join(", ")
             ),
             input_schema: schemars::schema_for!(SearchInput).into(),
@@ -233,7 +251,7 @@ impl Availability {
             })
         }))
     }
-    /// Delivery from ToolJournal proves T2 committed. This cache changes only
+    /// Delivery from ToolJournal proves T2 committed. These preferences change only
     /// future snapshots; neither an in-flight step nor its captured effects widen.
     pub fn settled(&self, name: &str, result: &Value) -> Result<(), ToolError> {
         if name != SEARCH || !self.enabled() {
@@ -242,7 +260,7 @@ impl Availability {
         let result: SearchResult = serde_json::from_value(result.clone()).map_err(|error| {
             ToolError::OutcomeUnknown(format!("invalid committed search result: {error}"))
         })?;
-        self.active.lock().unwrap().extend(result.activated);
+        self.loaded.0.lock().unwrap().extend(result.activated);
         Ok(())
     }
     fn direct(&self, name: &str) -> bool {
@@ -255,9 +273,9 @@ impl Availability {
             .split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty())
             .collect();
-        let active = self.active.lock().unwrap();
+        let active = self.loaded.0.lock().unwrap();
         // The bound inventory is small (at most 128 tools). Scan metadata directly;
-        // no search service or dependency graph is needed for this Run-local view.
+        // no search service or dependency graph is needed for this request view.
         let mut ranked: Vec<_> = self
             .catalog
             .definitions()

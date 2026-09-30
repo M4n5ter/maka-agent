@@ -96,6 +96,7 @@ async fn child_output_limit_after_t2_preserves_raw_and_remains_catchable() {
             catalog.clone(),
             ToolMode::CodeMode,
             cells.clone(),
+            Default::default(),
         );
         let result = run
             .capture(".", tokio_util::sync::CancellationToken::new())

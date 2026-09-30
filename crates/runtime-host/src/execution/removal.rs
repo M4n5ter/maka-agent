@@ -243,7 +243,7 @@ impl Executions {
             .map_err(internal)?
             .pending();
         if retired {
-            self.engine.release_code_store(session);
+            self.engine.release_session_state(session);
             self.publish_session_change(session).await;
         }
         Ok(retired)

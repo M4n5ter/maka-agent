@@ -248,3 +248,86 @@ async fn plugin_step_surface_survives_retry_changes_only_between_steps_and_reope
         reopened.close().await.unwrap();
     }).await.expect("plugin replacement and retry make bounded progress");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn session_loaded_plugin_names_use_current_handlers_and_never_restore_revoked_capabilities() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let directory = tempfile::tempdir().unwrap();
+        let log = Arc::new(EventLog::open(&directory.path().join("events.sqlite")).await.unwrap());
+        let catalog = Catalog::default();
+        let models = Fiber::new("maka.models", "maka.models", Scope::Profile).unwrap();
+        models.begin_loading().unwrap(); models.ready().unwrap();
+        catalog.publish(&models, maka_model::adapters::Builtin(maka_js_runtime::trusted::TrustedRuntime::default()).stage().unwrap()).unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let first = publish(&catalog, "old", count.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server_catalog=catalog.clone();
+        let server_count=count.clone();
+        let server=tokio::spawn(async move {
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let first_request=fixture::read_request(&mut socket).await;
+            assert_eq!(first_request["tools"].as_array().unwrap().len(),1);
+            assert_eq!(first_request["tools"][0]["function"]["name"],"tool_search");
+            respond_tools(&mut socket,vec![call("load","tool_search",json!({"query":"echo"}))],10).await;
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let seeded=fixture::read_request(&mut socket).await;
+            assert_eq!(seeded["tools"][0]["function"]["name"],"echo");
+            fixture::respond(&mut socket,"loaded","stop").await;
+
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let original=fixture::read_request(&mut socket).await;
+            assert_eq!(original["tools"],seeded["tools"],"a new Run must reuse the loaded plugin schema");
+            first.shutdown(tokio::time::Instant::now()+Duration::from_secs(1)).await.unwrap();
+            let second=publish(&server_catalog,"new",server_count.clone());
+            socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0.01\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let retry=fixture::read_request(&mut socket).await;
+            assert_eq!(retry,original,"even a warm tool selection cannot retarget a frozen physical retry");
+            respond_tools(&mut socket,vec![call("stale","echo",json!({"version":"old"}))],10).await;
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let current=fixture::read_request(&mut socket).await;
+            assert_eq!(server_count.load(Ordering::SeqCst),0,"retired implementation must refuse the old call");
+            assert_eq!(current["tools"][0]["function"]["parameters"]["properties"]["version"]["const"],"new");
+            respond_tools(&mut socket,vec![call("fresh","echo",json!({"version":"new"}))],10).await;
+            let (mut socket,_)=listener.accept().await.unwrap();
+            fixture::read_request(&mut socket).await;
+            fixture::respond(&mut socket,"done","stop").await;
+
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let restricted=fixture::read_request(&mut socket).await;
+            assert!(restricted.get("tools").is_none(),"Session preferences cannot bypass the current tool ceiling");
+            respond_tools(&mut socket,vec![call("forged","echo",json!({"version":"new"}))],10).await;
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let refused=fixture::read_request(&mut socket).await;
+            assert!(refused["messages"].as_array().unwrap().iter().any(|m|m["tool_call_id"]=="forged" && m["content"].as_str().is_some_and(|s|s.contains("unavailable"))));
+            fixture::respond(&mut socket,"denied","stop").await;
+
+            let (mut socket,_)=listener.accept().await.unwrap();
+            let reenabled=fixture::read_request(&mut socket).await;
+            assert_eq!(reenabled["tools"].as_array().unwrap().len(),1);
+            assert_eq!(reenabled["tools"][0]["function"]["name"],"tool_search","absent names were pruned from Session preferences");
+            fixture::respond(&mut socket,"available for discovery","stop").await;
+            second
+        });
+        let workspace=maka_plugins::filesystem::ReadRoot::open(directory.path()).await.unwrap();
+        let tools=|restricted: bool| ToolCatalog::default().with_workspace(workspace.clone())
+            .with_plugins(catalog.clone(),Scope::Session("session".into()),restricted.then(Default::default)).unwrap().with_discovery();
+        let request=|id,restricted,steps| {
+            let mut input=fixture::input(&base,id,false);
+            input.work=RunWork::Message {allow_prior_unknown:false,source_messages:vec![],message:"continue".into(),tools:tools(restricted),max_steps:steps};
+            input
+        };
+        let engine=fixture::engine(log.clone());
+        engine.run(request("seed",false,2),CancellationToken::new()).await.unwrap();
+        engine.run(request("replacement",false,3),CancellationToken::new()).await.unwrap();
+        engine.run(request("restricted",true,2),CancellationToken::new()).await.unwrap();
+        engine.run(request("reenabled",false,1),CancellationToken::new()).await.unwrap();
+        engine.drain().await;
+        let second=server.await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst),1);
+        let facts=log.prefix(200,1024*1024).await.unwrap();
+        assert_eq!(facts.events.iter().filter(|event|matches!(&event.event.fact,Fact::ToolDispatched {name,..} if name=="tool_search")).count(),1);
+        second.shutdown(tokio::time::Instant::now()+Duration::from_secs(1)).await.unwrap();
+    }).await.expect("loaded metadata must not retain or widen authority");
+}

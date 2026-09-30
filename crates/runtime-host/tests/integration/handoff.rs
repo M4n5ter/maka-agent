@@ -317,8 +317,8 @@ async fn cooperative_retirement_recovers_frozen_step_without_repeating_effects()
     assert!(
         tools
             .iter()
-            .all(|tool| tool["function"]["name"] != "ScheduledTask"),
-        "successor rediscovers plugins instead of retaining old loaded implementations"
+            .any(|tool| tool["function"]["name"] == "ScheduledTask"),
+        "successor preserves the loaded name while binding the current plugin implementation"
     );
     assert_eq!(
         second.body["messages"]
@@ -517,6 +517,7 @@ async fn stop_sealed_turn_uses_public_identity_without_provider_and_survives_res
             );
             let mut peer = Peer::new(host.clone(), "handoff-stop").await;
             if let Some(provider) = &provider {
+                peer.wait_for_plugins().await;
                 assert_eq!(
                     provider.requests.lock().unwrap().len(),
                     usize::from(reopened),

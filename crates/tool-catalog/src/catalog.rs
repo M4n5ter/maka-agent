@@ -124,7 +124,7 @@ impl ToolCatalog {
         })
     }
 
-    /// Defer non-core schemas until discovered within this Run.
+    /// Defer non-core schemas until discovered within this Session.
     pub fn with_discovery(mut self) -> Self {
         self.discovery = true;
         self

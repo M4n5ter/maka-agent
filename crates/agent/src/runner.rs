@@ -32,7 +32,7 @@ pub async fn run(
     cancellation_owner: tokio_util::sync::CancellationToken,
     admitted: tokio::sync::oneshot::Sender<()>,
     handoff: Option<crate::HandoffGate>,
-    prepared_claim: Option<maka_runtime::continuation::ContinuationClaim>,
+    prepared_claim: Option<crate::continuation::PreparedClaim>,
 ) -> Result<Invocation, RunError> {
     let cancellation = cancellation_owner.clone();
     if cancellation.is_cancelled() {
@@ -65,13 +65,25 @@ pub async fn run(
         Err(error) => return Err(error.into()),
     };
     let claim = match (prepared_claim, &input.work) {
-        (Some(claim), _) => Some(claim),
+        (Some(prepared), _) => {
+            // The Engine owns Session admission now. Another turn may have
+            // changed discovery after preflight, but no stale proof may commit.
+            // Handoff restores its explicit checkpoint instead of live names.
+            if matches!(input.work, RunWork::Continuation { .. })
+                && prepared.loaded_basis != inner.loaded_snapshot(&input.invocation.session_id)
+            {
+                return Err(RunError::ContinuationChanged);
+            }
+            Some(prepared.claim)
+        }
         (
             None,
             RunWork::Continuation { source, tools, .. } | RunWork::Handoff { source, tools, .. },
-        ) => {
-            Some(crate::continuation::prepare(&inner, &input, source, tools, &cancellation).await?)
-        }
+        ) => Some(
+            crate::continuation::prepare(&inner, &input, source, tools, &cancellation)
+                .await?
+                .claim,
+        ),
         _ => None,
     };
     let continuation_base = match &input.work {
@@ -211,6 +223,7 @@ pub async fn run(
             }
             return Err(error.into());
         }
+        inner.clear_loaded(&input.invocation.session_id);
     } else {
         let pause = match &outcome {
             InvocationOutcome::HandoffPaused { pause } => Some(pause.clone()),
@@ -228,6 +241,7 @@ pub async fn run(
 fn failure_class(error: &RunError) -> &'static str {
     match error {
         RunError::Busy => "session_busy",
+        RunError::ContinuationChanged => "continuation_changed",
         RunError::ReconciliationRequired(_) => "reconciliation_required",
         RunError::InvalidInput(_) => "invalid_input",
         RunError::Cancelled | RunError::Model(maka_model::ModelError::Cancelled) => "cancelled",

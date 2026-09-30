@@ -151,16 +151,20 @@ impl BoundCommands {
             if self.submission_stop.is_cancelled() {
                 return Err(Error::Revoked);
             }
-            let running = host
+            let running = match host
                 .engine
                 .start_continuation(run, host.shutdown.child_token())
                 .await
-                .map_err(|error| {
+            {
+                Ok(running) => running,
+                Err(maka_agent::RunError::ContinuationChanged) => continue,
+                Err(error) => {
                     if crate::execution::requires_drain(&error) {
                         host.begin_drain();
                     }
-                    protocol(crate::execution::execution_error(error))
-                })?;
+                    return Err(protocol(crate::execution::execution_error(error)));
+                }
+            };
             host.track(running);
             return Ok(target);
         }

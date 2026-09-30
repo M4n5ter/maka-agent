@@ -216,6 +216,7 @@ async fn check_boundary(boundary: Boundary) {
             catalog(log.clone(), effects.clone()),
             ToolMode::CodeMode,
             CodeExecutor::new(1, CellLimits::default()).unwrap(),
+            Default::default(),
         );
         let result = run
             .capture(".", tokio_util::sync::CancellationToken::new())
@@ -319,6 +320,7 @@ async fn check_boundary(boundary: Boundary) {
         catalog(log.clone(), effects.clone()),
         ToolMode::CodeMode,
         CodeExecutor::new(1, CellLimits::default()).unwrap(),
+        Default::default(),
     );
     assert!(matches!(
         run.capture(".", tokio_util::sync::CancellationToken::new())
@@ -342,7 +344,7 @@ async fn notification_commit_failure_cancels_the_cell_without_fabricating_succes
         let call = ModelToolCall { id:"parent".into(), name:"exec".into(), input:json!({"code":"notify('progress'); await new Promise(resolve => setTimeout(resolve, 60000));"}), provider_options:None, provider_executed:false };
         seed(&log, &invocation, &call).await;
         let sink = Arc::new(FaultSink { log:log.clone(), boundary:Boundary::Notification, attempts:Mutex::new(Vec::new()), faults:AtomicUsize::new(0) });
-        let run = RunTools::new(sink.clone(), invocation, ToolCatalog::default(), ToolMode::CodeMode, CodeExecutor::new(1, CellLimits::default()).unwrap());
+        let run = RunTools::new(sink.clone(), invocation, ToolCatalog::default(), ToolMode::CodeMode, CodeExecutor::new(1, CellLimits::default()).unwrap(), Default::default());
         let result = run.capture(".", CancellationToken::new()).await.unwrap().into_step("step").invoke(&call, CancellationToken::new()).await;
         assert!(matches!(result, Err(ToolError::Persistence(_))));
         assert!(matches!(run.shutdown().await, Err(ToolError::Persistence(_))));

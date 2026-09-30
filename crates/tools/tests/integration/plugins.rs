@@ -109,6 +109,7 @@ async fn request_capture_refreshes_plugins_without_retargeting_old_handlers_or_w
         core.clone(),
         ToolMode::Direct,
         CodeExecutor::new(1, CellLimits::default()).unwrap(),
+        Default::default(),
     );
     let empty = run
         .capture(".", tokio_util::sync::CancellationToken::new())

@@ -28,8 +28,14 @@ use maka_runtime::{
     event::Fact,
     input::InvocationInput,
 };
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 use tokio_util::sync::CancellationToken;
+
+pub(super) struct PreparedClaim {
+    pub claim: ContinuationClaim,
+    /// Candidate evidence, not a second owner of live Session preferences.
+    pub loaded_basis: BTreeSet<String>,
+}
 
 /// Derive admission evidence from the exact sealed source. The caller supplies
 /// only its boundary, never a replay digest or a pre-authorized claim.
@@ -39,8 +45,10 @@ pub(super) async fn prepare(
     source: &RunBoundary,
     catalog: &maka_tools::ToolCatalog,
     cancellation: &CancellationToken,
-) -> Result<ContinuationClaim, RunError> {
-    let (base, replay) = inspect(inner, input, source, catalog, cancellation).await?;
+) -> Result<PreparedClaim, RunError> {
+    let loaded_basis = inner.loaded_snapshot(&input.invocation.session_id);
+    let (base, replay) =
+        inspect(inner, input, source, catalog, cancellation, &loaded_basis).await?;
     let pause = match &input.work {
         crate::RunWork::Handoff { pause, .. } => Some(pause),
         _ => None,
@@ -59,7 +67,10 @@ pub(super) async fn prepare(
         None => claim.validate(&input.invocation),
     }
     .map_err(invalid)?;
-    Ok(claim)
+    Ok(PreparedClaim {
+        claim,
+        loaded_basis,
+    })
 }
 
 pub(super) async fn inspect(
@@ -68,6 +79,7 @@ pub(super) async fn inspect(
     source: &RunBoundary,
     catalog: &maka_tools::ToolCatalog,
     cancellation: &CancellationToken,
+    loaded_basis: &BTreeSet<String>,
 ) -> Result<(SessionBase, ReplayEvidence), RunError> {
     if source.invocation.session_id != input.invocation.session_id {
         return Err(invalid("continuation belongs to another Session"));
@@ -163,6 +175,7 @@ pub(super) async fn inspect(
         catalog.clone(),
         input.configuration.tool_mode,
         inner.cells.clone(),
+        loaded_basis.clone().into(),
     )
     .with_model(input.provider.tool_context());
     if let crate::RunWork::Handoff { pause, .. } = &input.work {

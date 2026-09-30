@@ -94,6 +94,41 @@ session retirement and Host restart clear it. JS globals and permissions are nev
 Compatibility baseline: official `openai/codex` commit
 `4b1c0c30dabd08fed7d6523844f9156d982eb297`; implementation is independent.
 
+## Session tool discovery
+
+The Engine owns one `LoadedTools` set per live Session, alongside its Code Mode
+scratch. `RunTools` receives that source explicitly; it does not own a second
+loading cache. A committed `tool_search` updates only subsequent requests.
+Ordinary turns retain loaded names. Successful adoption of automatic or standalone
+context compaction clears them after the checkpoint commits; failed summaries and
+unadopted background candidates do not. Compaction leaves scratch and the independent
+CUA REPL intact.
+
+Each request resolves current plugins, ceilings and bindings before intersecting
+loaded names with the complete bound catalog. Names are metadata preferences,
+never authority or retained handlers. Removed tools disappear immediately, and
+an already captured call still cannot retarget a replacement plugin. Direct mode
+advertises discovered schemas; Code Mode keeps the complete authorized nested
+catalog callable and uses loading only to expand declarations. Inspecting
+`ALL_TOOLS` or calling a nested tool does not itself change loading preferences.
+Catalog and preference ordering remains lexical; each request freezes both its
+schemas and declaration selection before any effect can update the Session.
+
+Ordinary Host restart and Session retirement clear this process-local preference.
+No extra table or replay of potentially archived search results is needed. Explicit
+handoff uses the existing durable `HandoffTools` checkpoint, retaining names including
+plugin tools, while rebinding current capabilities on the successor. Preflight uses
+a detached copy and cannot alter live Session preferences. The persisted base-catalog
+fingerprint still fences handoff configuration; tool names alone never restore access.
+Older Hosts that reject checkpoint names outside the base catalog cannot resume these
+new plugin-name handoffs; downgrade recovery is not a supported contract.
+
+Stable tool schemas and Code Mode declaration text avoid needless changes to the
+tool portion of model input. Prefix-cache effects depend on the provider's prefix
+layout and cache rules; this neither guarantees cache hits nor implies that every
+cache is invalidated by a tool change. Wire tests compare actual tool arrays,
+ordering and declaration text across turns, and complete input across physical retries.
+
 ## Ownership
 
 The provider's `exec` is a control operation. Its independently journaled

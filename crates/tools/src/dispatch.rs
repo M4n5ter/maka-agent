@@ -31,7 +31,7 @@ use maka_runtime::tools::{ToolError, ToolJournal};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::availability::{Availability, SEARCH};
+use crate::availability::{Availability, LoadedTools, SEARCH};
 use crate::{
     PreparedEffect, ToolCallContext, ToolCatalog, ToolDefinition, ToolMode, ToolSemantics, cell,
 };
@@ -59,19 +59,16 @@ impl RunTools {
         catalog: ToolCatalog,
         mode: ToolMode,
         cells: CodeExecutor,
+        loaded: LoadedTools,
     ) -> Self {
         Self {
             model: None,
             journal: ToolJournal::new(sink, invocation),
-            availability: Availability::new(catalog),
+            availability: Availability::new(catalog, loaded),
             mode,
             cells,
             code: cell::Cells::default(),
         }
-    }
-
-    pub fn clear_loaded(&self) {
-        self.availability.clear();
     }
 
     pub fn with_store(mut self, store: maka_js_runtime::CellStore) -> Self {
@@ -160,6 +157,7 @@ impl RunTools {
         } else {
             current
         };
+        let described = availability.snapshot();
         RequestTools {
             cwd: String::new(),
             context,
@@ -171,8 +169,9 @@ impl RunTools {
             catalog: if self.mode == ToolMode::CodeMode {
                 availability.all()
             } else {
-                availability.snapshot()
+                described.clone()
             },
+            described,
             availability,
         }
     }
@@ -190,6 +189,8 @@ pub struct RequestTools<'a> {
     direct: ToolCatalog,
     run: &'a RunTools,
     catalog: ToolCatalog,
+    /// Frozen description selection, separate from Code Mode callability.
+    described: ToolCatalog,
     availability: Availability,
 }
 
@@ -270,12 +271,7 @@ impl<'a> RequestTools<'a> {
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         if self.run.mode == ToolMode::CodeMode {
             let mut exec = cell::definition();
-            let definitions: Vec<_> = self
-                .availability
-                .snapshot()
-                .definitions()
-                .cloned()
-                .collect();
+            let definitions: Vec<_> = self.described.definitions().cloned().collect();
             exec.description.push_str("\nSome authorized tools may be omitted below. Find them by name and description in ALL_TOOLS; all are callable within the current cell.\n");
             exec.description.push_str(&cell::declarations(&definitions));
             std::iter::once(exec)

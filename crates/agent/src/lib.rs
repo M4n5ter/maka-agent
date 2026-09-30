@@ -58,6 +58,9 @@ use tokio_util::task::TaskTracker;
 pub enum RunError {
     #[error("session already has an active invocation")]
     Busy,
+    /// Preflight became stale; no invocation was opened or source claimed.
+    #[error("Session tool loading changed during continuation preparation; prepare again")]
+    ContinuationChanged,
     #[error("session requires reconciliation before another invocation: {0}")]
     ReconciliationRequired(String),
     #[error("invalid execution input: {0}")]
@@ -129,9 +132,41 @@ struct Inner {
     log: Arc<EventLog>,
     model: ModelExecutor,
     cells: CodeExecutor,
-    code_stores: Mutex<std::collections::HashMap<String, maka_js_runtime::CellStore>>,
+    sessions: Mutex<std::collections::HashMap<String, SessionState>>,
     active: Mutex<HashSet<String>>,
     workers: TaskTracker,
+}
+
+#[derive(Clone, Default)]
+struct SessionState {
+    code_store: maka_js_runtime::CellStore,
+    loaded: maka_tools::availability::LoadedTools,
+}
+
+impl Inner {
+    fn session_state(&self, session: &str) -> SessionState {
+        self.sessions
+            .lock()
+            .unwrap()
+            .entry(session.into())
+            .or_default()
+            .clone()
+    }
+
+    fn loaded_snapshot(&self, session: &str) -> std::collections::BTreeSet<String> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session)
+            .map(|state| state.loaded.snapshot())
+            .unwrap_or_default()
+    }
+
+    fn clear_loaded(&self, session: &str) {
+        if let Some(state) = self.sessions.lock().unwrap().get(session) {
+            state.loaded.clear();
+        }
+    }
 }
 
 /// Owns session admission and the entire invocation lifetime, including effects
@@ -140,11 +175,12 @@ struct Inner {
 pub struct Engine(Arc<Inner>);
 
 /// Engine-derived replay proof and its immutable input. Preparation may call
-/// plugin providers; durable admission consumes this without calling them again.
+/// plugin providers; durable admission revalidates the discovery basis without
+/// calling them again. A changed basis requires fresh preparation.
 pub struct PreparedContinuation {
     engine: std::sync::Weak<Inner>,
     input: RunInput,
-    claim: maka_runtime::continuation::ContinuationClaim,
+    claim: continuation::PreparedClaim,
 }
 impl PreparedContinuation {
     pub fn invocation(&self) -> &Invocation {
@@ -177,7 +213,7 @@ impl Engine {
             log,
             model,
             cells,
-            code_stores: Mutex::default(),
+            sessions: Mutex::default(),
             active: Mutex::new(HashSet::new()),
             workers: TaskTracker::new(),
         }))
@@ -192,8 +228,8 @@ impl Engine {
     }
 
     /// Host calls after session retirement has fenced and drained its runs.
-    pub fn release_code_store(&self, session: &str) {
-        self.0.code_stores.lock().unwrap().remove(session);
+    pub fn release_session_state(&self, session: &str) {
+        self.0.sessions.lock().unwrap().remove(session);
     }
 
     /// Observe replay safety without reserving a source or creating a claim.
@@ -212,9 +248,16 @@ impl Engine {
             .log
             .prepare_prune_candidates(&input.invocation.session_id, None, 0, 0, None)
             .await?;
-        continuation::inspect(&self.0, input, source, tools, cancellation)
-            .await
-            .map(|_| ())
+        continuation::inspect(
+            &self.0,
+            input,
+            source,
+            tools,
+            cancellation,
+            &self.0.loaded_snapshot(&input.invocation.session_id),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn prepare_continuation(
@@ -274,7 +317,7 @@ impl Engine {
     async fn start_model(
         &self,
         input: RunInput,
-        claim: Option<maka_runtime::continuation::ContinuationClaim>,
+        claim: Option<continuation::PreparedClaim>,
         cancellation: CancellationToken,
     ) -> Result<RunningInvocation, RunError> {
         if input

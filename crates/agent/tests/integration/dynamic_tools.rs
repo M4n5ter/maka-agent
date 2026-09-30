@@ -17,6 +17,8 @@
  * under the License.
  */
 
+mod session;
+
 use crate::support::context as fixture;
 use maka_agent::RunWork;
 use maka_event_log::EventLog;
@@ -43,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 struct Echo(Arc<AtomicUsize>);
 impl ToolExecutor for Echo {
     fn names(&self) -> Vec<String> {
-        vec!["echo".into()]
+        vec!["echo".into(), "zeta".into()]
     }
     fn invoke(&self, _: String, input: Value, _: CancellationToken) -> ToolFuture {
         self.0.fetch_add(1, Ordering::SeqCst);

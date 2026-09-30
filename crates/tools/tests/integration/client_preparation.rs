@@ -242,7 +242,14 @@ async fn run(mode: ToolMode, cut: Cut, cells: CodeExecutor) {
         .registrations(),
     )
     .unwrap();
-    let run = RunTools::new(log.clone(), invocation.clone(), catalog, mode, cells);
+    let run = RunTools::new(
+        log.clone(),
+        invocation.clone(),
+        catalog,
+        mode,
+        cells,
+        Default::default(),
+    );
     let cancellation = CancellationToken::new();
     let cancel = cancellation.clone();
     let execution = tokio::spawn(async move {

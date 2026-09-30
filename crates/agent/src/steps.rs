@@ -36,24 +36,19 @@ pub(super) async fn run(
     prior_unknown: bool,
 ) -> Result<maka_runtime::event::InvocationOutcome, RunError> {
     let lane = maka_model::Conversation::default();
+    let session = inner.session_state(&input.invocation.session_id);
     let mut tools = RunTools::new(
         inner.log.clone(),
         input.invocation.clone(),
         catalog.clone(),
         input.configuration.tool_mode,
         inner.cells.clone(),
+        session.loaded,
     )
     .with_model(input.provider.tool_context())
     .with_behavior(input.configuration.orchestration_mode.clone());
     if input.configuration.tool_mode == maka_runtime::execution::ToolMode::CodeMode {
-        let store = inner
-            .code_stores
-            .lock()
-            .unwrap()
-            .entry(input.invocation.session_id.clone())
-            .or_default()
-            .clone();
-        tools = tools.with_store(store);
+        tools = tools.with_store(session.code_store);
     }
     let mut pending: Option<auto_context::Pending> = None;
     let mut handoff_cleanup = None;
@@ -157,7 +152,6 @@ pub(super) async fn run(
                     .await?
             {
                 compaction = CompactionBudget::Reshaped;
-                tools.clear_loaded();
             }
             let mut source = if prior_unknown {
                 inner
@@ -201,7 +195,6 @@ pub(super) async fn run(
                         pending = Some(candidate);
                     } else if candidate.adopt(inner, cancellation).await? {
                         compaction = CompactionBudget::Reshaped;
-                        tools.clear_loaded();
                     }
                 }
                 source = inner
@@ -311,7 +304,6 @@ pub(super) async fn run(
                         && candidate.adopt(inner, cancellation).await?
                     {
                         compaction = CompactionBudget::Reshaped;
-                        tools.clear_loaded();
                         continue;
                     }
                     return Err(error);

@@ -211,12 +211,14 @@ async fn discovery_reports_schema_limits_without_loading_blocked_tools_or_runnin
         let search = preflight::call("search", "tool_search", json!({"query":"fixture"}));
         let invocation = preflight::invocation("discovery-budget");
         preflight::accepted(&log, &invocation, &[invalid.clone(), search.clone()]).await;
+        let loaded = maka_tools::availability::LoadedTools::default();
         let run = RunTools::new(
             log.clone(),
             invocation.clone(),
             catalog.clone(),
             ToolMode::Direct,
             CodeExecutor::new(1, CellLimits::default()).unwrap(),
+            loaded.clone(),
         );
         let request = run
             .capture(".", tokio_util::sync::CancellationToken::new())
@@ -258,12 +260,14 @@ async fn discovery_reports_schema_limits_without_loading_blocked_tools_or_runnin
             .await
             .unwrap();
         let checkpoint = run.checkpoint();
+        let restored_loaded = maka_tools::availability::LoadedTools::default();
         let restored = RunTools::new(
             log.clone(),
             invocation.clone(),
             catalog.clone(),
             ToolMode::Direct,
             CodeExecutor::new(1, CellLimits::default()).unwrap(),
+            restored_loaded.clone(),
         );
         restored.restore(&checkpoint).unwrap();
         assert_eq!(
@@ -274,8 +278,20 @@ async fn discovery_reports_schema_limits_without_loading_blocked_tools_or_runnin
                 .definitions(),
             next.definitions()
         );
+        let mut preferences = checkpoint.clone();
+        preferences.loaded.insert("withheld".into());
+        restored.restore(&preferences).unwrap();
+        assert_eq!(
+            restored
+                .capture(".", CancellationToken::new())
+                .await
+                .unwrap()
+                .definitions(),
+            next.definitions(),
+            "a restored name cannot advertise an absent implementation"
+        );
         let mut invalid = checkpoint.clone();
-        invalid.loaded.insert("withheld".into());
+        invalid.loaded.insert(String::new());
         assert!(restored.restore(&invalid).is_err());
         assert_eq!(
             restored.checkpoint(),
@@ -288,18 +304,43 @@ async fn discovery_reports_schema_limits_without_loading_blocked_tools_or_runnin
             ToolCatalog::default(),
             ToolMode::Direct,
             CodeExecutor::new(1, CellLimits::default()).unwrap(),
+            Default::default(),
         );
         assert!(changed.restore(&checkpoint).is_err());
         drop(changed);
-        restored.clear_loaded();
+        let coded = RunTools::new(
+            log.clone(),
+            invocation.clone(),
+            catalog.clone(),
+            ToolMode::CodeMode,
+            CodeExecutor::new(1, CellLimits::default()).unwrap(),
+            loaded.clone(),
+        );
+        let captured_code = coded.capture(".", CancellationToken::new()).await.unwrap();
+        let declarations = captured_code.definitions();
+        restored_loaded.clear();
         assert!(restored.checkpoint().loaded.is_empty());
         assert_eq!(
             run.checkpoint(),
             checkpoint,
-            "successor state does not share the old cache"
+            "a detached successor cannot change the prior Session preferences"
         );
         drop(restored);
-        run.clear_loaded();
+        loaded.clear();
+        assert_eq!(
+            captured_code.definitions(),
+            declarations,
+            "captured Code Mode declarations cannot reread mutable Session loading state"
+        );
+        assert_ne!(
+            coded
+                .capture(".", CancellationToken::new())
+                .await
+                .unwrap()
+                .definitions(),
+            declarations
+        );
+        drop(coded);
         assert_eq!(
             next.definitions()
                 .iter()

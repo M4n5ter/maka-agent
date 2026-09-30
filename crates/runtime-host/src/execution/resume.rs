@@ -227,16 +227,20 @@ impl Executions {
                 continue;
             };
             let invocation = run.invocation().clone();
-            let running = self
+            let running = match self
                 .engine
                 .start_continuation(run, self.shutdown.child_token())
                 .await
-                .map_err(|error| {
+            {
+                Ok(running) => running,
+                Err(RunError::ContinuationChanged) => continue,
+                Err(error) => {
                     if super::requires_drain(&error) {
                         self.begin_drain();
                     }
-                    super::execution_error(error)
-                })?;
+                    return Err(super::execution_error(error));
+                }
+            };
             self.track(running);
             return self
                 .query(TurnQueryInput {
