@@ -850,6 +850,8 @@ mod tests {
             }
         }
         assert!(!displayed.contains("STALE_MODEL"));
+        assert!(!displayed.contains(&app.i18n.text("chat-loading")));
+        assert!(app.chat.open_query().is_none());
         assert!(
             app.chrome
                 .composer

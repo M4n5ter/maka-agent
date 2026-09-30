@@ -810,7 +810,10 @@ impl Chat {
         }
         if self.snapshot.is_none() {
             self.view.invalidate_scrollbar();
-            frame.render_widget(Paragraph::new(i18n.text("chat-loading")), area);
+            // Unsent drafts have no remote session or transcript to load.
+            if self.session.is_some() {
+                frame.render_widget(Paragraph::new(i18n.text("chat-loading")), area);
+            }
             return vec![];
         }
         let active_turn = self
