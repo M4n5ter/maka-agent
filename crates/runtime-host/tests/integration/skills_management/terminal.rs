@@ -178,3 +178,28 @@ fn publication_gap(
     std::fs::remove_file(receipt).unwrap();
     transaction
 }
+
+pub(super) async fn bundled_defaults(peer: &mut Peer) {
+    let route = json!({"kind":"skill","reference":"workspace:legacy:maka-plugin-authoring"});
+    let view = read(peer, route, "en").await;
+    assert!(
+        view.fields
+            .iter()
+            .any(|field| field.id == "enabled" && field.enabled)
+    );
+    assert!(
+        !serde_json::to_string(&view.root)
+            .unwrap()
+            .contains("review-delete")
+    );
+    let rejected = raw(
+        peer,
+        Request::Read {
+            route: json!({"kind":"delete","reference":"workspace:legacy:maka-plugin-authoring"}),
+            locale: "en".into(),
+        },
+    )
+    .await;
+    assert_eq!(rejected["ok"], false, "{rejected}");
+    assert!(rejected.to_string().contains("disable this skill instead"));
+}

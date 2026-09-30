@@ -28,7 +28,9 @@ workspace's version. The workspace is private and is not an assumed registry pac
 Plugin development has one maintained guide: the
 [Maka plugin authoring skill](../../skills/maka-plugin-authoring/SKILL.md).
 It is bundled with Maka, including executable starter files and the complete SDK
-source contracts. Install it from the built-in skill library, then load
+source contracts. It is installed automatically for each Profile and its complete directory is
+replaced with the shipped version at startup, removing obsolete resources. Enable/disable
+and pinning preferences are preserved; keep custom changes in a separate skill. Load
 `/skill:maka-plugin-authoring` or let the model discover it. `Skill` reads its linked
 resources without exposing Host-private directories to ordinary file tools.
 

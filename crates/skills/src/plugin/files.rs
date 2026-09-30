@@ -29,11 +29,14 @@ use crate::{
 use maka_runtime::artifact::content_digest;
 use tokio_util::sync::CancellationToken;
 
+mod bundled;
 mod update;
+pub(super) use bundled::reconcile as reconcile_bundled;
 pub(super) struct Change {
     pub changed: bool,
     pub reference: Option<String>,
 }
+#[derive(Debug)]
 pub(super) enum Failure {
     Rejected(MutationRejection),
     Fatal(Error),
@@ -88,6 +91,9 @@ pub(super) async fn apply(
             update::apply(&publisher, sources, update, operation, cancellation).await
         }
         Mutation::Delete { reference } => {
+            if sources.bundled_origin(reference).is_some() {
+                return Err(Failure::Rejected(MutationRejection::BlockedScope));
+            }
             let discovery = &sources.publication.discovery;
             if !discovery
                 .inventory
@@ -243,29 +249,26 @@ async fn install(
     if sources.publication.occupied.contains(&id.to_lowercase()) {
         return Err(Failure::Rejected(MutationRejection::AlreadyExists));
     }
-    let content = match kind {
-        InstallSource::Bundled => sources
-            .bundled
-            .iter()
-            .find(|source| source.id == id)
-            .ok_or(Failure::Rejected(MutationRejection::NotFound))?
-            .content
-            .as_bytes()
-            .to_vec(),
-        InstallSource::Managed => source_content(sources, id, cancellation)?,
-    };
-    let mut tree = Tree::empty();
-    artifacts(&mut tree, id, id, kind, content)?;
-    if matches!(kind, InstallSource::Bundled) {
-        let source = sources
-            .bundled
-            .iter()
-            .find(|source| source.id == id)
-            .ok_or(Failure::Rejected(MutationRejection::NotFound))?;
-        for (path, bytes) in source.files {
-            tree.insert(path, bytes.to_vec())?;
+    let tree = match kind {
+        InstallSource::Bundled => bundled_tree(
+            sources
+                .bundled
+                .iter()
+                .find(|source| source.id == id)
+                .ok_or(Failure::Rejected(MutationRejection::NotFound))?,
+        )?,
+        InstallSource::Managed => {
+            let mut tree = Tree::empty();
+            artifacts(
+                &mut tree,
+                id,
+                id,
+                kind,
+                source_content(sources, id, cancellation)?,
+            )?;
+            tree
         }
-    }
+    };
     publisher
         .publish_operation(
             id,
@@ -286,6 +289,20 @@ async fn install(
         changed: true,
         reference: Some(format!("workspace:legacy:{id}")),
     })
+}
+fn bundled_tree(source: &crate::BundledSource) -> Result<Tree, Failure> {
+    let mut tree = Tree::empty();
+    artifacts(
+        &mut tree,
+        source.id,
+        source.id,
+        InstallSource::Bundled,
+        source.content.as_bytes().to_vec(),
+    )?;
+    for (path, bytes) in source.files {
+        tree.insert(path, bytes.to_vec())?;
+    }
+    Ok(tree)
 }
 fn source_content(
     sources: &SourceCatalog,

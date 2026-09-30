@@ -142,9 +142,14 @@ async fn native_candidates_page_by_session_and_reject_changed_catalog_and_retire
         panic!("last page expected")
     };
     assert_eq!(next_revision, revision);
-    assert_eq!(items.len(), 1);
-    assert!(ids.insert(items[0].id.clone()));
-    assert_eq!(ids.len(), MAX_ITEMS + 1);
+    for item in items {
+        assert!(ids.insert(item.id), "repeated candidate");
+    }
+    assert_eq!(
+        ids.iter().filter(|id| id.starts_with("review-")).count(),
+        MAX_ITEMS + 1
+    );
+    assert!(ids.contains("maka-plugin-authoring"));
     terminal::exercise(&client, "candidates").await;
     // A real file change invalidates a cursor; no automatic restart hides the change.
     std::fs::write(

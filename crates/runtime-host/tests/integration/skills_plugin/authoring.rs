@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::{Host, HostFixture, Peer, Provider, client, configure, converged};
+use super::{Host, HostFixture, Peer, Provider, client, configure, converged, disabled};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -42,17 +42,15 @@ async fn scenario() {
         json!({"kind":"catalog", "view":"bundled"}),
     )
     .await;
-    assert!(sources.to_string().contains("maka-plugin-authoring"));
-    let installed = client::workspace(
-        &mut peer,
-        &workspace,
-        json!({
-            "kind":"mutate", "expectedRevision":sources["revision"],
-            "mutation":{"kind":"install","sourceType":"bundled","sourceId":"maka-plugin-authoring"}
-        }),
-    )
-    .await;
-    assert_eq!(installed["entry"]["sourceType"], "bundled", "{installed}");
+    for id in ["maka-cua", "maka-plugin-authoring"] {
+        let item = sources["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap();
+        assert_eq!(item["installed"], true, "{item}");
+    }
     let location = client::workspace(&mut peer, &workspace, json!({
         "kind":"resolve_path", "ref":"workspace:legacy:maka-plugin-authoring", "target":"directory"
     })).await;
@@ -147,6 +145,47 @@ async fn scenario() {
             _ => tokio::task::yield_now().await,
         }
     }
+    // Bundled preferences survive reactivation while shipped resources are restored.
+    let basis = client::workspace(
+        &mut peer,
+        &workspace,
+        json!({"kind":"catalog","view":"governance"}),
+    )
+    .await;
+    let result = client::workspace(&mut peer, &workspace, json!({"kind":"mutate","expectedRevision":basis["revision"],"mutation":{"kind":"set_preferences","ref":"workspace:legacy:maka-plugin-authoring","enabled":false,"pinned":true}})).await;
+    assert_eq!(result["kind"], "committed", "{result}");
+    let basis = client::workspace(
+        &mut peer,
+        &workspace,
+        json!({"kind":"catalog","view":"governance"}),
+    )
+    .await;
+    let removal = client::workspace(&mut peer, &workspace, json!({"kind":"mutate","expectedRevision":basis["revision"],"mutation":{"kind":"delete","ref":"workspace:legacy:maka-cua"}})).await;
+    assert_eq!(removal["reason"], "blocked_scope", "{removal}");
+    disabled(&mut peer, true).await;
+    disabled(&mut peer, false).await;
+    let installed = client::workspace(
+        &mut peer,
+        &workspace,
+        json!({"kind":"catalog","view":"governance"}),
+    )
+    .await;
+    let items = installed["items"].as_array().unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|item| item["ref"] == "workspace:legacy:maka-cua")
+    );
+    let authoring = items
+        .iter()
+        .find(|item| item["ref"] == "workspace:legacy:maka-plugin-authoring")
+        .unwrap();
+    assert_eq!(authoring["enabled"], false);
+    assert_eq!(authoring["pinned"], true);
+    assert_eq!(
+        std::fs::read(&sdk).unwrap(),
+        include_bytes!("../../../../../packages/plugin-sdk/src/host.ts")
+    );
     peer.close().await;
     drop(host);
 }

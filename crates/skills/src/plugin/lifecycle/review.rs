@@ -39,6 +39,11 @@ impl Skills {
                 _ => None,
             })
             .ok_or_else(|| Error::Invalid("Skill directory is not manageable".into()))?;
+        if item.is_builtin() {
+            return Err(Error::Invalid(
+                "Bundled Skills are managed by Maka; disable this skill instead".into(),
+            ));
+        }
         // Review is read-only, including for user libraries: discovery already owns that read capability.
         let (files, path) = if let Some(id) = item.reference.strip_prefix("workspace:legacy:") {
             (

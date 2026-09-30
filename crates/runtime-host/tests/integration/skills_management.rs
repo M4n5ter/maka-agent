@@ -340,18 +340,16 @@ async fn skill_publication_and_confirmed_update_work_through_host_without_a_mode
                 .await;
                 assert_eq!(missing["reason"], "missing", "{missing}");
             }
-            let bundled = catalog(&mut peer, &context, "bundled").await;
-            let result = super::skills_plugin::client::workspace(
-                &mut peer,
-                &context["workspace"]["path"],
-                json!({
-                    "kind":"mutate","expectedRevision":bundled["revision"],
-                    "mutation":{"kind":"install","sourceType":"bundled","sourceId":"maka-cua"}
-                }),
-            )
-            .await;
-            assert_eq!(result["entry"]["sourceType"], "bundled", "{result}");
-            assert_eq!(result["entry"]["manageable"], true);
+            let bundled = catalog(&mut peer, &context, "governance").await;
+            let cua = bundled["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["ref"] == "workspace:legacy:maka-cua")
+                .unwrap();
+            assert_eq!(cua["sourceType"], "bundled");
+            assert_eq!(cua["enabled"], true);
+            terminal::bundled_defaults(&mut peer).await;
             let starter = mutate(&mut peer, &context, json!({"kind":"create_starter"})).await;
             assert_eq!(starter["kind"], "committed", "{starter}");
             let again = mutate(&mut peer, &context, json!({"kind":"create_starter"})).await;

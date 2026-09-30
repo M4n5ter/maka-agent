@@ -160,11 +160,8 @@ fn parse(bytes: &[u8], id: &str) -> Result<OriginStatus, OriginFailure> {
                 content_sha256,
             })
         }
-        SourceType::Bundled
-            if lock.source_name == "maka-bundled"
-                && lock.source_version == "1"
-                && super::sources::trusted_bundled_hash(id, &content_sha256) =>
-        {
+        // Provenance survives upgrades; the shipped body hash changes between releases.
+        SourceType::Bundled if lock.source_name == "maka-bundled" && lock.source_version == "1" => {
             Ok(OriginStatus::Bundled { content_sha256 })
         }
         _ => Err(OriginFailure::UnsupportedSchema),

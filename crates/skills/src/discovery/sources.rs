@@ -39,6 +39,16 @@ pub struct SourceCatalog {
     pub publication: QuerySnapshot,
 }
 impl SourceCatalog {
+    pub(crate) fn bundled_origin(&self, reference: &str) -> Option<&super::Origin> {
+        if !reference.starts_with("workspace:legacy:") {
+            return None;
+        }
+        self.publication
+            .origins
+            .get(reference)
+            .filter(|origin| matches!(origin.status, OriginStatus::Bundled { .. }))
+    }
+
     pub fn installed_managed_sources(&self) -> BTreeSet<String> {
         let mut installed = self.publication.occupied.clone();
         for skill in &self.publication.discovery.inventory {
@@ -88,12 +98,6 @@ struct Bundled {
     files: &'static [(&'static str, &'static [u8])],
 }
 include!(concat!(env!("OUT_DIR"), "/bundled.rs"));
-
-pub(super) fn trusted_bundled_hash(id: &str, hash: &str) -> bool {
-    BUNDLED.iter().any(|source| {
-        source.id == id && hash == maka_runtime::artifact::content_digest(source.content.as_bytes())
-    })
-}
 
 pub async fn source_catalog(
     root: &ReadDirectory,

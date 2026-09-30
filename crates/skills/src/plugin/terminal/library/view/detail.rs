@@ -31,7 +31,9 @@ pub(in crate::plugin::terminal::library) fn skill(
         clipped(&item.description, 8192, true),
         Tone::Normal,
     )];
-    if item.reference.starts_with("workspace:legacy:") {
+    if item.is_builtin() {
+        nodes.push(text("ownership", Copy::BuiltinHint.text(cx), Tone::Muted));
+    } else if item.reference.starts_with("workspace:legacy:") {
         nodes.push(text("ownership", Copy::Destination.text(cx), Tone::Muted));
     }
     if let Some(path) = &item.path {
@@ -63,6 +65,7 @@ pub(in crate::plugin::terminal::library) fn skill(
         );
     }
     if item.manageable
+        && !item.is_builtin()
         && (item.reference.starts_with("workspace:legacy:") || item.reference.starts_with("user:"))
     {
         nodes.push(

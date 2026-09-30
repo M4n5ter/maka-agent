@@ -150,6 +150,24 @@ impl Plugin for Builtin {
                 .recover()
                 .await
                 .map_err(|error| error.to_string())?;
+            let published = skills
+                .data
+                .read_only()
+                .await
+                .map_err(|error| error.to_string())?;
+            let cancellation = skills
+                .basis
+                .owner
+                .stopping()
+                .map_err(|error| error.to_string())?;
+            files::reconcile_bundled(&publisher, &published, &cancellation)
+                .await
+                .map_err(|failure| match failure {
+                    files::Failure::Fatal(error) => error.to_string(),
+                    files::Failure::Rejected(reason) => {
+                        format!("Bundled Skill synchronization rejected: {reason:?}")
+                    }
+                })?;
             drop(publisher);
             let recovering = skills.clone();
             skills

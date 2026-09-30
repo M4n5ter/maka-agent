@@ -28,7 +28,9 @@ Rust Runtime Host 的公开 TypeScript 契约。当前为 **Host SDK 3**、
 插件开发文档统一维护在
 [Maka 插件编写 skill](../../skills/maka-plugin-authoring/SKILL.md) 中。
 它随 Maka 内置分发，包含可执行模板和完整 SDK 源码契约。
-从内置技能库安装后，可用 `/skill:maka-plugin-authoring`，也可由模型按任务发现。
+每个 Profile 会自动安装，启动时将完整目录同步到随 Maka 提供的版本，清除过时资源。
+启用、禁用和固定设置会保留；自定义内容请另建技能保存。
+可用 `/skill:maka-plugin-authoring`，也可由模型按任务发现。
 `Skill` 按需读取附带资源，无需向普通文件工具开放 Host 私有目录。
 
 先读[快速开始](../../skills/maka-plugin-authoring/references/quickstart.md)，
