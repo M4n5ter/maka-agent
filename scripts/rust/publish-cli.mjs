@@ -190,8 +190,8 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
     }
     let verified = false;
     // npm acknowledges uploads before asynchronous processing exposes versions
-    // and tags. Allow several minutes without re-uploading accepted bytes.
-    const confirmationAttempts = 16;
+    // and tags. Allow about ten minutes without re-uploading accepted bytes.
+    const confirmationAttempts = 25;
     for (let attempt = 0; attempt < confirmationAttempts; attempt++) {
       const [observed, tags] = await Promise.all([
         metadata(pkg.name + '/' + pkg.version),
