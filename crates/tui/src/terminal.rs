@@ -83,6 +83,9 @@ impl Guard {
         #[cfg(unix)]
         execute!(
             io::stdout(),
+            // XTSHIFTESCAPE: ask supporting terminals to forward Shift+mouse
+            // instead of selecting across the terminal's entire screen.
+            crossterm::style::Print("\x1b[>1s"),
             PushKeyboardEnhancementFlags(
                 KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
@@ -99,7 +102,12 @@ impl Drop for Guard {
 }
 pub fn restore() {
     #[cfg(unix)]
-    let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    let _ = execute!(
+        io::stdout(),
+        // Release the request on normal exit, failed setup and panic cleanup.
+        crossterm::style::Print("\x1b[>0s"),
+        PopKeyboardEnhancementFlags
+    );
     let _ = execute!(
         io::stdout(),
         EndSynchronizedUpdate,

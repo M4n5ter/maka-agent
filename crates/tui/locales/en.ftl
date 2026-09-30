@@ -114,7 +114,8 @@ help = Tab / Shift+Tab     Move focus between controls
     Enter / Space      Toggle selected conversation item
     Shift+Arrows       Extend conversation text selection
     Shift+Home / End   Extend to visual line start / end
-    Shift+Click        Extend selection from its starting point, including after scrolling
+    Alt+Click          Extend from the selection start after scrolling (Option on macOS)
+    Shift+Click        Also extends when the terminal forwards Shift mouse events
     Shift+PageUp/Down  Extend selection by a page
     Ctrl+C             Copy / cancel / stop; otherwise press twice within 1s to quit
     F5                 Refresh current page
@@ -445,7 +446,8 @@ chat-copy-too-large = Copy is limited to 64 KiB · Select less text
 chat-copy-empty = Select text or a message to copy
 chat-copy-pending = The selected text is still being prepared. Try copying again shortly.
 chat-copy-unavailable = The text could not be prepared for copying.
-chat-selection-help = Ctrl+C Copy · Shift+Click Extend · Click elsewhere / Esc Clear
+chat-selection-help = Ctrl+C Copy · Alt+Click Extend · Click elsewhere / Esc Clear
+chat-selection-anchor-help = Scroll, then Alt/Option+click the endpoint · Click elsewhere / Esc Cancel
 
 session-rename = Rename session
 session-archive = Archive session

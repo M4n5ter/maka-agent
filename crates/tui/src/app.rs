@@ -1623,7 +1623,7 @@ impl App {
         };
         let outside_selection = matches!(&event, Event::Mouse(mouse)
             if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                && !mouse.modifiers.contains(KeyModifiers::SHIFT)
+                && !mouse.modifiers.intersects(crate::ui::transcript::selection::EXTEND_MODIFIERS)
                 && self.chat.area.is_some_and(|area| !area.contains((mouse.column, mouse.row).into())))
             && self.overlay().is_none();
         let quit_hint = self.shutdown.quit_deadline;

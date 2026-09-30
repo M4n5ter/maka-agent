@@ -114,7 +114,8 @@ help = Tab / Shift+Tab     在控件间移动焦点
     Enter / 空格       展开折叠选中的正文项
     Shift+方向键        扩展正文选区
     Shift+Home / End   扩选到视觉行首 / 行尾
-    Shift+点击          从原起点扩展选区，可先滚动再点击
+    Alt+点击            从原起点扩选，可先滚动再点击（macOS 使用 Option）
+    Shift+点击          终端转发 Shift 鼠标事件时也可扩选
     Shift+PageUp/Down  按页扩展选区
     Ctrl+C             复制 / 取消 / 停止；无其它操作时一秒内按两次退出
     F5                 刷新当前页
@@ -445,7 +446,8 @@ chat-copy-too-large = 复制上限为 64 KiB · 请缩小选区
 chat-copy-empty = 请先选择文字或消息
 chat-copy-pending = 所选文本仍在准备中，请稍后重试复制。
 chat-copy-unavailable = 无法准备要复制的文本。
-chat-selection-help = Ctrl+C 复制 · Shift+点击扩选 · 点击别处 / Esc 清除
+chat-selection-help = Ctrl+C 复制 · Alt+点击扩选 · 点击别处 / Esc 清除
+chat-selection-anchor-help = 滚动后 Alt/Option+点击终点 · 点击别处 / Esc 取消
 
 session-rename = 重命名会话
 session-archive = 归档会话

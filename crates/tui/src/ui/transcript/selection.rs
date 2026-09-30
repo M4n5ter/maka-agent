@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 pub const MAX_COPY_BYTES: usize = crate::terminal::MAX_CLIPBOARD_BYTES;
+// Many terminals reserve Shift+mouse for their own whole-screen selection.
+// Alt/Option is a fallback that uses the same logical selection.
+pub(crate) const EXTEND_MODIFIERS: KeyModifiers = KeyModifiers::SHIFT.union(KeyModifiers::ALT);
 mod keyboard;
 #[cfg(test)]
 mod loading;
@@ -384,14 +387,14 @@ impl Transcript {
         }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let extend = mouse.modifiers.contains(KeyModifiers::SHIFT)
+                let extend = mouse.modifiers.intersects(EXTEND_MODIFIERS)
                     && self.text_selection.has_caret()
                     && self
                         .text_selection
                         .area
                         .is_some_and(|area| area.contains((mouse.column, mouse.row).into()));
                 let point = self.text_point(mouse.column, mouse.row, extend);
-                if mouse.modifiers.contains(KeyModifiers::SHIFT)
+                if mouse.modifiers.intersects(EXTEND_MODIFIERS)
                     && let (Some(point), Some(extent)) =
                         (point.as_ref(), self.text_selection.extent.as_ref())
                 {
@@ -416,7 +419,7 @@ impl Transcript {
                     return Some(None);
                 }
                 if point.is_none() {
-                    let clear = !mouse.modifiers.contains(KeyModifiers::SHIFT)
+                    let clear = !mouse.modifiers.intersects(EXTEND_MODIFIERS)
                         && self
                             .text_selection
                             .area
@@ -1019,6 +1022,27 @@ mod tests {
             .unwrap();
         let start = position(&app.chat.view, &key, 0);
         let end = position(&app.chat.view, &key, "中文".len());
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.input(Event::Mouse(mouse(kind, start)));
+        }
+        terminal
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            screen.contains("Alt/Option+click"),
+            "a lone starting caret explains cross-screen extension"
+        );
+        assert!(!app.chat.view.text_selection.active());
         for (kind, point) in [
             (MouseEventKind::Down(MouseButton::Left), start),
             (MouseEventKind::Drag(MouseButton::Left), end),
@@ -1239,62 +1263,67 @@ mod tests {
     }
 
     #[test]
-    fn shift_click_extends_from_the_original_caret_after_scroll_and_blank_click_clears() {
-        let text = (0..80)
-            .map(|n| format!("line {n:02} 中文🦀\n"))
-            .collect::<String>();
-        let key = MessageKey::new("turn", "message", Part::Text);
-        let mut view = Transcript::default();
-        view.begin();
-        view.upsert(key.clone(), Revision::Durable(1), Kind::User, || {
-            text.clone().into()
-        });
-        view.finish([], &locale());
-        view.blocks.get_mut(&key).unwrap().folded = false;
-        draw_at(&mut view, 40, 8);
-        view.scroll(true, usize::MAX);
-        draw_at(&mut view, 40, 8);
-        let offset = text.find("line 01").unwrap();
-        let start = position(&view, &key, offset);
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            view.text_mouse(mouse(kind, start), None);
-        }
-        view.scroll(false, 20);
-        draw_at(&mut view, 40, 8);
-        let target = text.find("line 23").unwrap();
-        let at = position(&view, &key, target);
-        let mut event = mouse(MouseEventKind::Down(MouseButton::Left), at);
-        event.modifiers = KeyModifiers::SHIFT;
-        assert_eq!(
-            view.text_mouse(event, Some(Effect::Disclosure(key.clone()))),
-            Some(None)
-        );
-        view.text_mouse(mouse(MouseEventKind::Up(MouseButton::Left), at), None);
-        assert_eq!(
-            view.copy_text(CopyMode::Selection, false).unwrap(),
-            text[offset..target + 1]
-        );
-        assert!(!view.folded(&key), "Shift+click cannot toggle disclosure");
+    fn modified_click_extends_from_the_original_caret_after_scroll_and_blank_click_clears() {
+        for modifiers in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+            let text = (0..80)
+                .map(|n| format!("line {n:02} 中文🦀\n"))
+                .collect::<String>();
+            let key = MessageKey::new("turn", "message", Part::Text);
+            let mut view = Transcript::default();
+            view.begin();
+            view.upsert(key.clone(), Revision::Durable(1), Kind::User, || {
+                text.clone().into()
+            });
+            view.finish([], &locale());
+            view.blocks.get_mut(&key).unwrap().folded = false;
+            draw_at(&mut view, 40, 8);
+            view.scroll(true, usize::MAX);
+            draw_at(&mut view, 40, 8);
+            let offset = text.find("line 01").unwrap();
+            let start = position(&view, &key, offset);
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+            ] {
+                view.text_mouse(mouse(kind, start), None);
+            }
+            view.scroll(false, 20);
+            draw_at(&mut view, 40, 8);
+            let target = text.find("line 23").unwrap();
+            let at = position(&view, &key, target);
+            let mut event = mouse(MouseEventKind::Down(MouseButton::Left), at);
+            event.modifiers = modifiers;
+            assert_eq!(
+                view.text_mouse(event, Some(Effect::Disclosure(key.clone()))),
+                Some(None)
+            );
+            view.text_mouse(mouse(MouseEventKind::Up(MouseButton::Left), at), None);
+            assert_eq!(
+                view.copy_text(CopyMode::Selection, false).unwrap(),
+                text[offset..target + 1]
+            );
+            assert!(
+                !view.folded(&key),
+                "modified click cannot toggle disclosure"
+            );
 
-        view.scroll(true, usize::MAX);
-        draw_at(&mut view, 40, 8);
-        let at = position(&view, &key, 0);
-        let mut event = mouse(MouseEventKind::Down(MouseButton::Left), at);
-        event.modifiers = KeyModifiers::SHIFT;
-        view.text_mouse(event, None);
-        view.text_mouse(mouse(MouseEventKind::Up(MouseButton::Left), at), None);
-        assert_eq!(
-            view.copy_text(CopyMode::Selection, false).unwrap(),
-            text[..offset]
-        );
-        view.text_mouse(
-            mouse(MouseEventKind::Down(MouseButton::Left), (35, 3)),
-            None,
-        );
-        assert!(!view.text_selection.has_caret());
-        assert!(!view.text_selection.active());
+            view.scroll(true, usize::MAX);
+            draw_at(&mut view, 40, 8);
+            let at = position(&view, &key, 0);
+            let mut event = mouse(MouseEventKind::Down(MouseButton::Left), at);
+            event.modifiers = modifiers;
+            view.text_mouse(event, None);
+            view.text_mouse(mouse(MouseEventKind::Up(MouseButton::Left), at), None);
+            assert_eq!(
+                view.copy_text(CopyMode::Selection, false).unwrap(),
+                text[..offset]
+            );
+            view.text_mouse(
+                mouse(MouseEventKind::Down(MouseButton::Left), (35, 3)),
+                None,
+            );
+            assert!(!view.text_selection.has_caret());
+            assert!(!view.text_selection.active());
+        }
     }
 }

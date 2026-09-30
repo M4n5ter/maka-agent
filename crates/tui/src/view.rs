@@ -146,6 +146,15 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     crate::files::resolve_hits(app);
     // Session commands use the durable message exposed by this frame's reader.
     shell::header(frame, app, rows[0]);
+    let selection_hint = app.chat.reader().and_then(|reader| {
+        if reader.text_selection.active() {
+            Some("chat-selection-help")
+        } else if reader.text_selection.has_caret() {
+            Some("chat-selection-anchor-help")
+        } else {
+            None
+        }
+    });
     let hint = if app.shutdown.stopping {
         app.i18n.text("shutdown-working")
     } else if app.closing {
@@ -166,13 +175,8 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         app.i18n.text("session-create-failed")
     } else if let Some(Notice::Diagnostic(_)) = &app.notice {
         app.i18n.text("feedback-host-failed")
-    } else if app
-        .chat
-        .reader()
-        .is_some_and(|reader| reader.text_selection.active())
-        && !app.chrome.details
-    {
-        app.i18n.text("chat-selection-help")
+    } else if let Some(key) = selection_hint.filter(|_| !app.chrome.details) {
+        app.i18n.text(key)
     } else if let Some(hint) = app
         .chrome
         .header

@@ -27,6 +27,14 @@ Runtime Host 的终端客户端，通过 `maka tui` 启动。
 
 `Enter` 发送消息，模型工作时排入下一轮。支持增强键盘协议的终端用 `Shift+Enter` 换行；传统终端（包括通过 WSL 使用的 Windows Terminal）可用 `Ctrl+J`。粘贴多行文字不会自动发送。`Ctrl+K` 打开命令，`Ctrl+F` 查找对话，`Ctrl+N` 新建会话；弹层和搜索优先处理各自的按键。
 
+跨屏选择正文时，单击起点，滚动后用 `Alt+点击` 选择终点（macOS 使用 Option）。
+普通点击清除选区，`Shift+方向键`、`Shift+PageUp/PageDown` 也可扩选。
+终端转发 Shift 鼠标事件时，`Shift+点击` 使用同一套选区。Maka 在 Unix 下运行时
+通过 `XTSHIFTESCAPE` 请求转发，退出时释放；部分终端仍会保留 Shift 原生选区，
+这种选区可能包含侧栏，Maka 无法清除。`Alt+点击` 可避开该 Shift 策略。
+Otty 1.5.4 可额外设置 `mouse-shift-to-select = false` 来转发 Shift；这是可选的
+终端全局偏好，使用 `Alt+点击` 不需要它。
+
 侧栏的「搜索」打开命令面板，按名称、工作区、ID 和目录展示的标签扫描 Host 的分页会话目录；宽泛搜索可选择「更多匹配会话」继续。模型选择器可跨目录分页搜索已启用的聊天模型。
 
 Host 尚无模型连接或默认模型时，工作区首页会显示相应的设置入口；此时 `Ctrl+N` 进入缺失的设置步骤。现有会话仍可打开。

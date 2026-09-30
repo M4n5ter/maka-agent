@@ -114,7 +114,8 @@ help = Tab / Shift+Tab     在控制項間移動焦點
     Enter / 空白鍵     展開摺疊選取的正文項
     Shift+方向鍵        擴展正文選取範圍
     Shift+Home / End   擴選至視覺行首 / 行尾
-    Shift+點擊          從原起點擴展選取範圍，可先捲動再點擊
+    Alt+點擊            從原起點擴選，可先捲動再點擊（macOS 使用 Option）
+    Shift+點擊          終端機轉發 Shift 滑鼠事件時也可擴選
     Shift+PageUp/Down  按頁擴展選取範圍
     Ctrl+C             複製 / 取消 / 停止；無其他操作時一秒內按兩次離開
     F5                 重新整理目前頁面
@@ -445,7 +446,8 @@ chat-copy-too-large = 複製上限為 64 KiB · 請縮小選取範圍
 chat-copy-empty = 請先選取文字或訊息
 chat-copy-pending = 所選文字仍在準備中，請稍後重試複製。
 chat-copy-unavailable = 無法準備要複製的文字。
-chat-selection-help = Ctrl+C 複製 · Shift+點擊擴選 · 點擊別處 / Esc 清除
+chat-selection-help = Ctrl+C 複製 · Alt+點擊擴選 · 點擊別處 / Esc 清除
+chat-selection-anchor-help = 捲動後 Alt/Option+點擊終點 · 點擊別處 / Esc 取消
 
 session-rename = 重新命名對話
 session-archive = 封存對話
