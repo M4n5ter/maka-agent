@@ -74,6 +74,23 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn clipboard_files(
+        &self,
+        directory: &std::path::Path,
+    ) -> HashSet<std::path::PathBuf> {
+        self.attachments
+            .values()
+            .flatten()
+            .map(|file| file.path.as_path())
+            .chain(
+                self.revision
+                    .iter()
+                    .flat_map(|saved| saved.local_attachment_paths()),
+            )
+            .filter(|path| path.parent() == Some(directory))
+            .map(std::path::Path::to_owned)
+            .collect()
+    }
     pub fn capture(app: &App, root: &str) -> Self {
         let mut unresolved: Vec<_> = app
             .sending

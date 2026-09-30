@@ -18,6 +18,7 @@
  */
 
 pub mod io;
+pub(crate) mod paste;
 mod view;
 use crate::{
     app::{Action, App, ConnectionState},
@@ -68,6 +69,7 @@ pub struct Ticket {
 pub enum Command {
     Open,
     Browse,
+    Paste,
     Directory,
     Skills,
     Close,
@@ -85,6 +87,7 @@ impl Command {
         match self {
             Self::Open | Self::Select(_) => "attachments-title",
             Self::Browse => "attachments-add",
+            Self::Paste => "composer-paste",
             Self::Directory => "references-title",
             Self::Skills => "skills-title",
             Self::Close => "attachments-close",
@@ -111,6 +114,7 @@ pub enum Read {
     Recovered(AttachmentRef),
 }
 pub enum Completed {
+    Pasted(paste::Ticket, Result<paste::Content, String>),
     Browsed(io::Browse, Result<io::Listing, Failure>),
     Prepared(Ticket, Result<Read, Failure>),
     Uploaded(Ticket, Result<AttachmentRef, Failure>),
@@ -156,6 +160,7 @@ struct Active {
 }
 #[derive(Default)]
 pub struct State {
+    pub(crate) paste: Option<paste::Pending>,
     pub saved: BTreeMap<String, Vec<Saved>>,
     queued: VecDeque<(String, Option<String>, String)>,
     errors: HashMap<String, Failure>,
@@ -183,14 +188,23 @@ pub struct Dialog {
 }
 impl State {
     pub fn has(&self, session: &str) -> bool {
-        self.saved
-            .get(session)
-            .is_some_and(|items| !items.is_empty())
+        self.paste
+            .as_ref()
+            .is_some_and(|paste| paste.ticket.session == session)
+            || self
+                .saved
+                .get(session)
+                .is_some_and(|items| !items.is_empty())
     }
     pub fn ready(&self, session: &str) -> bool {
-        self.saved
-            .get(session)
-            .is_none_or(|items| items.iter().all(|item| item.attachment.is_some()))
+        !self
+            .paste
+            .as_ref()
+            .is_some_and(|paste| paste.ticket.session == session)
+            && self
+                .saved
+                .get(session)
+                .is_none_or(|items| items.iter().all(|item| item.attachment.is_some()))
     }
     pub fn references(&self, session: &str) -> Option<Vec<AttachmentRef>> {
         self.saved
@@ -217,6 +231,7 @@ impl State {
         }
     }
     pub fn disconnect(&mut self) {
+        self.paste = None;
         self.queued.clear();
         if let Some(active) = &self.active {
             active.transfer.cancelled.store(true, Ordering::Relaxed);
@@ -373,6 +388,11 @@ impl App {
                 .is_some_and(|sent| sent.delivery.blocks_send())
     }
     pub fn attachment_enabled(&self, command: &Command) -> bool {
+        if *command == Command::Paste {
+            return self.attachments.paste.is_none()
+                && matches!(self.navigation.current(), Route::Session(ref id)
+                    if self.attachment_editable(id));
+        }
         if *command == Command::Skills {
             return self.skills_enabled(&crate::pages::skills::Command::Open);
         }
@@ -405,7 +425,7 @@ impl App {
         match command {
             Command::Open | Command::Close | Command::Details | Command::Select(_) => true,
             Command::Browse => editable && count < capacity,
-            Command::Directory | Command::Skills => unreachable!(),
+            Command::Directory | Command::Skills | Command::Paste => unreachable!(),
             Command::Parent | Command::Path | Command::EnterPath | Command::Pick(_) => {
                 editable && count < capacity
             }
@@ -436,6 +456,10 @@ impl App {
         }
     }
     pub fn attachment_action(&mut self, command: Command) -> Option<Action> {
+        if command == Command::Paste {
+            self.paste_clipboard();
+            return None;
+        }
         if command == Command::Skills {
             self.attachments.dialog = None;
             self.skills_action(crate::pages::skills::Command::Open);
@@ -497,7 +521,7 @@ impl App {
                 dialog.browse = false;
                 dialog.selected = 0;
             }
-            Command::Directory | Command::Skills => unreachable!(),
+            Command::Directory | Command::Skills | Command::Paste => unreachable!(),
             Command::Browse => {
                 dialog.browse = true;
                 dialog.selected = 0;

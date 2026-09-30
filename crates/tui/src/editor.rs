@@ -122,6 +122,9 @@ impl Editor {
     pub fn text(&self) -> &str {
         &self.text
     }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
     pub fn retained_bytes(&self) -> usize {
         self.text.len() + self.history_bytes + marks::bytes(&self.marks)
     }

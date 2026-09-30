@@ -27,6 +27,13 @@ Runtime Host 的终端客户端，通过 `maka tui` 启动。
 
 `Enter` 发送消息，模型工作时排入下一轮。支持增强键盘协议的终端用 `Shift+Enter` 换行；传统终端（包括通过 WSL 使用的 Windows Terminal）可用 `Ctrl+J`。粘贴多行文字不会自动发送。`Ctrl+K` 打开命令，`Ctrl+F` 查找对话，`Ctrl+N` 新建会话；弹层和搜索优先处理各自的按键。
 
+Composer 支持 `Ctrl+V` 或「+ → 从剪贴板粘贴」，读取 macOS、Windows、Linux
+本机剪贴板中的图片、复制的文件或文字。终端传入的完整绝对路径或本地 `file://`
+URL 会转为附件，支持引号、转义空格和多文件；其他文字保留在草稿中。
+文件沿用附件校验与上传队列，无效路径、目录、超限文件会显示具体附件错误。
+剪贴板图片随本地草稿保存，移除并成功保存草稿后回收。`Cmd+V` / `Ctrl+Shift+V`
+由终端处理；终端不转发图片数据时使用 `Ctrl+V`。SSH 下读取的是 TUI 所在主机的剪贴板。
+
 跨屏选择正文时，单击起点，滚动后用 `Alt+点击` 选择终点（macOS 使用 Option）。
 普通点击清除选区，`Shift+方向键`、`Shift+PageUp/PageDown` 也可扩选。
 终端转发 Shift 鼠标事件时，`Shift+点击` 使用同一套选区。Maka 在 Unix 下运行时

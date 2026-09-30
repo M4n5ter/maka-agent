@@ -802,6 +802,11 @@ revision-resource-inline = 行內引用 · 正文中需保留完整標記
 
 attachments-title = 附件
 attachments-selected = 已選擇
+composer-paste = 從剪貼簿貼上 · Ctrl+V
+composer-paste-reading = 正在讀取剪貼簿…
+composer-paste-failed = 無法貼上：{ $error }
+composer-paste-changed = 讀取剪貼簿期間草稿已修改，請在所需位置重新貼上。
+attachments-limit = 每則訊息最多加入 8 個附件
 attachments-add = 新增檔案
 attachments-close = 關閉
 attachments-local-files = 本機檔案

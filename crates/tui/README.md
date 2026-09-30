@@ -33,6 +33,16 @@ When the Host has no model connection or default model, the workspace home offer
 
 Chat and plugin transcripts share Markdown, selection, search and streaming presentation. New streamed text briefly fades to its final color without delaying the received content or changing its layout. Reduced motion and terminal-owned colors display it immediately.
 
+In the composer, `Ctrl+V` or **+ → Paste from clipboard** reads images, copied
+files, or text from the local clipboard on macOS, Windows and Linux. Terminal
+pastes consisting of absolute file paths or local `file://` URLs become
+attachments, including quoted/escaped paths and multiple files. Other text
+stays in the draft. Files use the existing attachment checks and upload queue;
+invalid paths, directories and oversized files show an attachment error.
+Clipboard images are kept with the local draft and reclaimed after removal is
+saved. The terminal controls `Cmd+V`/`Ctrl+Shift+V`; use `Ctrl+V` for image data
+that it does not forward. Over SSH, native clipboard access is on the TUI host.
+
 For a selection longer than the viewport, click its start, scroll, then
 Alt+click its end (Option+click on macOS). Normal clicks clear the selection;
 Shift+arrows and Shift+PageUp/PageDown also extend it. Shift+click uses the same

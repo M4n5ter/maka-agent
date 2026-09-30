@@ -261,6 +261,10 @@ pub(crate) fn composer_add() -> Vec<(Action, &'static str)> {
             )),
             "completion-commands",
         ),
+        (
+            Action::Attachment(super::attachments::Command::Paste),
+            "composer-paste",
+        ),
     ]
 }
 

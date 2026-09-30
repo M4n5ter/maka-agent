@@ -105,6 +105,12 @@ pub struct Checkpoint {
     pub(super) view: View,
 }
 impl Checkpoint {
+    pub(crate) fn local_attachment_paths(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.inputs
+            .iter()
+            .flat_map(|input| &input.files)
+            .map(|file| file.path.as_path())
+    }
     pub(crate) fn completion_bytes(&self) -> usize {
         self.inputs
             .iter()

@@ -171,10 +171,16 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         }
     } else if let Some(Notice::Clipboard { key, .. } | Notice::Local(key)) = &app.notice {
         app.i18n.text(key)
+    } else if let Some(Notice::Paste(error)) = &app.notice {
+        app.i18n
+            .format("composer-paste-failed", &[("error", &safe(error))])
     } else if let Some(Notice::CreateFailed(_)) = &app.notice {
         app.i18n.text("session-create-failed")
     } else if let Some(Notice::Diagnostic(_)) = &app.notice {
         app.i18n.text("feedback-host-failed")
+    } else if app.attachments.paste.as_ref().is_some_and(|pending|
+        matches!(app.navigation.current(), Route::Session(ref id) if *id == pending.ticket.session)) {
+        app.i18n.text("composer-paste-reading")
     } else if let Some(key) = selection_hint.filter(|_| !app.chrome.details) {
         app.i18n.text(key)
     } else if let Some(hint) = app

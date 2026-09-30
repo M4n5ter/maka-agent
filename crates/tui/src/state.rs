@@ -38,6 +38,7 @@ use std::{
 
 pub struct State {
     root: String,
+    pub(crate) clipboard_directory: PathBuf,
     store: Arc<Mutex<store::Store>>,
     deadline: Option<Instant>,
     requests: Vec<Submission>,
@@ -113,6 +114,7 @@ impl State {
             Ok::<_, Error>(Some((
                 Self {
                     root: store.root.clone(),
+                    clipboard_directory: store.clipboard_directory(),
                     store: Arc::new(Mutex::new(store)),
                     deadline: None,
                     requests: Vec::new(),
@@ -362,6 +364,7 @@ mod tests {
         let (store, _) = store::Store::open(directory.path(), ROOT, "default").unwrap();
         let state = State {
             root: ROOT.into(),
+            clipboard_directory: store.clipboard_directory(),
             store: Arc::new(Mutex::new(store)),
             deadline: None,
             requests: vec![],

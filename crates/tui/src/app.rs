@@ -137,6 +137,7 @@ pub enum ConnectionState {
 
 pub enum Notice {
     Local(&'static str),
+    Paste(String),
     Clipboard { key: &'static str, until: Instant },
     Diagnostic(String),
     CreateFailed(String),
@@ -2152,6 +2153,14 @@ impl App {
                         return (false, None);
                     }
                     Some(Action::SendMessage)
+                } else if key.code == KeyCode::Char('v')
+                    && matches!(key.modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
+                    && key.kind == KeyEventKind::Press
+                    && self.focus == Focus::Composer
+                {
+                    Some(Action::Attachment(
+                        crate::pages::attachments::Command::Paste,
+                    ))
                 } else if key.code == KeyCode::Char('j')
                     && key.modifiers == KeyModifiers::CONTROL
                     && self.focus == Focus::Composer
@@ -2343,10 +2352,7 @@ impl App {
                 }
             }
             Event::Paste(text) if self.palette.is_none() && self.focus == Focus::Composer => {
-                return (
-                    self.editor().is_some_and(|editor| editor.insert(&text)),
-                    None,
-                );
+                return (self.paste_text(&text), None);
             }
             _ => return (false, None),
         };

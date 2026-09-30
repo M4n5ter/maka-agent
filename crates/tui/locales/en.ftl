@@ -802,6 +802,11 @@ revision-resource-inline = Inline reference · keep its token intact in the text
 
 attachments-title = Attachments
 attachments-selected = Selected
+composer-paste = Paste from clipboard · Ctrl+V
+composer-paste-reading = Reading clipboard…
+composer-paste-failed = Could not paste: { $error }
+composer-paste-changed = The draft changed while reading the clipboard. Paste again at the desired position.
+attachments-limit = Up to 8 attachments per message
 attachments-add = Attach files
 attachments-close = Close
 attachments-local-files = Local files

@@ -325,6 +325,13 @@ where
             dirty = true;
         }
         app.advance_revision_uploads();
+        if let Some(ticket) = app.clipboard_request() {
+            let directory = state
+                .as_ref()
+                .map(|state| state.clipboard_directory.clone());
+            attachment_jobs.spawn(pages::attachments::paste::read(ticket, directory));
+            dirty = true;
+        }
         if !app.closing
             && let Some(request) = app.attachment_browse_request()
         {
@@ -1465,6 +1472,7 @@ where
             _ = tokio::time::sleep(Duration::from_millis(100)), if app.attachments.uploading() && app.chrome.window_focused => { checkpoint_impact = state::Impact::Reading; dirty = true; }
             completed = attachment_jobs.join_next(), if !attachment_jobs.is_empty() => {
                 match completed {
+                    Some(Ok(pages::attachments::Completed::Pasted(ticket, result))) => app.clipboard_pasted(ticket, result),
                     Some(Ok(pages::attachments::Completed::Browsed(request, result))) => app.attachment_browsed(request, result),
                     Some(Ok(pages::attachments::Completed::Prepared(ticket, result))) => {
                         if let Some(ticket) = app.attachment_prepared(ticket, result) {
