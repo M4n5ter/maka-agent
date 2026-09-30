@@ -326,13 +326,13 @@ mod tests {
         assert_eq!(view.order.len(), 3, "three steps become one row");
         let screen = draw(&mut view, 80, false);
         assert!(
-            screen.contains("◆ Verifying maximality proof · 3 steps"),
+            screen.contains("• Verifying maximality proof · 3 steps"),
             "{screen}"
         );
         assert!(!screen.contains("Checking digit arrangements"));
         view.toggle(&group);
         let screen = draw(&mut view, 80, false);
-        for step in ["  ◆ Checking digit arrangements", "  ◆ Relating digit sums"] {
+        for step in ["  • Checking digit arrangements", "  • Relating digit sums"] {
             assert!(screen.contains(step), "{step} in {screen}");
         }
         // A streaming step joins the run and retitles it as it arrives.
@@ -350,14 +350,14 @@ mod tests {
             .collect();
         view.sync(&without_answer, &[(id, stream)], 1, &i18n, false);
         view.toggle(&group);
-        assert!(draw(&mut view, 80, false).contains("◆ Writing the answer · 4 steps"));
+        assert!(draw(&mut view, 80, false).contains("• Writing the answer · 4 steps"));
         // Reading state keeps the fold and its membership across a restore.
         view.sync(&rows, &[], 2, &i18n, false);
         view.toggle(&group);
         let mut restored = Transcript::resume(view.take_reading());
         restored.sync(&rows, &[], 0, &i18n, false);
         assert!(!restored.folded(&group));
-        assert!(draw(&mut restored, 80, false).contains("  ◆ Relating digit sums"));
+        assert!(draw(&mut restored, 80, false).contains("  • Relating digit sums"));
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
             "unchanged groups reuse their cached layout"
         );
         view.toggle(&group);
-        assert!(draw(&mut view, 80, false).contains("  ◆ Read · a.rs"));
+        assert!(draw(&mut view, 80, false).contains("  • Read · a.rs"));
         assert!(view.order.contains(&first));
         view.toggle(&first);
         assert!(draw(&mut view, 80, false).contains("Arguments"));

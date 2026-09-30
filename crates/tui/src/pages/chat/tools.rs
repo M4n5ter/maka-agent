@@ -161,7 +161,10 @@ impl Card<'_> {
             }
         };
         text.push_str(&label);
-        if explicit_title || matches!(state, State::Waiting | State::Missing) || state.problem() {
+        if (explicit_title && state == State::Pending)
+            || matches!(state, State::Waiting | State::Missing)
+            || state.problem()
+        {
             text.push_str(&format!(
                 " · {}",
                 i18n.text(

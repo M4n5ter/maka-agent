@@ -821,6 +821,27 @@ impl Transcript {
                     },
                     |visual| self.styled(block, key, row, visual.line.clone()),
                 );
+                if row == block.header
+                    && block.visual_current()
+                    && let Some(bytes) =
+                        visual
+                            .zip(block.emphasis.as_ref())
+                            .and_then(|(visual, emphasis)| {
+                                visual
+                                    .mapping
+                                    .iter()
+                                    .filter_map(|span| span.intersection(emphasis))
+                                    .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
+                            })
+                {
+                    crate::files::restyle(
+                        &mut line,
+                        bytes,
+                        Style::default()
+                            .fg(self.colors.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    );
+                }
                 if let Some(visual) = visual
                     && let Some(wait) =
                         block
@@ -845,24 +866,6 @@ impl Transcript {
                     if focused {
                         line =
                             line.patch_style(Style::default().add_modifier(Modifier::UNDERLINED));
-                    }
-                    if block.visual_current()
-                        && let Some(bytes) =
-                            visual
-                                .zip(block.emphasis.as_ref())
-                                .and_then(|(visual, emphasis)| {
-                                    visual
-                                        .mapping
-                                        .iter()
-                                        .filter_map(|span| span.intersection(emphasis))
-                                        .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
-                                })
-                    {
-                        crate::files::restyle(
-                            &mut line,
-                            bytes,
-                            Style::default().add_modifier(Modifier::BOLD),
-                        );
                     }
                     if block.kind.foldable() && block.expandable && area.width > block.indent {
                         hits.push(Hit {
@@ -977,13 +980,14 @@ impl Transcript {
     ) -> Line<'static> {
         let header = row == block.header;
         let line = match block.kind {
-            Kind::Tool(state) if header && state.problem() => {
-                line.style(Style::default().fg(state.color(self.colors)))
-            }
             Kind::Thinking | Kind::Steps => {
                 let mut line = line;
                 for span in &mut line.spans {
-                    span.style.fg = Some(self.colors.thinking);
+                    span.style.fg = Some(if block.folded {
+                        self.colors.muted
+                    } else {
+                        self.colors.thinking
+                    });
                     span.style = span.style.remove_modifier(Modifier::BOLD);
                 }
                 line
@@ -993,14 +997,11 @@ impl Transcript {
             }
             Kind::User => line.style(Style::default().bg(self.colors.surface)),
             Kind::Failure if header => line.style(Style::default().fg(self.colors.error)),
-            // Collapsed activity recedes like grok's summary rows; an open
-            // header is what the reader is inspecting, so it stays brighter.
-            Kind::Tool(_) | Kind::Activity | Kind::Meta if block.folded => {
-                line.style(Style::default().fg(self.colors.subtle))
-            }
-            Kind::Tool(_) | Kind::Activity | Kind::Meta if header => {
-                line.style(Style::default().fg(self.colors.muted))
-            }
+            Kind::Meta if block.folded => line.style(Style::default().fg(self.colors.subtle)),
+            // Status belongs to the gutter. Keep details quiet and emphasize
+            // only the action label; explicit diff/link styles remain intact.
+            Kind::Tool(_) | Kind::Activity => line.style(Style::default().fg(self.colors.muted)),
+            Kind::Meta if header => line.style(Style::default().fg(self.colors.muted)),
             _ => line,
         };
         if key.part == Part::Timing {
@@ -1036,11 +1037,6 @@ impl Transcript {
     ) -> Span<'static> {
         let indent = " ".repeat(usize::from(block.indent));
         let lines = block.rows();
-        let problem = match block.kind {
-            Kind::Tool(state) if state.problem() => Some(state.color(self.colors)),
-            Kind::Failure => Some(self.colors.error),
-            _ => None,
-        };
         let (glyph, color) = if row == block.header {
             // A block folded against its kind's default (a hidden answer) must
             // say so at rest; summaries folded by default keep their bullet.
@@ -1057,15 +1053,15 @@ impl Transcript {
                 (false, _, Kind::User, false) => "❯",
                 (false, _, Kind::User, true) => ">",
                 (false, _, Kind::Assistant | Kind::Timing | Kind::Meta, _) => " ",
-                (false, _, Kind::Activity, false) => "◈",
-                (false, _, _, false) => "◆",
+                (false, _, _, false) => "•",
                 (false, _, _, true) => "*",
             };
             let color = match block.kind {
-                _ if focused => self.colors.accent,
                 Kind::Tool(state) => state.color(self.colors),
+                _ if focused => self.colors.accent,
                 Kind::User => self.colors.accent,
-                _ => problem.unwrap_or(self.colors.subtle),
+                Kind::Failure => self.colors.error,
+                _ => self.colors.subtle,
             };
             (glyph, color)
         } else if row < lines
@@ -1075,7 +1071,11 @@ impl Transcript {
         {
             (
                 if ascii { "|" } else { "│" },
-                problem.unwrap_or(self.colors.border),
+                if block.kind == Kind::Failure {
+                    self.colors.error
+                } else {
+                    self.colors.border
+                },
             )
         } else {
             (" ", self.colors.subtle)
@@ -1692,6 +1692,67 @@ mod tests {
     }
 
     #[test]
+    fn tool_status_colors_only_the_marker_and_keeps_titles_readable() {
+        use crate::theme::Choice;
+        for theme in [Choice::Maka, Choice::Paper, Choice::Terminal] {
+            for state in [
+                ToolState::Attention,
+                ToolState::Failed,
+                ToolState::TimedOut,
+                ToolState::Cancelled,
+                ToolState::Completed,
+            ] {
+                let mut view = Transcript {
+                    colors: theme.colors(),
+                    ..Default::default()
+                };
+                let key = MessageKey::new("turn", "tool", Part::Tool);
+                view.begin();
+                view.upsert(key.clone(), Revision::Durable(1), Kind::Tool(state), || {
+                    Content {
+                        emphasis: Some(0..7),
+                        .."Inspect · diagnostic\nDetails remain readable"
+                            .to_owned()
+                            .into()
+                    }
+                });
+                view.finish([], &locale());
+                let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
+                for folded in [true, false] {
+                    for focused in [false, true] {
+                        for hovered in [false, true] {
+                            view.select(key.clone());
+                            view.focused = focused;
+                            view.hovered = hovered.then(|| key.clone());
+                            terminal
+                                .draw(|frame| {
+                                    view.draw(frame, frame.area(), false).unwrap();
+                                })
+                                .unwrap();
+                            let cells = terminal.backend().buffer();
+                            assert_eq!(
+                                cells[(0, 0)].fg,
+                                state.color(view.colors),
+                                "focus and disclosure must keep the status marker"
+                            );
+                            assert_eq!(cells[(2, 0)].fg, view.colors.foreground);
+                            assert!(cells[(2, 0)].modifier.contains(Modifier::BOLD));
+                            assert_eq!(cells[(12, 0)].fg, view.colors.muted);
+                            if !folded {
+                                assert_eq!(cells[(0, 1)].fg, view.colors.border);
+                                assert_eq!(cells[(2, 1)].fg, view.colors.muted);
+                            }
+                        }
+                    }
+                    if folded {
+                        view.toggle(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn default_chat_hides_orchestration_but_keeps_real_tools_attention_and_opt_in_trace() {
         let i18n = locale();
         let mut rows = BTreeMap::new();
@@ -1981,7 +2042,7 @@ mod tests {
                 "timestamps stay on the text row, not a padding row"
             );
             let header = cell_row(&terminal, "pwd");
-            assert_eq!(buffer[(0, header)].symbol(), if ascii { "*" } else { "◆" });
+            assert_eq!(buffer[(0, header)].symbol(), if ascii { "*" } else { "•" });
             assert!(
                 buffer[(2, header)].modifier.contains(Modifier::BOLD),
                 "verb"

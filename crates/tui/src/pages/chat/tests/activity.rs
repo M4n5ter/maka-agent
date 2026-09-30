@@ -111,6 +111,35 @@ fn tool_activity_survives_live_to_durable_replay_without_duplicate_cards_or_losi
 }
 
 #[test]
+fn returned_activity_uses_its_title_and_keeps_status_in_details() {
+    let mut chat = running();
+    event(&mut chat, "run", start("call"));
+    event(
+        &mut chat,
+        "run",
+        json!({"type":"tool_result","id":"done","turnId":"turn","ts":3,"toolUseId":"call","status":"completed"}),
+    );
+    let text = screen(&mut chat, crate::Locale::En);
+    assert!(text.contains("InspectCalculator"));
+    assert!(!text.contains("Resultreceived"));
+    assert!(!text.contains("Running"));
+
+    chat.fixture_rows(BTreeMap::from([
+        (1, json!({"type":"tool_call","id":"call","turnId":"turn","toolName":"plugin_action","args":{},"origin":"provider"})),
+        (2, json!({"type":"tool_activity","id":"activity","turnId":"turn","toolUseId":"call","toolName":"plugin_action","title":Text::plain("Inspect Calculator")})),
+        (3, json!({"type":"tool_result","id":"result","turnId":"turn","toolUseId":"call","isError":false,"content":{"kind":"text","text":"Button found"},"origin":"provider"})),
+    ]));
+    let text = screen(&mut chat, crate::Locale::En);
+    assert!(text.contains("InspectCalculator"));
+    assert!(!text.contains("Resultreceived"));
+    chat.view
+        .toggle(&render::MessageKey::new("turn", "call", render::Part::Tool));
+    let text = screen(&mut chat, crate::Locale::En);
+    assert!(text.contains("Resultreceived"));
+    assert!(text.contains("Buttonfound"));
+}
+
+#[test]
 fn activity_is_bounded_and_does_not_leak_across_history_runs_or_disconnects() {
     let mut chat = running();
     event(&mut chat, "old-run", start("wrong"));
