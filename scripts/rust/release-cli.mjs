@@ -96,7 +96,14 @@ export async function releaseNativeCli({ source, keys, target, validator, output
         'DISABLE_CLANG',
         'CLANG_BASE_PATH',
       ],
-      overrides: { MAKA_JS_DEPS: repositoryRoot, MAKA_NATIVE_PACKAGE_VERSION: version },
+      overrides: {
+        MAKA_JS_DEPS: repositoryRoot,
+        MAKA_NATIVE_PACKAGE_VERSION: version,
+        // cargo-config2 (used by zigbuild) treats an empty config wrapper as an
+        // executable, but honors Cargo's empty environment override correctly.
+        RUSTC_WRAPPER: '',
+        RUSTC_WORKSPACE_WRAPPER: '',
+      },
     });
     const metadata = JSON.parse(
       (
