@@ -95,7 +95,7 @@ test('prepared release binds its source and recovers partial publication and mis
     const packages = await readPreviewRelease(stage);
     assert.deepEqual(
       packages.map(({ name }) => name),
-      [...previewTargets.map((target) => '@maka-agent/cli-' + target), 'maka-agent'],
+      [...previewTargets.map((target) => '@maka-agent/cli-' + target), '@maka-agent/cli'],
     );
     const packed = join(stage, receipt.archive);
     const files = execFileSync('tar', ['-tzf', packed], { encoding: 'utf8' })
@@ -127,7 +127,7 @@ test('prepared release binds its source and recovers partial publication and mis
     assert.match(manifest.description, /Unofficial experimental.*not an ASF release/);
     const readme = execFileSync('tar', ['-xOf', packed, 'package/README.md'], { encoding: 'utf8' });
     assert.match(readme, /not an official release of the Apache Software Foundation/);
-    assert.match(readme, /maka-agent@latest.*empty placeholder/);
+    assert.match(readme, /@maka-agent\/cli@latest.*empty placeholders/);
     assert.deepEqual(manifest.makaSource, source);
     await publicationRecovery(t, stage, packages);
     await writeFile(packed, 'tampered');
@@ -192,12 +192,12 @@ async function publicationRecovery(t, directory, packages) {
       packages.map((pkg) => pkg.name),
     );
     assert.deepEqual([...tags].sort(), packages.map((pkg) => [pkg.name, pkg.version]).sort());
-    tags.delete('maka-agent');
+    tags.delete('@maka-agent/cli');
     await publishPreviewRelease(directory);
-    assert.equal(tags.get('maka-agent'), packages[0].version);
-    tags.set('maka-agent', '0.2.0-rust-preview.999');
+    assert.equal(tags.get('@maka-agent/cli'), packages[0].version);
+    tags.set('@maka-agent/cli', '0.2.0-rust-preview.999');
     await assert.rejects(publishPreviewRelease(directory), /backwards/);
-    assert.equal(tags.get('maka-agent'), '0.2.0-rust-preview.999');
+    assert.equal(tags.get('@maka-agent/cli'), '0.2.0-rust-preview.999');
     assert.equal(uploads.length, packages.length);
     versions.clear();
     tags.clear();

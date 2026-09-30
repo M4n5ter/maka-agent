@@ -41,7 +41,7 @@ try {
     packagePath = require.resolve(`${name}/package.json`);
   } catch {
     throw new Error(
-      `Missing ${name}@${manifest.version}. Reinstall with: npm install --global --include=optional maka-agent@${manifest.version}`,
+      `Missing ${name}@${manifest.version}. Reinstall with: npm install --global --include=optional @maka-agent/cli@${manifest.version}`,
     );
   }
   const native = JSON.parse(readFileSync(packagePath, 'utf8'));

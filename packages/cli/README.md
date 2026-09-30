@@ -26,12 +26,12 @@
 Install the experimental CLI explicitly:
 
 ```sh
-npm install --global maka-agent@rust-preview
+npm install --global @maka-agent/cli@rust-preview
 ```
 
-`maka-agent@latest` is an empty placeholder with no CLI, runtime, dependencies, or install scripts. The `@maka-agent/cli-*` packages are platform components of the same unofficial preview. Preview behavior and compatibility can change without notice.
+`@maka-agent/cli@latest`, the native components’ `latest` tags, and the separate `maka-agent@latest` are empty placeholders with no CLI, runtime, dependencies, or install scripts. The `@maka-agent/cli-*` packages are platform components of the same unofficial preview. Preview behavior and compatibility can change without notice.
 
-The `maka-agent` npm launcher starts the native Maka CLI for the current OS and CPU. Exact-version optional dependencies carry the executables. Arguments, standard input/output and exit status pass through to the native process.
+The `@maka-agent/cli` npm launcher starts the native Maka CLI for the current OS and CPU. Exact-version optional dependencies carry the executables. Arguments, standard input/output and exit status pass through to the native process.
 
 The supported preview set is macOS arm64, Linux x64 with glibc, and Windows x64. WSL uses the Linux executable and can obtain the matching Windows helper through the native distribution layer.
 
@@ -55,7 +55,7 @@ just publish native-preview
 
 GitHub uses the registered `npm-publication.yml` entry. `gh workflow run npm-publication.yml --ref <branch> -f publish=false` produces the complete artifacts and three-platform verification. Unofficial publication runs in the personal fork `M4n5ter/maka-agent`, not the ASF repository. It requires explicit `publish=true` on `feat/runtime-host-rust` and the dedicated `npm-rust-preview` environment. That environment permits only this branch and holds its npm publishing token; the main-branch publication environment is independent. Use `gh workflow run npm-publication.yml --repo M4n5ter/maka-agent --ref feat/runtime-host-rust -f publish=true` to build, verify, and publish the preview.
 
-The `latest` placeholder is maintained in `packages/cli/placeholder/`. Pack and inspect that directory, then publish its tarball with `--tag latest`; it has no executable code. Never move `latest` to a preview build.
+The shared `latest` placeholder template is maintained in `packages/cli/placeholder/`. Stage a copy with the intended package name, inspect its tarball, then publish it with `--tag latest`; it has no executable code. Never move `latest` to a preview build.
 
 Release packages use pinned V8 builds with optional LGPL glibc math disabled. Native macOS packaging requires Xcode 26 or newer for Computer Use; CI builds on macOS 26 and checks installation on macOS 15. Linux needs glib development files and cargo-zigbuild/Zig. A fallback V8 source build additionally requires Python 3, Git, Clang/libclang 19 or newer and a native C++ toolchain. It downloads Chromium tools, can take over an hour and needs tens of GiB of temporary space, removed after the build.
 

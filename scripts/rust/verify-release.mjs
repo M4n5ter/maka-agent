@@ -34,7 +34,7 @@ export async function verifyRelease(directory) {
   const target = `${process.platform}-${process.arch}${process.platform === 'linux' ? '-gnu' : ''}`;
   const native = packages.find((pkg) => pkg.name === '@maka-agent/cli-' + target);
   if (!native) throw new Error('No native release for this verifier: ' + target);
-  const launcher = packages.find((pkg) => pkg.name === 'maka-agent');
+  const launcher = packages.find((pkg) => pkg.name === '@maka-agent/cli');
   const stage = await mkdtemp(join(tmpdir(), 'maka release verification '));
   try {
     await writeFile(
@@ -56,7 +56,7 @@ export async function verifyRelease(directory) {
       ],
       npmSpawnOptions({ cwd: stage, timeout: 180_000, maxBuffer: 1024 * 1024 }),
     );
-    const command = join(stage, 'node_modules/maka-agent/bin/maka.mjs');
+    const command = join(stage, 'node_modules/@maka-agent/cli/bin/maka.mjs');
     const options = { cwd: stage, timeout: 30_000, maxBuffer: 1024 * 1024, encoding: 'utf8' };
     const { stdout } = await run(process.execPath, [command, '--version'], options);
     if (stdout.trim() !== 'maka ' + native.source.version)

@@ -59,7 +59,7 @@ export async function packLauncher(directory) {
     const packageDirectory = join(root, 'packages/cli');
     const manifest = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'));
     if (
-      manifest.name !== 'maka-agent' ||
+      manifest.name !== '@maka-agent/cli' ||
       manifest.version !== source.version ||
       manifest.bin?.maka !== 'bin/maka.mjs'
     ) {
@@ -88,7 +88,7 @@ export async function packLauncher(directory) {
       npmSpawnOptions({ cwd: packageDirectory, encoding: 'utf8', timeout: 180_000 }),
     );
     const [packed, ...extra] = JSON.parse(stdout);
-    const archive = `maka-agent-${version}.tgz`;
+    const archive = `maka-agent-cli-${version}.tgz`;
     if (
       extra.length ||
       packed?.name !== manifest.name ||

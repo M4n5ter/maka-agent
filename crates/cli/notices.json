@@ -52,7 +52,7 @@
     "crates/tui/Cargo.toml": "daabe26cb5f78c6ff8efa161f64fa091d134c291a9abdb534838b69dd4031408",
     "crates/web/Cargo.toml": "3edbc2ea947e2f3c857c4cd4333b47a481ecc1c2c1c58a6ac80b2824f6d3ad57",
     "crates/workhub/Cargo.toml": "eebc5612198fa5f163de00c5f74b38df63f93b5576fa9397ad1f57a1e12e70b9",
-    "package-lock.json": "92432f9a98b40985b4c180539e5553cc28aba0bd315b01b9306b16682697a586",
+    "package-lock.json": "b7144e30fbc6708c7c259b573b7155de3d1cf934c71290220cc1bf09b37fda08",
     "package.json": "c947c90709e917012063c3a67c6a131739615256e5e0d78d9acb012833977ea9",
     "patches/zod+4.6.5.patch": "5a6cbff1b31ca2a5d2b7c006abb7b1002241dbf4ae42c315c27940201f52b081",
     "scripts/apply-dependency-patches.mjs": "67e548835b0de28e3753be559abb5cb2efbe94a46d72e0b756c23f944896d4bd",

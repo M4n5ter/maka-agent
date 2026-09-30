@@ -26,12 +26,12 @@
 请显式安装实验性 CLI：
 
 ```sh
-npm install --global maka-agent@rust-preview
+npm install --global @maka-agent/cli@rust-preview
 ```
 
-`maka-agent@latest` 是空占位包，不含 CLI、运行时、依赖或安装脚本。`@maka-agent/cli-*` 是同一非官方预览版的平台组件。预览版的行为和兼容性可能随时变化。
+`@maka-agent/cli@latest`、原生平台包的 `latest` 以及独立的 `maka-agent@latest` 均为空占位包，不含 CLI、运行时、依赖或安装脚本。`@maka-agent/cli-*` 是同一非官方预览版的平台组件。预览版的行为和兼容性可能随时变化。
 
-`maka-agent` npm 启动器启动当前操作系统和 CPU 对应的原生 Maka CLI，通过精确版本的可选依赖分发可执行文件。命令参数、标准输入输出和退出状态直接传递给原生进程。
+`@maka-agent/cli` npm 启动器启动当前操作系统和 CPU 对应的原生 Maka CLI，通过精确版本的可选依赖分发可执行文件。命令参数、标准输入输出和退出状态直接传递给原生进程。
 
 预览分发支持 macOS arm64、使用 glibc 的 Linux x64 和 Windows x64。WSL 使用 Linux 可执行文件，并由原生分发层获取匹配的 Windows 辅助程序。
 
@@ -55,7 +55,7 @@ just publish native-preview
 
 GitHub 使用已登记的 `npm-publication.yml`。在功能分支可运行 `gh workflow run npm-publication.yml --ref <branch> -f publish=false`，得到完整产物与三平台验收结果。非官方发布在个人 fork `M4n5ter/maka-agent` 中执行，不从 ASF 仓库发布。须在 `feat/runtime-host-rust` 分支显式选择 `publish=true`，使用独立的 `npm-rust-preview` 环境。该环境仅允许此分支，并保存 npm 发布 Token；主分支的发布环境独立管理。执行 `gh workflow run npm-publication.yml --repo M4n5ter/maka-agent --ref feat/runtime-host-rust -f publish=true` 即可完成构建、验证及预览发布。
 
-`latest` 的占位包维护在 `packages/cli/placeholder/`。对该目录打包并检查后，用 `--tag latest` 发布生成的 tarball；包内没有可执行代码。不要将 `latest` 指向预览构建。
+`latest` 的共用占位模板维护在 `packages/cli/placeholder/`。复制到临时目录并设置目标包名，打包检查后，用 `--tag latest` 发布生成的 tarball；包内没有可执行代码。不要将 `latest` 指向预览构建。
 
 正式包使用固定的 V8 构建，关闭可选的 LGPL glibc 数学实现。macOS 打包需要 Xcode 26 或更新版本来编译 Computer Use；CI 使用 macOS 26 构建，并在 macOS 15 验证安装。Linux 需要 glib 开发包和 cargo-zigbuild/Zig。回退到 V8 源码构建时，还需 Python 3、Git、Clang/libclang 19 或更新版本及原生 C++ 工具链；该过程会下载 Chromium 工具，可能耗时超过一小时，并使用数十 GiB 临时空间，完成后自动清理。
 

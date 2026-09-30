@@ -82,9 +82,9 @@ export async function readPreviewRelease(directory) {
   const packages = await readNativePreviewRelease(directory);
   const receipt = JSON.parse(await readFile(join(directory, 'launcher.json'), 'utf8'));
   const version = packages[0].version;
-  const filename = `maka-agent-${version}.tgz`;
+  const filename = `maka-agent-cli-${version}.tgz`;
   if (
-    receipt.name !== 'maka-agent' ||
+    receipt.name !== '@maka-agent/cli' ||
     receipt.version !== version ||
     receipt.archive !== filename
   ) {
@@ -106,7 +106,7 @@ export async function readPreviewRelease(directory) {
   const expected = Object.fromEntries(packages.map(({ name }) => [name, version]));
   const entries = (value) => Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b));
   if (
-    manifest.name !== 'maka-agent' ||
+    manifest.name !== '@maka-agent/cli' ||
     manifest.version !== version ||
     manifest.bin?.maka !== 'bin/maka.mjs' ||
     manifest.publishConfig?.tag !== 'rust-preview' ||

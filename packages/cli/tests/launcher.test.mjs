@@ -37,7 +37,7 @@ async function fixture(t, nativeVersion = '1.2.3') {
   await writeFile(
     join(root, 'package.json'),
     JSON.stringify({
-      name: 'maka-agent',
+      name: '@maka-agent/cli',
       version: '1.2.3',
       optionalDependencies: { [name]: '1.2.3' },
     }),
@@ -90,5 +90,5 @@ test('launcher refuses a mixed native package version and reports missing option
   await rm(f.native, { recursive: true });
   const missing = run();
   assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /--include=optional maka-agent@1\.2\.3/);
+  assert.match(missing.stderr, /--include=optional @maka-agent\/cli@1\.2\.3/);
 });

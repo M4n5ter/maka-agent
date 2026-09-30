@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# maka-agent: empty placeholder
+# Maka npm: empty placeholder
 
 This `latest` package intentionally contains no CLI, runtime, executable code, dependencies, or install scripts. Installing it does not install Maka.
 
@@ -26,7 +26,7 @@ This `latest` package intentionally contains no CLI, runtime, executable code, d
 To explicitly opt into the experimental Rust preview:
 
 ```sh
-npm install --global maka-agent@rust-preview
+npm install --global @maka-agent/cli@rust-preview
 ```
 
 There is no stable CLI on the `latest` tag. Preview behavior and compatibility can change without notice.
@@ -37,4 +37,4 @@ There is no stable CLI on the `latest` tag. Preview behavior and compatibility c
 
 **Maka 的 npm 预览版由独立发布者提供，均为实验性分发，与 ASF 官方发布无关，不是 Apache 软件基金会（ASF）的官方版本，未经 ASF 批准、背书或支持，也不代表 ASF 的关联或赞助。** 源码归属和 Apache-2.0 许可不意味着 ASF 对本分发的认可。
 
-如需尝试实验性 Rust 预览版，请显式安装 `maka-agent@rust-preview`。`latest` 不提供稳定版 CLI。
+如需尝试实验性 Rust 预览版，请显式安装 `@maka-agent/cli@rust-preview`。`latest` 不提供稳定版 CLI。

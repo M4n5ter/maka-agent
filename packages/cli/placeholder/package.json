@@ -1,6 +1,6 @@
 {
-  "name": "maka-agent",
-  "version": "0.0.0-placeholder.1",
+  "name": "@maka-agent/cli",
+  "version": "0.0.0-placeholder.2",
   "description": "Empty placeholder; experimental Rust previews are unofficial and are not ASF releases",
   "license": "Apache-2.0",
   "files": [
