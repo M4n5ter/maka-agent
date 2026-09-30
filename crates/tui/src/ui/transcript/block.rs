@@ -92,17 +92,43 @@ pub(super) fn source_shape(text: &str) -> (usize, Preview) {
     }
     (rows.max(1), shape)
 }
-pub(super) fn preview_text(text: &str, glyphs: usize) -> String {
-    let mut bytes = 0;
-    text.graphemes(true)
-        .take(glyphs)
-        .take_while(|grapheme| {
-            bytes += grapheme.len();
-            bytes <= large::INLINE_BYTES
-        })
-        .collect()
+/// A complete-cluster prefix and the bytes inspected to find its boundary.
+pub(super) fn preview_text(text: &str, glyphs: usize) -> (&str, usize) {
+    // Bound segmentation itself, not just the resulting string: one grapheme
+    // can contain megabytes of combining marks. The last cluster of a byte-cut
+    // prefix may be incomplete, so only retain clusters with a known boundary.
+    let end = text.floor_char_boundary(large::INLINE_BYTES);
+    let prefix = &text[..end];
+    let mut visible = 0;
+    let mut inspected = 0;
+    for (index, grapheme) in prefix.grapheme_indices(true).take(glyphs) {
+        let next = index + grapheme.len();
+        inspected = next;
+        if next == end && end < text.len() {
+            break;
+        }
+        visible = next;
+    }
+    (&prefix[..visible], inspected)
 }
 impl Block {
+    pub(super) fn layout_work(&self, width: u16) -> usize {
+        let bytes = if self.folded {
+            let end = if self.kind == Kind::User {
+                self.text.len()
+            } else {
+                self.preview.first_end
+            };
+            preview_text(
+                &self.text[self.preview.start..end],
+                usize::from(self.body_width(width)) * 4 + 32,
+            )
+            .1
+        } else {
+            self.text.len()
+        };
+        bytes.saturating_add(256)
+    }
     pub(super) fn visual_current(&self) -> bool {
         self.previous_frame.is_none() || self.large.as_ref().is_some_and(large::State::ready)
     }

@@ -36,8 +36,8 @@ pub(super) fn preview_from(
     let start = shape.start;
     let text = &text[start..];
     // Enough for four wrapped lines, without laying out an entire pasted document.
-    let prefix = block::preview_text(text, usize::from(width) * 4 + 32);
-    let mut layout = layout::plain(&prefix, width)?;
+    let (prefix, _) = block::preview_text(text, usize::from(width) * 4 + 32);
+    let mut layout = layout::plain(prefix, width)?;
     for line in &mut layout.lines {
         line.source += start;
         for span in &mut line.mapping {
@@ -100,6 +100,22 @@ pub(super) fn preview_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_segmentation_is_byte_bounded_and_never_emits_a_partial_grapheme() {
+        let combining = format!("prefix e{} tail", "\u{301}".repeat(100_000));
+        let (prefix, work) = block::preview_text(&combining, 100);
+        assert_eq!(prefix, "prefix ");
+        assert!(work <= large::INLINE_BYTES && work > prefix.len());
+        let (layout, expandable) = preview(&combining, 40, false).unwrap();
+        assert!(expandable);
+        assert_eq!(layout.lines[0].line.to_string(), "prefix …");
+        assert_eq!(layout.text, "prefix ");
+        let emoji = format!("{}👩‍💻 end", "x".repeat(large::INLINE_BYTES - 5));
+        let (prefix, _) = block::preview_text(&emoji, usize::MAX);
+        assert_eq!(prefix, "x".repeat(large::INLINE_BYTES - 5));
+        assert_eq!(block::preview_text("中文👩‍💻e\u{301}", 3).0, "中文👩‍💻");
+    }
 
     #[test]
     fn short_prompts_stay_whole_long_prompts_preview_three_lines_without_copying_ellipsis_or_hidden_text()

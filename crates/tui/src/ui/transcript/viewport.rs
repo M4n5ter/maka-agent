@@ -166,10 +166,12 @@ impl Transcript {
                 reveal = true;
             }
         }
+        // Spend the shared frame budget on the screen before warming history
+        // above it. Offscreen preparation must not starve visible messages.
+        let last = self.cover(origin, height.saturating_mul(2))?;
         let first = self
             .backward(origin, height)?
             .map_or(origin.index, |cursor| cursor.index);
-        let last = self.cover(origin, height.saturating_mul(2))?;
         self.total = self.starts.total();
         self.top = self.starts.start(origin.index) + origin.row;
         if self.top > self.total.saturating_sub(height)

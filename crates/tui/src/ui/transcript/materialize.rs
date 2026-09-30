@@ -137,23 +137,11 @@ impl Transcript {
         let _work = frame_work::begin();
         let key = self.order[index].clone();
         if !self.blocks[&key].windowed() {
-            // Large previews also validate indivisible graphemes on the CPU lane.
-            if self.blocks[&key].text.len() > large::INLINE_BYTES
-                && (self.blocks[&key].dirty || self.blocks[&key].layout_epoch != self.layout_epoch)
-            {
-                self.blocks.get_mut(&key).unwrap().layout = None;
-            }
-            if self.blocks[&key].text.len() > large::INLINE_BYTES && !self.ensure_message(index)? {
-                self.pending_layouts.insert(key);
-                return Ok(false);
-            }
             let block = &self.blocks[&key];
             if block.dirty || block.layout.is_none() || block.layout_epoch != self.layout_epoch {
-                let work = block
-                    .text
-                    .len()
-                    .min(large::INLINE_BYTES)
-                    .saturating_add(256);
+                // A collapsed record only lays out its bounded preview. Full
+                // semantics belong to expansion/copy, not viewport readiness.
+                let work = block.layout_work(self.width);
                 if frame_work::allowance(work) < work {
                     self.blocks.get_mut(&key).unwrap().layout = None;
                     self.pending_layouts.insert(key);

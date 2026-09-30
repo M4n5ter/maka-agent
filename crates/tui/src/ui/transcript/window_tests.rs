@@ -46,10 +46,95 @@ fn settle(view: &mut Transcript, width: u16, height: u16) {
 fn key(name: &str) -> MessageKey {
     MessageKey::new("windows", name, Part::Text)
 }
+
 fn put(view: &mut Transcript, name: &str, source: &str) {
     view.upsert(key(name), Revision::Durable(1), Kind::Assistant, || {
         source.to_owned().into()
     });
+}
+
+#[test]
+fn folded_tool_history_paints_complete_previews_on_every_scroll_frame() {
+    let mut view = Transcript::default();
+    view.begin();
+    for index in 0..160 {
+        view.upsert(
+            key(&format!("tool-{index}")),
+            Revision::Durable(1),
+            Kind::Tool(ToolState::Completed),
+            || {
+                format!(
+                    "Tool {index:03} completed\n{}",
+                    "hidden output 中文\n".repeat(if index % 2 == 0 { 200 } else { 2000 })
+                )
+                .into()
+            },
+        );
+    }
+    view.finish([], &tests::locale());
+    let mut screen = Terminal::new(TestBackend::new(126, 36)).unwrap();
+    for step in 0..140 {
+        if step > 0 {
+            view.scroll(step < 70, if step % 7 == 0 { 36 } else { 3 });
+        }
+        screen
+            .draw(|frame| {
+                view.draw(frame, frame.area(), false).unwrap();
+            })
+            .unwrap();
+        for (index, key) in view.order.iter().enumerate() {
+            let row = view.starts.start(index);
+            if (view.top..view.top + view.height).contains(&row) {
+                let y = (row - view.top) as u16;
+                let painted: String = (0..screen.size().unwrap().width)
+                    .map(|x| screen.backend().buffer()[(x, y)].symbol())
+                    .collect();
+                assert!(
+                    painted.contains("completed"),
+                    "folded header disappeared at scroll step {step}, row {y}"
+                );
+                assert!(view.blocks[key].visual_line(0).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn visible_messages_take_priority_over_expensive_offscreen_layout() {
+    let mut view = Transcript::default();
+    view.begin();
+    for index in 0..8 {
+        // Large link destinations have a short display but substantial parsing
+        // work, so backward overscan can exhaust an entire frame allowance.
+        put(
+            &mut view,
+            &format!("history-{index}"),
+            &format!("[history](https://example.test/{})", "a".repeat(7800)),
+        );
+    }
+    for index in 0..40 {
+        put(
+            &mut view,
+            &format!("visible-{index}"),
+            &format!("Visible {index:02}"),
+        );
+    }
+    view.finish([], &tests::locale());
+    view.anchor = Some(Anchor {
+        key: key("visible-0"),
+        source: 0,
+        screen_row: 0,
+    });
+    frame(&mut view, 120, 20);
+    assert_eq!(view.first_visible(), Some(key("visible-0")));
+    for index in 0..10 {
+        assert!(
+            !view.blocks[&key(&format!("visible-{index}"))]
+                .visual_lines()
+                .is_empty(),
+            "offscreen work starved visible content"
+        );
+    }
 }
 #[test]
 fn distant_search_and_initial_tail_keep_their_pending_owner_alive() {

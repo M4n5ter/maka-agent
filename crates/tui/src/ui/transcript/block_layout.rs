@@ -76,11 +76,12 @@ impl Transcript {
                 let first_len = preview.len();
                 // Inspect a bounded first-line preview, including Markdown
                 // syntax, to distinguish real omitted content from decoration.
-                let preview = block::preview_text(preview, usize::from(preview_width) * 4 + 32);
+                let (preview, _) =
+                    block::preview_text(preview, usize::from(preview_width) * 4 + 32);
                 let mut layout = if block.kind.markdown() {
-                    layout::markdown(&preview, preview_width, ascii)?
+                    layout::markdown(preview, preview_width, ascii)?
                 } else {
-                    layout::plain(&preview, preview_width)?
+                    layout::plain(preview, preview_width)?
                 };
                 block.expandable = block.kind.group()
                     || more_lines
@@ -90,7 +91,7 @@ impl Transcript {
                         .iter()
                         .skip(1)
                         .any(|line| !line.line.to_string().trim().is_empty());
-                let clipped = layout.lines.len() > 1;
+                let clipped = layout.lines.len() > 1 || preview.len() < first_len;
                 layout.lines.truncate(1);
                 // Whole-word wrapping can drop a word from a one-row preview;
                 // mark it rather than end on a silently shortened sentence.
