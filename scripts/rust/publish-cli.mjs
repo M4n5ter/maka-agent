@@ -189,7 +189,10 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
       );
     }
     let verified = false;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    // npm acknowledges uploads before asynchronous processing exposes versions
+    // and tags. Allow several minutes without re-uploading accepted bytes.
+    const confirmationAttempts = 16;
+    for (let attempt = 0; attempt < confirmationAttempts; attempt++) {
       const [observed, tags] = await Promise.all([
         metadata(pkg.name + '/' + pkg.version),
         metadata(tagsPath),
@@ -198,7 +201,11 @@ export async function publishPreviewRelease(directory, { provenance = false } = 
         verified = true;
         break;
       }
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000 * 2 ** attempt));
+      if (attempt + 1 < confirmationAttempts) {
+        await new Promise((resolveDelay) =>
+          setTimeout(resolveDelay, Math.min(30_000, 1000 * 2 ** attempt)),
+        );
+      }
     }
     if (!verified)
       throw new Error('Publication is unconfirmed; retry this same artifact set: ' + pkg.name);

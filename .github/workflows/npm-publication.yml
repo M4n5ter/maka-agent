@@ -233,7 +233,7 @@ jobs:
       cancel-in-progress: false
     environment: npm-rust-preview
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write

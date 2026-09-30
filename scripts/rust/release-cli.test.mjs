@@ -147,6 +147,12 @@ async function publicationRecovery(t, directory, packages) {
   let fail = true;
   let raced = false;
   let tagReads = 0;
+  let pendingVisibility = 6;
+  // Advance confirmation waits without making this registry simulation sleep.
+  const delay = t.mock.method(globalThis, 'setTimeout', (resolveDelay) => {
+    queueMicrotask(resolveDelay);
+    return 0;
+  });
   const fetch = t.mock.method(globalThis, 'fetch', async (url) => {
     const path = new URL(url).pathname;
     if (path.startsWith('/-/package/')) {
@@ -156,6 +162,10 @@ async function publicationRecovery(t, directory, packages) {
     }
     const pkg = packages.find((pkg) => path === '/' + pkg.name + '/' + pkg.version);
     assert.ok(pkg, 'only fixture registry paths may be read');
+    if (versions.has(pkg.name) && pkg.name === packages[0].name && pendingVisibility > 0) {
+      pendingVisibility -= 1;
+      return new Response('', { status: 404 });
+    }
     return versions.has(pkg.name)
       ? new Response(JSON.stringify({ dist: { integrity: versions.get(pkg.name) } }))
       : new Response('', { status: 404 });
@@ -211,6 +221,7 @@ async function publicationRecovery(t, directory, packages) {
   } finally {
     fetch.mock.restore();
     exec.mock.restore();
+    delay.mock.restore();
     syncBuiltinESMExports();
   }
 }
