@@ -30,6 +30,7 @@ pub struct BundledSource {
     pub content: &'static str,
     pub document: SkillDocument,
     pub content_sha256: String,
+    pub files: &'static [(&'static str, &'static [u8])],
 }
 #[derive(Debug)]
 pub struct SourceCatalog {
@@ -81,15 +82,16 @@ impl std::fmt::Display for SourceCatalogError {
 }
 impl std::error::Error for SourceCatalogError {}
 
-/// Computer Use is supplied by the native Cua plugin.
-const BUNDLED: &[(&str, &str)] = &[(
-    "maka-cua",
-    include_str!("../../../computer-use/skills/maka-cua/SKILL.md"),
-)];
+struct Bundled {
+    id: &'static str,
+    content: &'static str,
+    files: &'static [(&'static str, &'static [u8])],
+}
+include!(concat!(env!("OUT_DIR"), "/bundled.rs"));
 
 pub(super) fn trusted_bundled_hash(id: &str, hash: &str) -> bool {
-    BUNDLED.iter().any(|(candidate, content)| {
-        *candidate == id && hash == maka_runtime::artifact::content_digest(content.as_bytes())
+    BUNDLED.iter().any(|source| {
+        source.id == id && hash == maka_runtime::artifact::content_digest(source.content.as_bytes())
     })
 }
 
@@ -141,13 +143,15 @@ async fn catalog(
 ) -> Result<SourceCatalog, SourceCatalogError> {
     let bundled = BUNDLED
         .iter()
-        .map(|(id, content)| {
+        .map(|source| {
+            let Bundled { id, content, files } = source;
             Ok(BundledSource {
                 id,
                 content,
                 document: crate::parse(content)
                     .map_err(|_| SourceCatalogError::InvalidBundledMetadata)?,
                 content_sha256: maka_runtime::artifact::content_digest(content.as_bytes()),
+                files,
             })
         })
         .collect::<Result<Vec<_>, SourceCatalogError>>()?;

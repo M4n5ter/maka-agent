@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "example.plugin",
+  "displayName": "Example plugin",
+  "description": "A small tool and a read-only terminal page.",
+  "runtime": { "entry": "host.mjs", "sdkVersion": 3, "vm": "shared" },
+  "composition": { "patch": "composition.json" }
+}

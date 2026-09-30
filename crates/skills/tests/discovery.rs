@@ -272,6 +272,28 @@ async fn snapshot_precedence_preferences_and_capabilities_preserve_selected_iden
             .contains(&"cua_repl".into())
     );
     assert!(cua.document.issues.is_empty());
+    let authoring = missing_library
+        .bundled
+        .iter()
+        .find(|source| source.id == "maka-plugin-authoring")
+        .unwrap();
+    assert_eq!(authoring.document.manifest.name, authoring.id);
+    assert!(authoring.document.issues.is_empty());
+    assert_eq!(
+        authoring
+            .files
+            .iter()
+            .find(|(path, _)| *path == "references/sdk/host.ts")
+            .unwrap()
+            .1,
+        include_bytes!("../../../packages/plugin-sdk/src/host.ts")
+    );
+    assert!(
+        authoring
+            .files
+            .iter()
+            .any(|(path, _)| *path == "assets/starter/host.mjs")
+    );
     skill(
         &home.join(".maka/skill-sources/source"),
         "Source",
@@ -534,5 +556,134 @@ fn directory_link(target: &Path, link: &Path) {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn linked_resources_freeze_with_the_skill_and_preserve_paging_and_containment() {
+    use maka_runtime::read::ReadInput;
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    let published = temporary.path().join("published");
+    fs::create_dir_all(&published).unwrap();
+    let directory = project.join(".maka/skills/authoring");
+    skill(&directory, "Authoring", "", "Read references/guide.md");
+    fs::create_dir_all(directory.join("references")).unwrap();
+    let text = "Original 中文🦀\n".repeat(1500);
+    fs::write(directory.join("references/guide.md"), &text).unwrap();
+    fs::write(
+        directory.join("references/oversized.md"),
+        vec![b'x'; 1024 * 1024 + 1],
+    )
+    .unwrap();
+    fs::write(directory.join("references/binary.bin"), [0xff]).unwrap();
+    fs::create_dir_all(directory.join(".maka")).unwrap();
+    fs::write(directory.join(".maka/private.txt"), "private").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(temporary.path(), directory.join("references/escape")).unwrap();
+    let owner = owner();
+    let files = view(&owner, &project).await;
+    let published_files = view(&owner, &published).await;
+    let sources = Source::standard(Some(&files), &published_files, None);
+    let old = scan(&sources, &CancellationToken::new()).await.unwrap();
+    let preferences = Preferences::Available(Default::default());
+    let host = HostCapabilities::default();
+    let catalog = Catalog {
+        discovery: &old,
+        preferences: &preferences,
+        host: &host,
+    };
+    let old_hash = catalog.fingerprint().unwrap();
+    let loaded = catalog.load("authoring").unwrap();
+    let reference = &loaded.skill.location.reference;
+    let input = ReadInput {
+        path: "references/guide.md".into(),
+        offset: None,
+        limit: None,
+    };
+    let (_, page) = loaded.skill.resources.page(reference, &input).unwrap();
+    let next = page.next.unwrap();
+    assert!(
+        loaded
+            .skill
+            .resources
+            .page("project:maka:other", &next)
+            .is_err()
+    );
+    fs::write(directory.join("references/guide.md"), "Changed").unwrap();
+    let (_, continued) = loaded.skill.resources.page(reference, &next).unwrap();
+    assert!(continued.content.contains("Original"));
+    for path in [
+        "../outside",
+        "/absolute",
+        "references/../../outside",
+        "references\\guide.md",
+        ".maka/private.txt",
+        "references/escape/file",
+        "references/binary.bin",
+        "references/oversized.md",
+    ] {
+        let input = ReadInput {
+            path: path.into(),
+            offset: None,
+            limit: None,
+        };
+        assert!(
+            loaded.skill.resources.page(reference, &input).is_err(),
+            "{path}"
+        );
+    }
+    let current = scan(&sources, &CancellationToken::new()).await.unwrap();
+    let current_catalog = Catalog {
+        discovery: &current,
+        preferences: &preferences,
+        host: &host,
+    };
+    assert_ne!(old_hash, current_catalog.fingerprint().unwrap());
+    let current = current_catalog.load("authoring").unwrap();
+    assert_eq!(
+        current
+            .skill
+            .resources
+            .page(reference, &input)
+            .unwrap()
+            .1
+            .content,
+        "Changed"
+    );
+    assert!(
+        current
+            .skill
+            .resources
+            .page(reference, &next)
+            .unwrap_err()
+            .contains("changed")
+    );
+    let disabled = Preferences::Available(BTreeMap::from([(
+        reference.clone(),
+        Preference {
+            enabled: false,
+            pinned: false,
+        },
+    )]));
+    assert!(
+        Catalog {
+            discovery: &old,
+            preferences: &disabled,
+            host: &host
+        }
+        .load("authoring")
+        .is_err()
+    );
+    owner.retire();
+    assert!(
+        loaded
+            .skill
+            .resources
+            .page(reference, &input)
+            .unwrap()
+            .1
+            .content
+            .starts_with("Original")
     );
 }

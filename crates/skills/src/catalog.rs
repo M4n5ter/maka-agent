@@ -87,6 +87,7 @@ impl Catalog<'_> {
                     &skill.content_sha256,
                     &skill.document.manifest,
                     &skill.shadowed_by,
+                    skill.resources.fingerprint(),
                 )
             })
             .collect();
@@ -102,7 +103,7 @@ impl Catalog<'_> {
         let tools: BTreeSet<_> = self.host.tools.iter().collect();
         let capabilities: BTreeSet<_> = self.host.capabilities.iter().collect();
         serde_json::to_vec(&(
-            "maka.skills.execution.v1",
+            "maka.skills.execution.v2",
             inventory,
             preferences,
             tools,

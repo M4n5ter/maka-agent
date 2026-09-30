@@ -25,6 +25,7 @@ use super::support::{
 use maka_runtime_host::server::{Host, local::LocalListener};
 use serde_json::json;
 use std::time::Duration;
+mod authoring;
 pub(super) mod client;
 mod native;
 

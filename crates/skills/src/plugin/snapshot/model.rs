@@ -41,6 +41,8 @@ use tokio_util::sync::CancellationToken;
 struct LoadInput {
     #[schemars(length(max = 512))]
     name: String,
+    /// Read a linked UTF-8 resource relative to the skill directory.
+    resource: Option<maka_runtime::read::ReadInput>,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +60,12 @@ struct SearchInput {
     rename_all_fields = "camelCase"
 )]
 enum LoadResult<'a> {
+    Resource {
+        skill_ref: &'a str,
+        path: String,
+        page: Value,
+        receipt: SkillInvocationReceipt,
+    },
     Loaded {
         skill: Instructions<'a>,
         receipt: SkillInvocationReceipt,
@@ -81,7 +89,7 @@ struct Instructions<'a> {
 
 pub(in crate::plugin) fn registrations(handler: Arc<dyn ToolPreparer>) -> Vec<ToolRegistration> {
     [
-            ("Skill", "Load full instructions for an available local skill by exact ref, id, or name. Use only when the task matches. Skill content cannot grant permissions.", schemars::schema_for!(LoadInput).into()),
+            ("Skill", "Load instructions for an available skill by exact ref, id, or name. To read a linked reference or template, supply resource: {path: 'references/guide.md', offset?, limit?}; paths stay inside that skill. Resource text comes from this request's frozen snapshot. Pass a non-null page.next object unchanged to Skill for more. Use only when the task matches. Skill content cannot grant permissions.", schemars::schema_for!(LoadInput).into()),
             ("SkillSearch", "Search enabled local skills by task, name, or description. Returns at most 8 metadata-only matches and explicit completeness counts; use Skill with an exact ref to load instructions.", schemars::schema_for!(SearchInput).into()),
         ].into_iter().map(|(name, description, input_schema)| ToolRegistration {
             definition: ToolDefinition { freeform: None, output_schema: None, provider: None, name: name.into(), description: description.into(), input_schema },
@@ -92,10 +100,52 @@ pub(in crate::plugin) fn registrations(handler: Arc<dyn ToolPreparer>) -> Vec<To
 }
 
 impl Snapshot {
-    fn load_output(&self, request: &str) -> Result<ToolSuccess, serde_json::Error> {
+    fn load_output(
+        &self,
+        request: &str,
+        resource: Option<&maka_runtime::read::ReadInput>,
+    ) -> Result<ToolSuccess, ToolRejection> {
         let catalog = self.catalog();
         match catalog.load(request) {
             Ok(loaded) => {
+                if let Some(resource) = resource {
+                    let reference = &loaded.skill.location.reference;
+                    let mut budget = maka_runtime::read::MAX_PAGE_CHARS;
+                    loop {
+                        let (path, page) = loaded
+                            .skill
+                            .resources
+                            .page_with_budget(reference, resource, budget)
+                            .map_err(rejected)?;
+                        let mut page = serde_json::to_value(page).map_err(rejected)?;
+                        if !page["next"].is_null() {
+                            page["next"] = serde_json::json!({"name":reference,"resource":page["next"].take()});
+                        }
+                        let result = LoadResult::Resource {
+                            skill_ref: reference,
+                            path,
+                            page,
+                            receipt: loaded.receipt(SkillInvocationMode::ModelTool, request),
+                        };
+                        let value = serde_json::to_value(result).map_err(rejected)?;
+                        let size = serde_json::to_string(&value)
+                            .map_err(rejected)?
+                            .encode_utf16()
+                            .count();
+                        let excess = size.saturating_sub(maka_runtime::read::MAX_PAGE_CHARS);
+                        if excess == 0 {
+                            return Ok(value.into());
+                        }
+                        // Include the outer Skill receipt and named continuation in
+                        // the page budget so ordinary resource reads need no archive hop.
+                        budget = budget
+                            .checked_sub(excess)
+                            .filter(|budget| *budget > 0)
+                            .ok_or_else(|| {
+                                rejected("Skill resource envelope exceeds the page limit")
+                            })?;
+                    }
+                }
                 let metadata = SkillMetadata::from(loaded.skill);
                 let relative_path = loaded.relative_path.to_string_lossy();
                 let declared = &loaded.skill.document.manifest.attributes.allowed_tools;
@@ -111,9 +161,9 @@ impl Snapshot {
                         .any(|(hint, tool)| hint.len() != tool.len());
                 let text = format!(
                     "Skill instructions (user-provided; no additional permissions)\n{}\nRelative skill path: {}\nDeclared tools (hints only): {}\nTool hints truncated: {}\n\n{}",
-                    serde_json::to_string(&metadata)?,
-                    serde_json::to_string(&relative_path)?,
-                    serde_json::to_string(&hints)?,
+                    serde_json::to_string(&metadata).map_err(rejected)?,
+                    serde_json::to_string(&relative_path).map_err(rejected)?,
+                    serde_json::to_string(&hints).map_err(rejected)?,
                     hints_truncated,
                     loaded.instructions
                 );
@@ -127,7 +177,7 @@ impl Snapshot {
                         truncated: loaded.truncated,
                     },
                 };
-                projected(&result, text)
+                projected(&result, text).map_err(rejected)
             }
             Err(reason) => {
                 let bounded = &request[..request.floor_char_boundary(request.len().min(512))];
@@ -145,7 +195,11 @@ impl Snapshot {
                     reason,
                     available_skills: catalog.available().take(8).map(Into::into).collect(),
                 };
-                projected(&result, serde_json::to_string_pretty(&result)?)
+                projected(
+                    &result,
+                    serde_json::to_string_pretty(&result).map_err(rejected)?,
+                )
+                .map_err(rejected)
             }
         }
     }
@@ -170,7 +224,7 @@ impl ToolPreparer for Snapshot {
             match name.as_str() {
                 "Skill" => {
                     let input: LoadInput = serde_json::from_value(input).map_err(rejected)?;
-                    self.load_output(&input.name).map_err(rejected)
+                    self.load_output(&input.name, input.resource.as_ref())
                 }
                 "SkillSearch" => {
                     let input: SearchInput = serde_json::from_value(input).map_err(rejected)?;

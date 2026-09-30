@@ -256,6 +256,16 @@ async fn install(
     };
     let mut tree = Tree::empty();
     artifacts(&mut tree, id, id, kind, content)?;
+    if matches!(kind, InstallSource::Bundled) {
+        let source = sources
+            .bundled
+            .iter()
+            .find(|source| source.id == id)
+            .ok_or(Failure::Rejected(MutationRejection::NotFound))?;
+        for (path, bytes) in source.files {
+            tree.insert(path, bytes.to_vec())?;
+        }
+    }
     publisher
         .publish_operation(
             id,

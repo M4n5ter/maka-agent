@@ -121,6 +121,7 @@ pub struct DiscoveredSkill {
     pub document: SkillDocument,
     pub content_sha256: String,
     pub shadowed_by: Option<String>,
+    pub resources: crate::Resources,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +214,7 @@ async fn scan_impl(
         query: query.as_ref().map(|_| QuerySnapshot::default()),
         remaining_entries: MAX_ENTRIES,
         remaining_bytes: MAX_CONTENT_BYTES,
+        resource_budget: Default::default(),
     };
     for (precedence, source) in sources.iter().enumerate() {
         check_cancelled(cancellation)?;
@@ -243,6 +245,7 @@ struct Scan {
     query: Option<QuerySnapshot>,
     remaining_entries: usize,
     remaining_bytes: usize,
+    resource_budget: crate::resources::Budget,
 }
 impl Scan {
     fn source(
@@ -257,6 +260,7 @@ impl Scan {
             query,
             remaining_entries,
             remaining_bytes,
+            resource_budget,
         } = self;
         let mut captured = match source::Captured::open(source, reader) {
             Ok(captured) => captured,
@@ -336,6 +340,16 @@ impl Scan {
                     document,
                     content_sha256: maka_runtime::artifact::content_digest(&bytes),
                     shadowed_by: None,
+                    resources: if query.is_none() {
+                        crate::Resources::capture(
+                            reader,
+                            &source.directory.join(&name),
+                            resource_budget,
+                            cancellation,
+                        )?
+                    } else {
+                        Default::default()
+                    },
                 }),
                 Err(document) => snapshot.rejected.push(RejectedSkill {
                     location,
@@ -370,7 +384,7 @@ impl DiscoverySnapshot {
     }
 }
 
-fn check_cancelled(token: &CancellationToken) -> Result<(), ScanError> {
+pub(crate) fn check_cancelled(token: &CancellationToken) -> Result<(), ScanError> {
     if token.is_cancelled() {
         Err(ScanError::Cancelled)
     } else {

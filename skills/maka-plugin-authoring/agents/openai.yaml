@@ -16,5 +16,5 @@
 # under the License.
 
 interface:
-  display_name: "Maka Rust Plugin Integration"
-  short_description: "Connect features to the Rust Runtime Host plugin platform"
+  display_name: "Maka Plugin Authoring"
+  short_description: "Build, test, and package Maka plugins with the current SDK"

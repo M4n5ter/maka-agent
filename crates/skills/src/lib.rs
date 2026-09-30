@@ -26,6 +26,8 @@ mod fields;
 mod invocation;
 pub mod plugin;
 pub mod publication;
+mod resources;
+pub use resources::Resources;
 mod types;
 mod yaml;
 pub use types::*;

@@ -42,6 +42,7 @@ fn skill(id: &str, name: &str, body: &str) -> DiscoveredSkill {
         .unwrap(),
         content_sha256: format!("sha256:{}", "0".repeat(64)),
         shadowed_by: None,
+        resources: Default::default(),
     }
 }
 
