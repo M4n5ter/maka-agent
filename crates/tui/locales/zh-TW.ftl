@@ -114,7 +114,9 @@ help = Tab / Shift+Tab     在控制項間移動焦點
     Enter / 空白鍵     展開摺疊選取的正文項
     Shift+方向鍵        擴展正文選取範圍
     Shift+Home / End   擴選至視覺行首 / 行尾
-    Ctrl+C             複製選取的正文
+    Shift+點擊          從原起點擴展選取範圍，可先捲動再點擊
+    Shift+PageUp/Down  按頁擴展選取範圍
+    Ctrl+C             複製 / 取消 / 停止；無其他操作時一秒內按兩次離開
     F5                 重新整理目前頁面
     Alt+左 / 右         返回 / 前進
     Esc                關閉面板 / 離開編輯器或正文焦點，否則返回
@@ -141,6 +143,7 @@ command-inspector-hide = 隱藏面板
 command-symbols = 切換 Unicode / ASCII 圖示
 command-motion = 啟用 / 減少動態效果
 command-quit = 離開 Maka
+quit-again = 一秒內再按一次 Ctrl+C 離開
 command-detach = 僅關閉介面
 shutdown-cancel = 取消
 shutdown-force = 強制離開
@@ -434,6 +437,7 @@ chat-search-preview-loading = 正在讀取訊息…
 chat-copy-selection = 複製選取文字 · Ctrl+C
 chat-copy-message = 複製訊息
 chat-copy-source = 複製原文 / Markdown
+chat-copy-markdown = 將回覆複製為 Markdown
 chat-copy-requested = 已向終端傳送複製請求
 file-copy-path = 複製檔案路徑
 chat-copy-failed = 無法傳送複製請求
@@ -441,7 +445,7 @@ chat-copy-too-large = 複製上限為 64 KiB · 請縮小選取範圍
 chat-copy-empty = 請先選取文字或訊息
 chat-copy-pending = 所選文字仍在準備中，請稍後重試複製。
 chat-copy-unavailable = 無法準備要複製的文字。
-chat-selection-help = Ctrl+C 複製 · Esc 清除選取範圍
+chat-selection-help = Ctrl+C 複製 · Shift+點擊擴選 · 點擊別處 / Esc 清除
 
 session-rename = 重新命名對話
 session-archive = 封存對話

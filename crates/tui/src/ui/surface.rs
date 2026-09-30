@@ -980,6 +980,14 @@ impl<M: Clone> Surface<M> {
     }
 
     fn key(&mut self, key: KeyEvent) -> Outcome<M> {
+        if self.popover.is_some()
+            && key.kind == KeyEventKind::Press
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('c' | 'C'))
+        {
+            self.popover = None;
+            return Outcome::handled(true);
+        }
         if self
             .popover
             .as_ref()
@@ -1707,6 +1715,15 @@ mod tests {
         assert!(
             !back.consumed,
             "Alt+Left is history navigation, not a focus move"
+        );
+        let cancel = surface.input(&Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(cancel.consumed && cancel.message.is_none());
+        assert!(
+            !surface.captures(),
+            "Ctrl+C cancels the chooser before global quit handling"
         );
         let mut surface = Surface::default();
         let long = || {

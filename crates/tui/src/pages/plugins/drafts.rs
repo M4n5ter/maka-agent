@@ -265,6 +265,7 @@ impl App {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 let index = focused?;
                 if matches!(key.code, KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab)
+                    || crate::shutdown::ctrl_c(event)
                     || (key.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(key.code, KeyCode::Char('q' | 'k' | 'p')))
                 {

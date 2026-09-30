@@ -881,7 +881,7 @@ where
                     dirty = true;
                     continue;
                 }
-                Action::Copy(_) | Action::CopyMessage { .. } => {
+                Action::Copy(_) | Action::CopyMessage { .. } | Action::CopyReply { .. } => {
                     let text = match action {
                         Action::Copy(mode) => app
                             .chat
@@ -889,6 +889,11 @@ where
                             .ok_or("chat-copy-empty")
                             .and_then(|reader| reader.copy_text(mode, app.chrome.ascii)),
                         Action::CopyMessage { target, mode } => target.text(&app, mode),
+                        Action::CopyReply { key, revision } => app
+                            .chat
+                            .reader()
+                            .ok_or("chat-copy-empty")
+                            .and_then(|reader| reader.copy_source(&key, &revision)),
                         _ => unreachable!(),
                     };
                     let result = text.and_then(|text| {

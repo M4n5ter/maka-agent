@@ -71,6 +71,8 @@ impl Transcript {
                 | KeyCode::Down
                 | KeyCode::Home
                 | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown
         ) {
             return None;
         }
@@ -107,7 +109,14 @@ impl Transcript {
         }
         // Retain accepted input while its semantic text or target rows are loading.
         // Returning None here would hand the same key to card navigation.
-        self.text_selection.keys.push_back(key);
+        let (key, count) = match key {
+            KeyCode::PageUp => (KeyCode::Up, self.height.saturating_sub(1).max(1)),
+            KeyCode::PageDown => (KeyCode::Down, self.height.saturating_sub(1).max(1)),
+            key => (key, 1),
+        };
+        self.text_selection
+            .keys
+            .extend(std::iter::repeat_n(key, count));
         let changed = if self.text_selection.pending.is_none() && !self.text_selection.validating {
             self.advance_selection_key()
         } else {
@@ -538,6 +547,24 @@ mod tests {
             head: caret,
             column: None,
         });
+    }
+
+    #[test]
+    fn shift_page_keys_extend_selection_across_the_viewport_and_back() {
+        let text = (0..40).map(|n| format!("{n:02}\n")).collect::<String>();
+        let (mut view, key) = fixture(&text);
+        collapse(&mut view, &key, 0);
+        view.selection_key(KeyCode::PageDown);
+        for _ in 0..20 {
+            draw(&mut view, 30, 8);
+        }
+        assert_eq!(copied(&view), text[..21]);
+        view.selection_key(KeyCode::PageUp);
+        for _ in 0..20 {
+            draw(&mut view, 30, 8);
+        }
+        assert_eq!(copied(&view), "");
+        assert!(view.text_selection.has_caret());
     }
     fn copied(view: &Transcript) -> String {
         view.copy_text(CopyMode::Selection, false)

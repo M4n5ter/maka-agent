@@ -73,6 +73,10 @@ pub enum Action {
         target: crate::pages::actions::CopyTarget,
         mode: crate::ui::transcript::selection::CopyMode,
     },
+    CopyReply {
+        key: crate::ui::transcript::MessageKey,
+        revision: crate::ui::transcript::Revision,
+    },
     CopyFile(String),
     Branch(crate::pages::branch::Command),
     Bundle(crate::pages::bundle::Command),
@@ -854,7 +858,10 @@ impl App {
             Action::Project(command) => return self.project_action(command),
             Action::Connection(command) => return self.connection_action(command),
             Action::Queue(command) => return self.queue_action(command),
-            Action::Copy(_) | Action::CopyMessage { .. } | Action::CopyFile(_) => {
+            Action::Copy(_)
+            | Action::CopyMessage { .. }
+            | Action::CopyReply { .. }
+            | Action::CopyFile(_) => {
                 return Some(action);
             }
             Action::OpenInteraction => self.open_interaction(),
@@ -1184,6 +1191,14 @@ impl App {
             Action::CopyMessage { target, mode } => {
                 *mode != crate::ui::transcript::selection::CopyMode::Selection
                     && target.current(self)
+            }
+            Action::CopyReply { key, revision } => {
+                matches!(self.navigation.current(), Route::Session(_))
+                    && !self.chrome.details
+                    && self
+                        .chat
+                        .reader()
+                        .is_some_and(|reader| reader.can_copy_source(key, revision))
             }
             Action::StopTurn(target) => {
                 self.stop_target().as_ref() == Some(target) && !self.chat.stop.pending(target)
@@ -1544,6 +1559,12 @@ impl App {
     /// Only the displayed frame contributes hit regions. Overlay rendering
     /// replaces that list, so a mouse event cannot reach a covered page.
     pub fn input(&mut self, event: Event) -> (bool, Option<Action>) {
+        // A held key must never count as the second deliberate quit press.
+        if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Press
+            && key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c' | 'C')))
+        {
+            return (false, None);
+        }
         self.checkpoint_input(crate::state::Impact::Other);
         let checkpoint_focus = self.focus;
         if self.shutdown.stopping
@@ -1567,6 +1588,7 @@ impl App {
             }
         }
         if matches!(event, Event::FocusLost) {
+            self.shutdown.quit_deadline = None;
             self.chrome.window_focused = false;
             self.chrome.stop_animation();
             self.invalidate_editor_geometry();
@@ -1599,7 +1621,28 @@ impl App {
         } else {
             event.clone()
         };
+        let outside_selection = matches!(&event, Event::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && !mouse.modifiers.contains(KeyModifiers::SHIFT)
+                && self.chat.area.is_some_and(|area| !area.contains((mouse.column, mouse.row).into())))
+            && self.overlay().is_none();
+        let quit_hint = self.shutdown.quit_deadline;
         let mut outcome = self.dispatch_input(event);
+        outcome.0 |= quit_hint != self.shutdown.quit_deadline;
+        if outside_selection
+            && self.overlay().is_none()
+            && !self.chrome.header.captures()
+            && !self.chrome.composer.captures()
+            && !matches!(
+                outcome.1,
+                Some(Action::Copy(_) | Action::CopyMessage { .. })
+            )
+            && let Some(reader) = self.chat.reader_mut()
+            && (reader.text_selection.has_caret() || reader.text_selection.active())
+        {
+            reader.text_selection.clear();
+            outcome.0 = true;
+        }
         if self.completion_editor_active() {
             let was_open = self.completion_open();
             self.completion_refresh(&completion_event);
@@ -1842,6 +1885,18 @@ impl App {
     }
 
     fn dispatch_input(&mut self, event: Event) -> (bool, Option<Action>) {
+        // Only the unhandled global Ctrl+C fallback may reuse this arm. Any
+        // local copy/cancel/interrupt consumes it; unrelated input disarms it.
+        let quit_deadline = if matches!(&event,
+            Event::Key(key) if key.kind != KeyEventKind::Release)
+            || matches!(&event, Event::Paste(_) | Event::FocusLost)
+            || matches!(&event, Event::Mouse(mouse) if matches!(mouse.kind,
+                MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown))
+        {
+            self.shutdown.quit_deadline.take()
+        } else {
+            None
+        };
         if let Some(overlay) = self.overlay()
             && !matches!(event, Event::Resize(_, _))
         {
@@ -1919,7 +1974,13 @@ impl App {
                     }
                     return (true, None);
                 }
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('c' | 'C'))
+                    && self
+                        .chat
+                        .reader()
+                        .is_some_and(|reader| reader.text_selection.active())
+                {
                     return (
                         true,
                         self.apply(Action::Copy(
@@ -2017,7 +2078,27 @@ impl App {
                 return (true, None);
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+                if crate::shutdown::ctrl_c(&Event::Key(key)) {
+                    if self.focus == Focus::Composer
+                        && let Some(editor) =
+                            self.editor().filter(|editor| !editor.text().is_empty())
+                    {
+                        editor.clear();
+                        return (true, None);
+                    }
+                    if let Some(target) = self.stop_target()
+                        && !self.chat.stop.pending(&target)
+                    {
+                        return (true, self.apply(Action::StopTurn(target)));
+                    }
+                    if self.shutdown.quit_press(quit_deadline, Instant::now()) {
+                        Some(Action::Quit)
+                    } else {
+                        return (true, None);
+                    }
+                } else if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('q')
+                {
                     Some(Action::Quit)
                 } else if key.modifiers.contains(KeyModifiers::CONTROL)
                     && key.code == KeyCode::Char('f')

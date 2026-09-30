@@ -141,6 +141,7 @@ pub(super) fn draw(
                     Effect::Link { key, revision } => {
                         Action::CopyFile(preview.link(&key, &revision)?.into())
                     }
+                    Effect::CopySource { key, revision } => Action::CopyReply { key, revision },
                 };
                 Some(Hit {
                     area: hit.area,

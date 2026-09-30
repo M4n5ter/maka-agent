@@ -22,6 +22,13 @@ use crate::{
     ui::{Role, Sheet, Tone},
 };
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+pub(crate) fn ctrl_c(event: &crossterm::event::Event) -> bool {
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    matches!(event, Event::Key(key) if key.kind == KeyEventKind::Press
+        && key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c' | 'C')))
+}
 
 /// A frozen local Host lifetime. Never stop a replacement discovered later.
 #[derive(Clone)]
@@ -39,14 +46,34 @@ pub enum ShutdownOutcome {
 pub(crate) struct State {
     pub stopping: bool,
     pub prompt: Option<Prompt>,
+    pub quit_deadline: Option<Instant>,
 }
 pub(crate) enum Prompt {
     Busy,
     Failed(String),
 }
 impl State {
+    pub fn quit_press(&mut self, previous: Option<Instant>, now: Instant) -> bool {
+        if previous.is_some_and(|deadline| now < deadline) {
+            self.quit_deadline = None;
+            true
+        } else {
+            self.quit_deadline = Some(now + Duration::from_secs(1));
+            false
+        }
+    }
+    pub fn quit_wait(&mut self, now: Instant) -> Option<Duration> {
+        let deadline = self.quit_deadline?;
+        if deadline <= now {
+            self.quit_deadline = None;
+            None
+        } else {
+            Some(deadline - now)
+        }
+    }
     pub fn show(&mut self, prompt: Prompt) {
         self.stopping = false;
+        self.quit_deadline = None;
         self.prompt = Some(prompt);
     }
 }
@@ -135,6 +162,77 @@ mod tests {
             row: y,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    #[test]
+    fn ctrl_c_quits_only_after_two_unhandled_presses_and_keeps_local_cancellation_first() {
+        use crossterm::event::KeyEventKind;
+        let mut app = App::new(
+            "/unused".into(),
+            I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+        );
+        let copy = || Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(copy()).1, None);
+        assert!(frame(&mut app, 80, 24, "Press Ctrl+C again").is_some());
+        assert_eq!(
+            app.input(Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Repeat
+            )))
+            .1,
+            None
+        );
+        assert_eq!(app.input(copy()).1, Some(Action::Quit));
+
+        app.input(copy());
+        app.shutdown.quit_deadline = Some(Instant::now() - Duration::from_millis(1));
+        assert_eq!(
+            app.input(copy()).1,
+            None,
+            "expired shortcuts start a fresh window"
+        );
+        app.input(key(KeyCode::F(1)));
+        assert!(app.shutdown.quit_deadline.is_none());
+        frame(&mut app, 80, 24, "");
+        assert_eq!(app.input(copy()).1, None);
+        assert!(!app.help, "Ctrl+C dismisses the top sheet");
+        assert!(app.shutdown.quit_deadline.is_none());
+
+        app.apply(Action::Visit(Route::Session("draft".into())));
+        app.focus = crate::app::Focus::Composer;
+        app.drafts
+            .get_mut("draft")
+            .unwrap()
+            .insert("recoverable draft");
+        assert_eq!(app.input(copy()).1, None);
+        assert_eq!(app.drafts["draft"].text(), "");
+        assert!(app.shutdown.quit_deadline.is_none());
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(
+            app.drafts["draft"].text(),
+            "recoverable draft",
+            "clearing input remains undoable"
+        );
+        app.drafts.get_mut("draft").unwrap().clear();
+        app.chat.select(&Route::Session("draft".into()));
+        app.connection = crate::app::ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        app.chat.snapshot = Some(maka_protocol::subscription::decode_session_observation_snapshot(&serde_json::json!({
+            "schemaVersion":5,"session":{"sessionId":"draft","metadataRevision":1,"status":"running","createdAt":0,"isArchived":false},
+            "projectionRevision":1,"rootTurn":{"sessionId":"draft","turnId":"turn","runId":"run","status":"running"},
+            "goal":null,"queue":{"hostEpoch":"epoch","queueRevision":0,"steering":[],"followup":[]},"interactions":{"pending":[]}
+        })).unwrap());
+        assert_eq!(
+            app.input(copy()).1,
+            Some(Action::StopTurn(app.stop_target().unwrap()))
+        );
+        assert!(app.shutdown.quit_deadline.is_none());
     }
 
     #[test]

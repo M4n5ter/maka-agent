@@ -173,6 +173,7 @@ impl Kind {
 pub enum Effect {
     Disclosure(MessageKey),
     Link { key: MessageKey, revision: Revision },
+    CopySource { key: MessageKey, revision: Revision },
 }
 #[derive(Clone)]
 pub struct Hit {
@@ -919,6 +920,34 @@ impl Transcript {
                         time.clone(),
                         Style::default().fg(self.colors.subtle),
                     ));
+                }
+                // The existing message gap is a control row, never source text.
+                // It remains available when a paged turn has no start timestamp.
+                if row == block.rows()
+                    && block.kind == Kind::Assistant
+                    && self.final_response(&key.turn) == Some(key)
+                {
+                    let copy = key;
+                    let label = if ascii { " [C]" } else { " ⧉ " };
+                    let x = line.width() as u16;
+                    let button_width = if ascii { 4 } else { 3 };
+                    if x + button_width <= area.width {
+                        line.spans.push(Span::styled(
+                            label,
+                            Style::default().fg(if self.hovered.as_ref() == Some(copy) {
+                                self.colors.accent
+                            } else {
+                                self.colors.subtle
+                            }),
+                        ));
+                        hits.push(Hit {
+                            area: Rect::new(area.x + x, y, button_width, 1),
+                            effect: Effect::CopySource {
+                                key: copy.clone(),
+                                revision: self.blocks[copy].revision.clone(),
+                            },
+                        });
+                    }
                 }
                 lines.push(line);
             }

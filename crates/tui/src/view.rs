@@ -77,6 +77,9 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     app.chrome
         .animation
         .begin(std::time::Instant::now(), animated);
+    if let Some(wait) = app.shutdown.quit_wait(std::time::Instant::now()) {
+        app.chrome.animation.wake_after(wait);
+    }
     let base = app.theme.colors().base();
     frame.render_widget(Block::default().style(base), area);
     if area.width < 30 || area.height < 10 {
@@ -147,6 +150,8 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         app.i18n.text("shutdown-working")
     } else if app.closing {
         app.i18n.text("state-closing")
+    } else if app.shutdown.quit_deadline.is_some() {
+        app.i18n.text("quit-again")
     } else if app.overlay().is_some() {
         String::new()
     } else if app.state_error.is_some() {
@@ -413,7 +418,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::NextTab => ("›", ">"),
         Action::PreviousTab => ("‹", "<"),
         Action::CloseTab(_) => ("×", "x"),
-        Action::Copy(_) | Action::CopyMessage { .. } => ("⧉", "C"),
+        Action::Copy(_) | Action::CopyMessage { .. } | Action::CopyReply { .. } => ("⧉", "C"),
         Action::CopyFile(_) => ("⧉", "C"),
         Action::OpenInteraction => ("!", "!"),
         Action::Interaction(_) => ("?", "?"),
@@ -650,6 +655,7 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
         Action::PreviousTab => "tabs-previous",
         Action::CloseTab(_) => "tabs-close",
         Action::Copy(mode) | Action::CopyMessage { mode, .. } => mode.label(),
+        Action::CopyReply { .. } => "chat-copy-markdown",
         Action::CopyFile(_) => "file-copy-path",
         Action::Interaction(command) => command.label(),
         Action::OpenInteraction => "interaction-open",

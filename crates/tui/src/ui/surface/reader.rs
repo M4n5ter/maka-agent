@@ -217,6 +217,11 @@ impl<M: Clone> Surface<M> {
             if reader.scrollbar_mouse(*mouse) {
                 return Outcome::handled(true);
             }
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && let Some(effect @ Effect::CopySource { .. }) = &click
+            {
+                return local(reader, effect.clone());
+            }
             if let Some(effect) = reader.text_mouse(*mouse, click) {
                 return effect
                     .map_or_else(|| Outcome::handled(true), |effect| local(reader, effect));
@@ -343,6 +348,11 @@ fn local(reader: &mut Transcript, effect: Effect) -> Outcome<ReaderEffect> {
             .link(&key, &revision)
             .map(|path| Outcome::emit(ReaderEffect::Copy(path.into())))
             .unwrap_or_else(|| Outcome::handled(false)),
+        Effect::CopySource { key, revision } => Outcome::emit(
+            reader
+                .copy_source(&key, &revision)
+                .map_or_else(ReaderEffect::Error, ReaderEffect::Copy),
+        ),
     }
 }
 fn placed_key<M: Clone>(

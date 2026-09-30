@@ -217,6 +217,12 @@ impl App {
         // unless a chooser is open over them.
         let owned = match overlay {
             _ if self.layer.captures() => None,
+            // Captured terminals retain their native interrupt. Text-field
+            // owners have no Ctrl+C operation and must not swallow dismissal.
+            Overlay::Resources => {
+                crate::pages::resources::input(self, &event).map(|changed| (changed, None))
+            }
+            _ if crate::shutdown::ctrl_c(&event) => None,
             Overlay::Reference | Overlay::Management => self.management_sheet_input(&event),
             Overlay::QueueEdit => self.queue_edit_sheet_input(&event),
             Overlay::Skills => self.skills_sheet_input(&event),
@@ -226,9 +232,6 @@ impl App {
             Overlay::Revision => self.revision_sheet_input(&event),
             Overlay::Bundle => self.bundle_sheet_input(&event),
             Overlay::SessionControls => crate::pages::session_controls::input(self, &event),
-            Overlay::Resources => {
-                crate::pages::resources::input(self, &event).map(|changed| (changed, None))
-            }
             Overlay::Attention => {
                 crate::pages::attention::input(self, &event).map(|changed| (changed, None))
             }
@@ -241,6 +244,9 @@ impl App {
         }
         let outcome = self.layer.input(&event, dismiss, back);
         if !outcome.consumed {
+            if crate::shutdown::ctrl_c(&event) {
+                return (true, self.apply(overlay.dismiss(self)));
+            }
             // Of the shell's chords only quitting reaches through a sheet,
             // and the quit prompt itself absorbs it.
             let quit = matches!(&event, Event::Key(key)

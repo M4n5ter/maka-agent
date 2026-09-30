@@ -236,6 +236,10 @@ impl Editor {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.replace(0..self.text.len(), "");
+    }
+
     fn replace(&mut self, range: Range<usize>, inserted: &str) {
         self.error = None;
         if self.text[range.clone()] == *inserted {

@@ -779,4 +779,36 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn ctrl_c_cancels_a_focused_edit_without_saving_or_arming_quit() {
+        let mut app = fixture(Locale::En);
+        let before = serde_json::to_value(&app.chat.snapshot.as_ref().unwrap().queue).unwrap();
+        let target = app.queue_rows()[2].target.clone();
+        app.apply(Action::Queue(Command::Edit(target)));
+        Terminal::new(TestBackend::new(80, 24))
+            .unwrap()
+            .draw(|frame| crate::view::draw(frame, &mut app))
+            .unwrap();
+        app.input(Event::Paste("unsaved edit".into()));
+        assert!(
+            app.queue
+                .edit
+                .as_ref()
+                .unwrap()
+                .editor
+                .text()
+                .contains("unsaved edit")
+        );
+        assert_eq!(
+            key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL),
+            None
+        );
+        assert!(app.queue.edit.is_none());
+        assert!(app.shutdown.quit_deadline.is_none());
+        assert_eq!(
+            serde_json::to_value(&app.chat.snapshot.as_ref().unwrap().queue).unwrap(),
+            before
+        );
+    }
 }

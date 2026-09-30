@@ -123,6 +123,7 @@ pub(crate) fn input(app: &mut App, event: &Event) -> Option<bool> {
         Event::Key(key)
             if focused
                 && key.kind != KeyEventKind::Release
+                && !crate::shutdown::ctrl_c(event)
                 && !(key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL)

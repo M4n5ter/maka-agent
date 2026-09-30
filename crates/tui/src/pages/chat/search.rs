@@ -63,6 +63,10 @@ impl Chat {
         }
     }
     pub fn search_input(&mut self, event: &Event) -> Option<bool> {
+        if self.view.search.is_some() && crate::shutdown::ctrl_c(event) {
+            self.search_command(Command::Close);
+            return Some(true);
+        }
         if self.view.search.is_some()
             && matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release
                 && key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::ALT))
@@ -141,6 +145,7 @@ impl Chat {
             Effect::Link { key, revision } => {
                 Action::CopyFile(self.reader()?.link(&key, &revision)?.into())
             }
+            Effect::CopySource { key, revision } => Action::CopyReply { key, revision },
         })
     }
     pub fn local_effect(&self, action: &crate::app::Action) -> Option<Effect> {

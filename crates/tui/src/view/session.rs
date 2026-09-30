@@ -113,7 +113,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
             && app.overlay().is_none()
             && app.chat.view.search.is_none();
         app.chat.view.hovered = match &app.hover {
-            Some(Action::ToggleMessage(key)) => Some(key.clone()),
+            Some(Action::ToggleMessage(key) | Action::CopyReply { key, .. }) => Some(key.clone()),
             _ => None,
         };
         let search_height = u16::from(app.chat.view.search.is_some());
@@ -221,6 +221,78 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use ratatui::{Terminal, backend::TestBackend, layout::Position};
+
+    #[test]
+    fn completed_response_has_a_revision_bound_markdown_copy_button_without_timing_history() {
+        use crate::ui::transcript::{MessageKey, Part, Revision};
+        let source = "# Result\n\n**中文 e\u{301} 👩‍💻** and [link](https://example.test)\n\n```rust\nlet ok = true;\n```";
+        for status in ["running", "completed", "failed"] {
+            let mut app = App::new(
+                "/fixture".into(),
+                I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+            );
+            app.apply(Action::Visit(Route::Session("chat".into())));
+            app.chat.select(&Route::Session("chat".into()));
+            app.chat.snapshot = Some(maka_protocol::subscription::decode_session_observation_snapshot(&serde_json::json!({
+                "schemaVersion":5,"session":{"sessionId":"chat","metadataRevision":1,"status":"active","createdAt":0,"isArchived":false},
+                "projectionRevision":1,"rootTurn":null,"goal":null,
+                "queue":{"hostEpoch":"epoch","queueRevision":0,"steering":[],"followup":[]},"interactions":{"pending":[]}
+            })).unwrap());
+            app.chat.fixture_rows(std::collections::BTreeMap::from([
+                (1,serde_json::json!({"type":"assistant","id":"earlier","turnId":"turn","text":"Working on it"})),
+                (2,serde_json::json!({"type":"assistant","id":"final","turnId":"turn","text":source})),
+                (3,serde_json::json!({"type":"turn_state","id":"end","turnId":"turn","status":status,"ts":1000})),
+            ]));
+            for (width, height) in [(80, 24), (36, 16)] {
+                let mut screen = Terminal::new(TestBackend::new(width, height)).unwrap();
+                screen
+                    .draw(|frame| crate::view::draw(frame, &mut app))
+                    .unwrap();
+                let copies: Vec<_> = app
+                    .hits
+                    .iter()
+                    .filter(|hit| matches!(hit.action, Action::CopyReply { .. }))
+                    .cloned()
+                    .collect();
+                if status != "completed" {
+                    assert!(copies.is_empty());
+                    continue;
+                }
+                assert_eq!(
+                    copies.len(),
+                    1,
+                    "only the completed final response gets a button"
+                );
+                let hit = &copies[0];
+                let Action::CopyReply { key, revision } = &hit.action else {
+                    unreachable!()
+                };
+                assert_eq!(key, &MessageKey::new("turn", "final", Part::Text));
+                assert_eq!(revision, &Revision::Durable(2));
+                assert_eq!(app.chat.view.copy_source(key, revision).unwrap(), source);
+                let click = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: hit.area.x,
+                    row: hit.area.y,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert_eq!(app.input(click.clone()).1, Some(hit.action.clone()));
+                app.input(Event::Resize(width, height));
+                assert_eq!(
+                    app.input(click).1,
+                    None,
+                    "resize invalidates old copy geometry"
+                );
+            }
+            if status == "completed" {
+                let key = MessageKey::new("turn", "final", Part::Text);
+                assert_eq!(
+                    app.chat.view.copy_source(&key, &Revision::Durable(999)),
+                    Err("chat-copy-empty")
+                );
+            }
+        }
+    }
 
     #[test]
     fn stop_is_icon_only_run_scoped_and_preserves_the_draft_until_observed_terminal() {

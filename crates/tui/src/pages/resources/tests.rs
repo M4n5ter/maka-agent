@@ -199,6 +199,28 @@ fn command_form_run_is_one_visible_row_and_pointer_dispatches_at_common_and_narr
 }
 
 #[test]
+fn ctrl_c_in_resource_command_form_cancels_without_launching_a_process() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let mut app = resource_app(Locale::En);
+    draw(&mut app, 80, 24);
+    click(&mut app, "catalog/create/0/resources-command");
+    draw(&mut app, 80, 24);
+    assert!(app.layer.focused("command"));
+    app.input(Event::Paste("echo must-not-run".into()));
+    assert_eq!(
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )))
+        .1,
+        None
+    );
+    assert!(!app.resources.visible);
+    assert!(app.shutdown.quit_deadline.is_none());
+    assert!(app.resources.request().is_none());
+}
+
+#[test]
 fn resource_catalog_buttons_are_single_rows_instead_of_label_width_tall_blocks() {
     for locale in Locale::ALL {
         for (width, height) in [(80, 24), (44, 22)] {

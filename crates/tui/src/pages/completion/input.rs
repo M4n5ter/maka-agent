@@ -38,6 +38,9 @@ impl App {
                 return Some((outcome.redraw || action.is_some(), action));
             }
         }
+        if crate::shutdown::ctrl_c(event) {
+            return Some((true, self.completion_action(Command::Close)));
+        }
         if matches!(event, Event::Key(key) if key.kind == KeyEventKind::Press && key.code == KeyCode::F(6) && key.modifiers.is_empty())
         {
             let popup = self.completion.popup.as_mut()?;

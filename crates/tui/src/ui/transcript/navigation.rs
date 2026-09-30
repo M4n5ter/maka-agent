@@ -20,6 +20,38 @@
 use super::*;
 
 impl Transcript {
+    pub(super) fn final_response(&self, turn: &str) -> Option<&MessageKey> {
+        let timing = self.timings.get(turn)?;
+        if timing.active || !matches!(timing.end, Some((_, Outcome::Completed))) {
+            return None;
+        }
+        let key = self.source_order.iter().rev().find(|key| {
+            key.turn == turn && !matches!(self.blocks[*key].kind, Kind::Meta | Kind::Timing)
+        })?;
+        let block = &self.blocks[key];
+        (block.kind == Kind::Assistant
+            && !matches!(block.revision, Revision::Live(_))
+            && !block.text.is_empty())
+        .then_some(key)
+    }
+
+    pub fn can_copy_source(&self, key: &MessageKey, revision: &Revision) -> bool {
+        self.blocks
+            .get(key)
+            .is_some_and(|block| block.kind == Kind::Assistant && &block.revision == revision)
+    }
+
+    pub fn copy_source(
+        &self,
+        key: &MessageKey,
+        revision: &Revision,
+    ) -> Result<String, &'static str> {
+        if !self.can_copy_source(key, revision) {
+            return Err("chat-copy-empty");
+        }
+        self.copy_text_at(key, selection::CopyMode::Source, false)
+    }
+
     /// Explicit selection only; the shell retains any mutation authority.
     pub fn selected(&self) -> Option<SelectedBlock<'_>> {
         let key = self

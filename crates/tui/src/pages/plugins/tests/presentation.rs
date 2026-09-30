@@ -44,6 +44,32 @@ fn preview(app: &mut App) {
         },
     });
 }
+
+#[test]
+fn ctrl_c_in_plugin_fields_reaches_quit_without_bypassing_unsaved_draft_review() {
+    for dirty in [false, true] {
+        let mut app = app(if dirty {
+            Place::Configure(EntryKey::of(&entry()))
+        } else {
+            Place::Install
+        });
+        app.focus = crate::app::Focus::Page;
+        let index = usize::from(dirty);
+        app.plugins
+            .surface
+            .focus(format!("plugins/scroll/body/field-{index}"));
+        screen(&mut app, 100, 40);
+        app.input(Event::Paste(" ".into()));
+        let before = app.plugins.field_mut(index).unwrap().text().to_owned();
+        assert_eq!(app.plugins.has_unsaved(), dirty);
+        let copy = || Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(copy()).1, None);
+        assert!(app.shutdown.quit_deadline.is_some());
+        assert_eq!(app.input(copy()).1, (!dirty).then_some(Action::Quit));
+        assert_eq!(app.plugins.confirm_visible(), dirty);
+        assert_eq!(app.plugins.field_mut(index).unwrap().text(), before);
+    }
+}
 #[test]
 fn install_review_defaults_to_frozen_human_summary_and_expands_the_same_technical_record() {
     let mut app = app(Place::Install);
