@@ -86,7 +86,8 @@ pub(super) fn run() -> Result<(), String> {
     }
     platform::init(CursorConfig {
         motion: cursor_overlay::MotionConfig {
-            idle_hide_ms: 3500.0,
+            // Visibility belongs to the Session, not to an individual action.
+            idle_hide_ms: 0.0,
             ..Default::default()
         },
         ..Default::default()
@@ -225,9 +226,9 @@ fn serve() -> Result<(), String> {
                 if active_theme(&id).is_none_or(|(theme, _)| theme != desired_theme) {
                     return Err("cursor renderer did not apply the requested theme".into());
                 }
-                // Configuration can create a cursor before it has a position,
-                // and an existing cursor can have faded out. Both need the
-                // same visibility acknowledgement as a newly created cursor.
+                // Configuration can create a cursor before it has a position.
+                // Its first position needs the same visibility acknowledgement
+                // as a newly created cursor.
                 if point.is_some() && entries[&id].spec.enabled {
                     let end = std::time::Instant::now() + Duration::from_millis(400);
                     while !platform::is_visible_for_session(&id) && std::time::Instant::now() < end

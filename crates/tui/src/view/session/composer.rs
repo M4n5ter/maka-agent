@@ -159,9 +159,16 @@ pub(super) fn draw(
 
 pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let item = feedback::current(app);
-    let status = item
-        .as_ref()
-        .map_or_else(|| activity(app), |item| app.i18n.text(item.key));
+    let status = item.as_ref().map_or_else(
+        || {
+            if app.has_interaction() {
+                String::new()
+            } else {
+                activity(app)
+            }
+        },
+        |item| app.i18n.text(item.key),
+    );
     let has_details = item.as_ref().is_some_and(|item| item.detail.is_some());
     let status = if has_details {
         format!("{status}  {}", app.chrome.symbol("ⓘ", "i"))
@@ -183,6 +190,26 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .hint(action_label(app, &Action::ToggleDetails));
     }
     let mut children = vec![notice];
+    if app.enabled(&Action::LatestMessages) {
+        children.insert(
+            0,
+            Node::button(
+                "latest",
+                format!(
+                    "{} {}",
+                    app.chrome.symbol("↓", "v"),
+                    app.i18n.text(if app.chat.view.unseen {
+                        "chat-latest-unseen"
+                    } else {
+                        "chat-latest-button"
+                    })
+                ),
+                crate::ui::Role::Normal,
+            )
+            .on(On::Activate(Action::LatestMessages))
+            .hint(action_label(app, &Action::LatestMessages)),
+        );
+    }
     let count = app.queue_rows().len();
     if count > 0 {
         let action = Action::Queue(crate::pages::queue::Command::Focus);
@@ -199,6 +226,28 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .hint(action_label(app, &action)),
         );
     }
+    let mut rows = vec![Node::row("status", children).size(Size::Fixed(1))];
+    if let Some((key, detail)) = app.interaction_prompt() {
+        let title = format!("{} {}", app.chrome.symbol("◇", "!"), app.i18n.text(key));
+        let action = app.i18n.text("interaction-review-action");
+        let description = if detail.is_empty() {
+            title
+        } else {
+            format!("{title} · {}", safe(detail))
+        };
+        // Keep the action and shortcut visible even with an expanded sidebar.
+        let budget = usize::from(area.width).saturating_sub(action.width() + 3);
+        rows.push(
+            Node::button(
+                "review",
+                format!("{} · {action}", fit(&description, budget)),
+                crate::ui::Role::Caution,
+            )
+            .size(Size::Fixed(1))
+            .on(On::Activate(Action::OpenInteraction))
+            .hint(action_label(app, &Action::OpenInteraction)),
+        );
+    }
     let context = Context {
         colors: app.theme.colors(),
         ascii: app.chrome.ascii,
@@ -206,7 +255,7 @@ pub(super) fn feedback(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     };
     app.chrome
         .feedback
-        .render(frame, area, Node::row("feedback", children), context);
+        .render(frame, area, Node::column("feedback", rows), context);
 }
 
 fn metadata(app: &App, width: u16) -> Option<Node<Action>> {

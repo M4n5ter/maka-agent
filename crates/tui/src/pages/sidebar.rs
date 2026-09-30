@@ -436,7 +436,8 @@ fn session(
     current: bool,
     orbit: Option<&'static str>,
 ) -> Node<Message> {
-    let (glyph, tone) = match app.session_activity(&item.id) {
+    let activity = app.session_activity(&item.id);
+    let (glyph, tone) = match activity {
         Activity::Working => (orbit.unwrap_or(app.chrome.symbol("⢁", "*")), Tone::Accent),
         Activity::Waiting => (app.chrome.symbol("◇", "!"), Tone::Warning),
         _ if item.has_unread => (app.chrome.symbol("●", "*"), Tone::Accent),
@@ -450,18 +451,28 @@ fn session(
         Tone::Hue(crate::view::tone::session_hue(&item.id))
     };
     // Status sits in the group's disclosure column plus one: names align.
-    Node::row(
-        format!("session-{}", item.id),
-        vec![
-            Node::text("status", vec![(format!("  {glyph} "), tone)]).size(Size::Fixed(4)),
-            Node::text("name", vec![(item.name.clone(), name)])
-                .clip()
-                .size(Size::Fill),
-        ],
-    )
-    .on(On::Activate(Message::Open(item.id.clone())))
-    .current(current)
-    .hint(item.name.clone())
+    let mut children = vec![
+        Node::text("status", vec![(format!("  {glyph} "), tone)]).size(Size::Fixed(4)),
+        Node::text("name", vec![(item.name.clone(), name)])
+            .clip()
+            .size(Size::Fill),
+    ];
+    if activity == Activity::Waiting {
+        children.push(
+            Node::text(
+                "waiting",
+                vec![(
+                    format!(" {} ", app.i18n.text("sidebar-needs-you")),
+                    Tone::Warning,
+                )],
+            )
+            .clip(),
+        );
+    }
+    Node::row(format!("session-{}", item.id), children)
+        .on(On::Activate(Message::Open(item.id.clone())))
+        .current(current)
+        .hint(item.name.clone())
 }
 
 pub(crate) struct Group<'a> {
@@ -598,6 +609,45 @@ mod tests {
                     + "\n"
             })
             .collect()
+    }
+
+    #[test]
+    fn waiting_sessions_show_a_label_until_the_observed_state_changes() {
+        let mut app = App::new(
+            "/unused".into(),
+            crate::i18n::I18n::new(
+                crate::LocalePreference::Explicit(crate::Locale::En),
+                crate::Locale::En,
+            ),
+        );
+        app.connection = ConnectionState::Connected {
+            root_id: "root".into(),
+            epoch: "epoch".into(),
+        };
+        let mut waiting = crate::pages::sessions::tests::item("waiting");
+        waiting.name = "Review files".into();
+        waiting.status = maka_protocol::session::SessionStatus::WaitingForUser;
+        let mut other = crate::pages::sessions::tests::item("other");
+        other.name = "Other task".into();
+        app.sessions.items = vec![waiting, other];
+        let text = screen(&mut app);
+        let row = text
+            .lines()
+            .find(|line| line.contains("Review files"))
+            .unwrap();
+        assert!(row.contains(&app.i18n.text("sidebar-needs-you")));
+        let row = text
+            .lines()
+            .find(|line| line.contains("Other task"))
+            .unwrap();
+        assert!(!row.contains(&app.i18n.text("sidebar-needs-you")));
+        app.sessions.items[0].status = maka_protocol::session::SessionStatus::Active;
+        let text = screen(&mut app);
+        let row = text
+            .lines()
+            .find(|line| line.contains("Review files"))
+            .unwrap();
+        assert!(!row.contains(&app.i18n.text("sidebar-needs-you")));
     }
 
     #[test]

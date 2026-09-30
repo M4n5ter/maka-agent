@@ -103,6 +103,7 @@ help = Tab / Shift+Tab     Move focus between controls
     Ctrl+F             Find in conversation
     Ctrl+N             New session
     Ctrl+A / Ctrl+Z    Select all / undo in editor
+    Ctrl+G             Review a pending approval or question
     Ctrl+B             Expand / collapse navigation
     Ctrl+PgUp/PgDn     Switch session tabs
     Ctrl+W             Close tab (keeps draft and running tasks)
@@ -220,6 +221,9 @@ chat-run-failed = Run failed
 chat-state-unknown = Unknown run state
 chat-failed = Conversation unavailable. Press F5 to reload or reconnect to the Host.
 chat-older = Load earlier messages
+chat-latest-button = Back to latest
+chat-latest-unseen = New messages
+sidebar-needs-you = Needs you
 chat-latest = Back to latest · End outside editor
 chat-new-output = New output · Back to latest · End
 chat-expand = Expand selected message · Enter / Space
@@ -304,7 +308,12 @@ session-create = New session in current directory · Ctrl+N
 session-create-failed = Couldn’t create session · View details
 session-new = New conversation
 shell-error = Error · { $error }
-interaction-open = Review pending request · Ctrl+A outside editor
+interaction-open = Review pending request · Ctrl+G
+interaction-needs-approval = Approval required
+interaction-needs-answer = Answer needed
+interaction-needs-input = Input needed
+interaction-needs-review = Request needs review
+interaction-review-action = Review · Ctrl+G
 interaction-title = Review request
 interaction-show-details = Details
 interaction-hide-details = Hide details

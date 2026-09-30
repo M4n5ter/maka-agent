@@ -158,8 +158,11 @@ which may still be covered by another window or an inactive browser tab.
 
 CDP renders the same artwork in an isolated world with a decorative, fixed-position
 shadow tree. It does not participate in layout, hit testing or accessibility. Idle
-DOM cursors expire and remove themselves, including after a lost connection. Session
-retirement removes only its cursor; Host shutdown reaps the native renderer.
+cursors stay at their last position between actions without an idle timer.
+Explicit disabling or Session retirement removes only that Session's cursor;
+Host shutdown reaps the native renderer. A browser document also removes its
+decorative cursor when it navigates or closes. If a CDP connection is lost before
+cleanup, the decoration can remain until that document is replaced.
 
 Artwork is defined in `src/cursor/theme.rs` and compiled into bounded Cua vector
 artifacts in a private temporary directory. Custom model-provided theme code and

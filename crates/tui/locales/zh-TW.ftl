@@ -103,6 +103,7 @@ help = Tab / Shift+Tab     在控制項間移動焦點
     Ctrl+F             尋找對話內容
     Ctrl+N             建立對話
     Ctrl+A / Ctrl+Z    編輯器內全選 / 復原
+    Ctrl+G             查看待審批請求或問題
     Ctrl+B             展開 / 收合導覽
     Ctrl+PgUp/PgDn     切換對話分頁
     Ctrl+W             關閉分頁（保留草稿與工作）
@@ -220,6 +221,9 @@ chat-run-failed = 執行失敗
 chat-state-unknown = 未知執行狀態
 chat-failed = 對話暫不可用。按 F5 重新載入，或重新連線 Host。
 chat-older = 載入更早的訊息
+chat-latest-button = 回到底部
+chat-latest-unseen = 有新訊息
+sidebar-needs-you = 待處理
 chat-latest = 回到最新 · 編輯器外 End
 chat-new-output = 有新輸出 · 回到最新 · End
 chat-expand = 展開選取訊息 · Enter / 空白鍵
@@ -304,7 +308,12 @@ session-create = 在目前目錄建立工作階段 · Ctrl+N
 session-create-failed = 建立工作階段失敗 · 查看詳情
 session-new = 新對話
 shell-error = 錯誤 · { $error }
-interaction-open = 審閱待處理請求 · 編輯器外 Ctrl+A
+interaction-open = 審閱待處理請求 · Ctrl+G
+interaction-needs-approval = 需要批准
+interaction-needs-answer = 需要回答
+interaction-needs-input = 需要填寫
+interaction-needs-review = 請求需要核對
+interaction-review-action = 查看請求 · Ctrl+G
 interaction-title = 審閱請求
 interaction-show-details = 詳情
 interaction-hide-details = 收起詳情

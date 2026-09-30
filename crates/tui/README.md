@@ -33,6 +33,13 @@ When the Host has no model connection or default model, the workspace home offer
 
 Chat and plugin transcripts share Markdown, selection, search and streaming presentation. New streamed text briefly fades to its final color without delaying the received content or changing its layout. Reduced motion and terminal-owned colors display it immediately.
 
+Across native and plugin controls, a filled row marks the current value or open
+destination; an underline marks keyboard focus. Hover does not select another
+row. Sessions needing an approval or answer show **Needs you** in the sidebar.
+The request also appears above the composer: click it or press `Ctrl+G` to
+review it. This opens the existing review without answering automatically.
+**Back to latest** appears in the same area when reading earlier messages.
+
 In the composer, `Ctrl+V` or **+ → Paste from clipboard** reads images, copied
 files, or text from the local clipboard on macOS, Windows and Linux. Terminal
 pastes consisting of absolute file paths or local `file://` URLs become

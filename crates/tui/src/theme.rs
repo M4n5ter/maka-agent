@@ -271,12 +271,17 @@ impl Palette {
     pub fn selected(self) -> Style {
         Style::default().fg(self.selection_text).bg(self.selection)
     }
-    pub fn focused(self) -> Style {
+    /// A chosen value or active destination persists independently of focus.
+    pub fn current(self) -> Style {
         if self.terminal {
-            Style::default().add_modifier(Modifier::REVERSED)
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
         } else {
-            self.selected()
+            self.selected().add_modifier(Modifier::BOLD)
         }
+    }
+    /// Focus identifies where the next key acts; it must not look selected.
+    pub fn focused(self) -> Style {
+        Style::default().add_modifier(Modifier::UNDERLINED)
     }
     pub fn breath(self, focused: bool, phase: Option<f32>) -> Color {
         let (Color::Rgb(r, g, b), Color::Rgb(ar, ag, ab)) = (self.background, self.accent) else {

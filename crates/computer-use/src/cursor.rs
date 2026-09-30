@@ -594,12 +594,12 @@ impl crate::protocol::Action {
 mod tests {
     use super::*;
     #[tokio::test]
-    #[ignore = "requires MAKA_CUA_TEST_HOST; starts an invisible native display helper without input"]
-    async fn renderer_loads_maka_artifact_and_exits_with_its_channel() {
+    #[ignore = "requires MAKA_CUA_TEST_HOST; displays a native cursor without sending input"]
+    async fn renderer_keeps_cursor_until_disabled_and_exits_with_its_channel() {
         let executable =
             std::env::var_os("MAKA_CUA_TEST_HOST").expect("set the built maka executable");
         let mut host = Host::with_executable(executable.clone().into());
-        let cursor = Spec {
+        let mut cursor = Spec {
             enabled: false,
             color: Color::Blue,
             ..Default::default()
@@ -611,6 +611,22 @@ mod tests {
         assert_eq!(state.theme.as_deref(), Some(cursor.theme_id().as_str()));
         assert!(!state.visible);
         let pid = state.renderer_pid.unwrap();
+        cursor.enabled = true;
+        host.update(
+            &cursor,
+            Some([60.0, 60.0]),
+            cursor_overlay::CursorAction::Click,
+            None,
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(
+            host.state(&cursor).await.visible,
+            "an idle Session keeps its cursor"
+        );
+        cursor.enabled = false;
+        assert!(!host.configure(&cursor).await.visible);
         host.stop().await;
         #[cfg(unix)]
         assert_ne!(

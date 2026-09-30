@@ -60,7 +60,7 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut actions = app.header_actions();
     if session {
         // The task remains visible; secondary controls live with this session.
-        actions.retain(|action| matches!(action, Action::OpenInteraction | Action::LatestMessages));
+        actions.retain(|action| matches!(action, Action::OpenInteraction));
         actions.push(Action::Search(crate::ui::transcript::search::Command::Open));
     }
     if app.navigation.current() == Route::Connections {

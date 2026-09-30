@@ -260,7 +260,7 @@ mod tests {
             assert!(!screen.contains("diagnostic-only-marker"));
             assert!(!screen.contains(&request.id));
             assert!(!app.enabled(&Action::SendMessage));
-            let point = app.chrome.feedback.rect("feedback/notice").unwrap();
+            let point = app.chrome.feedback.rect("feedback/status/notice").unwrap();
             app.input(Event::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 column: point.x + point.width / 2,
@@ -333,7 +333,7 @@ mod tests {
                 assert_eq!(current(&app).unwrap().warning, warning);
                 assert!(!text(&terminal).contains("compaction-detail"));
                 if current(&app).unwrap().detail.is_some() {
-                    let point = app.chrome.feedback.rect("feedback/notice").unwrap();
+                    let point = app.chrome.feedback.rect("feedback/status/notice").unwrap();
                     app.input(Event::Mouse(MouseEvent {
                         kind: MouseEventKind::Down(MouseButton::Left),
                         column: point.x + point.width / 2,

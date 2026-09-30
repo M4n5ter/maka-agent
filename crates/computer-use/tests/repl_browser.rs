@@ -559,8 +559,8 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
                 let mut request = [0; 4096];
                 let _ = stream.read(&mut request).await;
                 let body = r#"<!doctype html><meta charset="utf-8"><title>Maka Cua fixture</title>
-<label>Name <input id="name" value="hello hello"></label>
-<label>Message <textarea id="message"></textarea></label>
+<label>Name <input aria-label="Name" id="name" value="hello hello"></label>
+<label>Message <textarea aria-label="Message" id="message"></textarea></label>
 <select aria-label="Color" id="color"><option value="red-id">Red</option><option value="blue-id">Blue</option></select>
 <button onclick="document.getElementById('result').textContent=document.getElementById('name').value+' / '+document.getElementById('message').value+' / '+document.getElementById('color').value">Submit fixture</button>
 <output id="result" aria-live="polite"></output>"#;
@@ -639,7 +639,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     )
     .await;
     for (text, diagnostic) in [("missing", "text_not_found"), ("hello", "ambiguous_text")] {
-        let name = index(&state, "textbox", "Name ");
+        let name = index(&state, "textbox", "Name");
         let (ok, output) = evaluate(&repl, bridge.clone(), format!(
             "try {{ await tab.selectText({name}, {text:?}); }} catch (e) {{ nodeRepl.write(String(e)); }}"
         )).await;
@@ -657,8 +657,8 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         assert!(ok);
         state = texts(&output);
     }
-    let name = index(&state, "textbox", "Name ");
-    let message = index(&state, "textbox", "Message ");
+    let name = index(&state, "textbox", "Name");
+    let message = index(&state, "textbox", "Message");
     let color = index(&state, "combobox", "Color");
     let button = index(&state, "button", "Submit fixture");
     let (ok,output)=evaluate(&repl,bridge.clone(),format!("await tab.selectText({name}, 'hello', {{prefix:'hello '}}); await tab.moveCursor({name}); await tab.typeText(null, 'world'); await tab.setValue({message}, '你好'); await tab.setValue({color}, 'blue-id'); await tab.click({button}); await tab.getAXState({{disableDiffing:true}});")).await;
@@ -760,6 +760,8 @@ async fn browser_cursor_scenario(
         "{}",
         texts(&output)
     );
+    // Both Sessions remain visible after the old per-action expiry deadline.
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
     let (ok, output) = evaluate(first, a.clone(), "await tab.getScreenshot();".into()).await;
     assert!(ok);
     let bytes = image_bytes(&output);

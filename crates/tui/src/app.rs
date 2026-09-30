@@ -1919,6 +1919,7 @@ impl App {
         {
             let action = match key.code {
                 KeyCode::Char('k' | 'p') => Some(Action::Palette),
+                KeyCode::Char('g') if self.has_interaction() => Some(Action::OpenInteraction),
                 KeyCode::PageDown => Some(Action::NextTab),
                 KeyCode::PageUp => Some(Action::PreviousTab),
                 KeyCode::Char('w') => match self.navigation.current() {

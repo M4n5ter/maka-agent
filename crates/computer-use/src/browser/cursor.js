@@ -23,7 +23,6 @@ function drawCursor(input) {
   let entry = registry.get(cursor.id);
   if (operation === 'remove') {
     if (entry) {
-      clearTimeout(entry.timer);
       entry.host.remove();
       registry.delete(cursor.id);
     }
@@ -55,7 +54,7 @@ function drawCursor(input) {
     pulse.style.cssText =
       'position:absolute;left:9.69px;top:9.69px;width:16px;height:16px;margin:-8px;border:2px solid white;border-radius:50%;box-sizing:border-box;opacity:0;pointer-events:none;';
     root.append(picture, pulse, badge);
-    entry = { host, picture, badge, pulse, point: null, timer: null };
+    entry = { host, picture, badge, pulse, point: null };
     registry.set(cursor.id, entry);
   }
   if (!entry.host.isConnected) document.documentElement.append(entry.host);
@@ -89,11 +88,6 @@ function drawCursor(input) {
   entry.host.style.setProperty('display', shown ? 'block' : 'none', 'important');
   if (shown && !entry.host.matches(':popover-open')) entry.host.showPopover();
   if (!shown && entry.host.matches(':popover-open')) entry.host.hidePopover();
-  clearTimeout(entry.timer);
-  entry.timer = setTimeout(() => {
-    entry.host.remove();
-    if (registry.get(cursor.id) === entry) registry.delete(cursor.id);
-  }, 3500);
   if (cursor.enabled && entry.point) {
     if ((action === 'click' || action === 'key') && !reduced) {
       entry.pulse.getAnimations().forEach((animation) => animation.cancel());

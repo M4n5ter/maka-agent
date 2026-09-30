@@ -217,9 +217,7 @@ impl<'a, M> Pass<'a, M> {
                     .fg(self.colors.subtle)
                     .add_modifier(Modifier::DIM)
             } else if current {
-                Style::default()
-                    .fg(self.colors.accent)
-                    .add_modifier(Modifier::BOLD)
+                self.colors.current()
             } else {
                 Style::default()
             };
@@ -227,9 +225,12 @@ impl<'a, M> Pass<'a, M> {
             // supplies a hit region for otherwise empty lane space.
             if !destination {
                 scope.style = Some(style);
+                if current && enabled {
+                    self.buffer.set_style(visible, style);
+                }
             }
             // A button's whole hit area reads as one filled control.
-            if role.is_some() && enabled && !self.colors.terminal {
+            if role.is_some() && enabled && !current && !self.colors.terminal {
                 self.buffer
                     .set_style(visible, Style::default().bg(self.colors.surface));
             }

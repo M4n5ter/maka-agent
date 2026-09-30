@@ -103,6 +103,7 @@ help = Tab / Shift+Tab     在控件间移动焦点
     Ctrl+F             查找对话内容
     Ctrl+N             新建会话
     Ctrl+A / Ctrl+Z    编辑器内全选 / 撤销
+    Ctrl+G             查看待审批请求或问题
     Ctrl+B             展开 / 折叠导航
     Ctrl+PgUp/PgDn     切换会话页签
     Ctrl+W             关闭页签（保留草稿与任务）
@@ -220,6 +221,9 @@ chat-run-failed = 运行失败
 chat-state-unknown = 未知运行状态
 chat-failed = 对话暂不可用。按 F5 重新加载，或重新连接 Host。
 chat-older = 加载更早的消息
+chat-latest-button = 回到底部
+chat-latest-unseen = 有新消息
+sidebar-needs-you = 待处理
 chat-latest = 回到最新 · 编辑器外 End
 chat-new-output = 有新输出 · 回到最新 · End
 chat-expand = 展开选中消息 · Enter / 空格
@@ -304,7 +308,12 @@ session-create = 在当前目录新建会话 · Ctrl+N
 session-create-failed = 新建会话失败 · 查看详情
 session-new = 新对话
 shell-error = 错误 · { $error }
-interaction-open = 审阅待处理请求 · 编辑器外 Ctrl+A
+interaction-open = 审阅待处理请求 · Ctrl+G
+interaction-needs-approval = 需要批准
+interaction-needs-answer = 需要回答
+interaction-needs-input = 需要填写
+interaction-needs-review = 请求需要核对
+interaction-review-action = 查看请求 · Ctrl+G
 interaction-title = 审阅请求
 interaction-show-details = 详情
 interaction-hide-details = 收起详情

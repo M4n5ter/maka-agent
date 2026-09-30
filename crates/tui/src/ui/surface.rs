@@ -331,22 +331,16 @@ impl<M: Clone> Surface<M> {
         for item in items.iter().filter(|item| {
             item.enabled && !item.slot && !matches!(item.on, On::Scroll) && self.popover.is_none()
         }) {
-            // Keyboard focus and the pointer stay distinguishable: focus takes
-            // the selection, hover only lifts the row.
+            // Only the chosen value has a persistent fill. Focus is an
+            // underline; hover never makes another row look chosen.
             let style = if context.focused && Some(&item.id) == self.focus.as_ref() {
-                colors.focused().fg(match item.role {
-                    Some(Role::Destructive) => colors.error,
-                    Some(Role::Caution) => colors.warning,
-                    _ => colors.accent,
-                })
+                colors.focused()
             } else if Some(&item.id) == self.hover.as_ref() {
-                if colors.terminal {
-                    Style::default().add_modifier(Modifier::UNDERLINED)
-                } else if item.role.is_some() {
+                if item.role.is_some() && !item.current && !colors.terminal {
                     // Buttons are already filled at rest; hover lifts the fill.
                     Style::default().bg(colors.border)
                 } else {
-                    Style::default().bg(colors.surface)
+                    Style::default().add_modifier(Modifier::BOLD)
                 }
             } else {
                 continue;
@@ -493,13 +487,14 @@ impl<M: Clone> Surface<M> {
                 (true, true) => "* ",
                 (false, true) => "  ",
             };
-            let style = if index == popover.highlighted {
-                colors.focused().fg(colors.accent)
-            } else if current {
-                Style::default().fg(colors.accent)
+            let mut style = if current {
+                colors.current()
             } else {
                 Style::default().fg(colors.foreground)
             };
+            if index == popover.highlighted {
+                style = style.patch(colors.focused());
+            }
             let buffer = frame.buffer_mut();
             buffer.set_style(line, style);
             buffer.set_stringn(
@@ -1758,6 +1753,98 @@ mod tests {
     }
 
     #[test]
+    fn current_focus_and_hover_have_independent_visuals_in_every_palette() {
+        use ratatui::style::Color;
+        for choice in [
+            crate::theme::Choice::Maka,
+            crate::theme::Choice::Paper,
+            crate::theme::Choice::Terminal,
+        ] {
+            let colors = choice.colors();
+            let mut surface = Surface::default();
+            surface.focus("list/keyboard".into());
+            let tree = || {
+                Node::column(
+                    "list",
+                    vec![
+                        Node::text(
+                            "current",
+                            vec![("Open session".into(), super::super::Tone::Normal)],
+                        )
+                        .current(true)
+                        .on(On::Activate(1))
+                        .size(super::super::Size::Fixed(1)),
+                        Node::text(
+                            "keyboard",
+                            vec![("Another session".into(), super::super::Tone::Normal)],
+                        )
+                        .on(On::Activate(2))
+                        .size(super::super::Size::Fixed(1)),
+                        Node::text(
+                            "pointer",
+                            vec![("Hovered session".into(), super::super::Tone::Normal)],
+                        )
+                        .on(On::Activate(3))
+                        .size(super::super::Size::Fixed(1)),
+                    ],
+                )
+            };
+            let mut terminal = Terminal::new(TestBackend::new(30, 4)).unwrap();
+            terminal
+                .draw(|frame| {
+                    surface.render(
+                        frame,
+                        frame.area(),
+                        tree(),
+                        Context {
+                            colors,
+                            ascii: false,
+                            focused: true,
+                        },
+                    )
+                })
+                .unwrap();
+            surface.input(&mouse(MouseEventKind::Moved, 10, 2));
+            for focused in [true, false] {
+                terminal
+                    .draw(|frame| {
+                        surface.render(
+                            frame,
+                            frame.area(),
+                            tree(),
+                            Context {
+                                colors,
+                                ascii: false,
+                                focused,
+                            },
+                        )
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                if colors.terminal {
+                    assert!(buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
+                } else {
+                    assert_eq!(
+                        buffer[(20, 0)].bg,
+                        colors.selection,
+                        "current fills the whole row"
+                    );
+                }
+                assert!(!buffer[(0, 0)].modifier.contains(Modifier::UNDERLINED));
+                assert_eq!(
+                    buffer[(0, 1)].modifier.contains(Modifier::UNDERLINED),
+                    focused
+                );
+                assert!(!buffer[(0, 1)].modifier.contains(Modifier::REVERSED));
+                assert_eq!(buffer[(0, 1)].bg, Color::Reset);
+                assert_eq!(buffer[(0, 2)].bg, Color::Reset);
+                assert!(buffer[(0, 2)].modifier.contains(Modifier::BOLD));
+                assert!(!buffer[(0, 2)].modifier.contains(Modifier::UNDERLINED));
+            }
+        }
+    }
+
+    #[test]
     fn hover_and_keyboard_focus_stay_distinguishable() {
         let mut surface = Surface::default();
         let rows = [("alpha", true), ("gamma", true)];
@@ -1784,11 +1871,11 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].bg, colors.selection, "focused category");
+        assert_eq!(buffer[(0, 0)].bg, colors.selection, "chosen category");
         assert_eq!(
             buffer[(30, y)].bg,
-            colors.surface,
-            "hovered row is only lifted"
+            ratatui::style::Color::Reset,
+            "hover must not make another row look selected"
         );
         let hovered = surface.hovered().unwrap();
         assert_eq!(hovered.key, "root/pane/rows/gamma");

@@ -172,11 +172,44 @@ impl Interactions {
 }
 impl App {
     pub fn has_interaction(&self) -> bool {
-        self.interactions
+        self.interaction_prompt().is_some()
+    }
+    /// The same pending or retained request that OpenInteraction will review.
+    /// Presentation never creates another request or answer authority.
+    pub(crate) fn interaction_prompt(&self) -> Option<(&'static str, &str)> {
+        let retained = self
+            .interactions
             .review
             .as_ref()
-            .is_some_and(|review| review.locked() || review.state == State::Stale)
-            || self.pending_interaction().is_some()
+            .filter(|review| review.locked() || review.state == State::Stale);
+        let snapshot = retained
+            .map(|review| &review.ticket.snapshot)
+            .or_else(|| self.pending_interaction())?;
+        let (key, detail) = match snapshot.request() {
+            InteractionRequest::Permissions { request, .. } => {
+                ("interaction-needs-approval", request.reason.as_str())
+            }
+            InteractionRequest::ClientCapability { target, .. } => {
+                ("interaction-needs-approval", target.tool_name.as_str())
+            }
+            InteractionRequest::Question { questions, .. } => (
+                "interaction-needs-answer",
+                questions
+                    .first()
+                    .map_or("", |question| question.question.as_str()),
+            ),
+            InteractionRequest::Form { message, .. } => {
+                ("interaction-needs-input", message.as_str())
+            }
+        };
+        Some((
+            if retained.is_some() {
+                "interaction-needs-review"
+            } else {
+                key
+            },
+            detail,
+        ))
     }
     fn pending_interaction(&self) -> Option<&InteractionSnapshot> {
         let crate::navigation::Route::Session(id) = self.navigation.current() else {
@@ -491,6 +524,101 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    #[test]
+    fn pending_request_banner_is_visible_and_opens_review_without_answering_or_changing_draft() {
+        for locale in Locale::ALL {
+            for (width, sidebar) in [
+                (30, false),
+                (40, false),
+                (60, true),
+                (80, false),
+                (120, true),
+            ] {
+                let mut app = fixture();
+                app.i18n = I18n::new(LocalePreference::Explicit(locale), locale);
+                app.chrome.sidebar_expanded = Some(sidebar);
+                app.focus = crate::app::Focus::Composer;
+                let text = draw(&mut app, width, 24);
+                if width >= 40 && width != 60 {
+                    assert!(text.contains(&app.i18n.text("interaction-needs-approval")));
+                }
+                let banner = app.chrome.feedback.rect("feedback/review").unwrap();
+                assert!(
+                    text.lines()
+                        .nth(usize::from(banner.y))
+                        .unwrap()
+                        .contains("Ctrl+G"),
+                    "review shortcut is visible at width {width}, sidebar={sidebar}: {text}"
+                );
+                assert!(banner.y > 1 && !banner.is_empty());
+                app.input(Event::Key(KeyEvent::new(
+                    KeyCode::Char('g'),
+                    KeyModifiers::CONTROL,
+                )));
+                assert!(app.interactions.visible);
+                assert_eq!(
+                    app.interactions.review.as_ref().unwrap().state,
+                    State::Ready
+                );
+                assert_eq!(app.drafts["a"].text(), "keep draft");
+                draw(&mut app, width, 24);
+                assert_eq!(
+                    app.input(key(KeyCode::Esc)).1,
+                    Some(Action::Interaction(Command::Close))
+                );
+                app.interaction_request(Command::Close);
+                assert!(!app.interactions.visible);
+                draw(&mut app, width, 24);
+                let banner = app.chrome.feedback.rect("feedback/review").unwrap();
+                app.input(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: banner.x + 1,
+                    row: banner.y,
+                    modifiers: KeyModifiers::NONE,
+                }));
+                assert!(app.interactions.visible);
+                assert_eq!(
+                    app.interactions.review.as_ref().unwrap().state,
+                    State::Ready
+                );
+                assert!(app.interactions.review.as_ref().unwrap().outcome.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn back_to_latest_sits_above_composer_alongside_pending_review() {
+        let mut app = fixture();
+        app.chat.fixture_rows(std::collections::BTreeMap::from([
+            (1, json!({"type":"user","id":"u","turnId":"turn","text":"Question"})),
+            (2, json!({"type":"assistant","id":"a","turnId":"turn","text": "Answer line\n".repeat(80)})),
+        ]));
+        draw(&mut app, 80, 24);
+        app.chat.view.first();
+        app.chat.view.unseen = true;
+        draw(&mut app, 80, 24);
+        let latest = app.chrome.feedback.rect("feedback/status/latest").unwrap();
+        let review = app.chrome.feedback.rect("feedback/review").unwrap();
+        let editor = app
+            .chrome
+            .composer
+            .rect(crate::view::shell::EDITOR)
+            .unwrap();
+        assert!(latest.y < review.y && review.y < editor.y);
+        app.input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: latest.x + 1,
+            row: latest.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        draw(&mut app, 80, 24);
+        assert!(app.chat.view.following());
+        assert!(app.chrome.feedback.rect("feedback/status/latest").is_none());
+        assert!(app.chrome.feedback.rect("feedback/review").is_some());
+        assert_eq!(app.drafts["a"].text(), "keep draft");
+        assert!(app.has_interaction());
+    }
+
     /// Where a command's control sits in the review sheet.
     pub(super) fn path(app: &App, command: Command) -> String {
         let form = app
