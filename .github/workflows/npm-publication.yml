@@ -16,12 +16,13 @@
 # under the License.
 
 name: npm publication
+run-name: Unofficial experimental Rust preview (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the verified native packages and npm launcher to rust-preview
+        description: Publish an unofficial experimental preview (not an ASF release) to rust-preview
         type: boolean
         default: false
 
@@ -226,11 +227,11 @@ jobs:
 
   publish:
     needs: verify
-    if: inputs.publish && github.ref == 'refs/heads/main'
+    if: inputs.publish && github.repository == 'M4n5ter/maka-agent' && github.ref == 'refs/heads/feat/runtime-host-rust'
     concurrency:
       group: npm-publication-rust-preview
       cancel-in-progress: false
-    environment: npm-publication
+    environment: npm-rust-preview
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

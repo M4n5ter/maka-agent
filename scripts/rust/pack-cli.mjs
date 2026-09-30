@@ -74,6 +74,13 @@ export async function packNativeCli({
     for (const name of ['LICENSE', 'NOTICE']) {
       await copyRegular(join(repositoryRoot, name), join(directory, name), 16 * 1024 * 1024);
     }
+    for (const name of ['README.md', 'README.zh-CN.md']) {
+      await copyRegular(
+        join(repositoryRoot, 'packages/cli', name),
+        join(directory, name),
+        1024 * 1024,
+      );
+    }
     // Release owners supply the reviewed Rust/V8/embedded-JS notice closure.
     // The old Node CLI notice file alone is not sufficient for this binary.
     await copyRegular(
@@ -88,15 +95,22 @@ export async function packNativeCli({
         {
           name,
           version,
-          description: `Maka native CLI for ${target}`,
+          description: `Unofficial experimental Maka Rust preview for ${target}; not an ASF release`,
           license: 'Apache-2.0',
-          repository: { type: 'git', url: 'https://github.com/apache/maka.git' },
+          repository: { type: 'git', url: 'https://github.com/M4n5ter/maka-agent.git' },
           ...(source ? { makaSource: source } : {}),
           os: [platform.os],
           cpu: [platform.cpu],
           ...(platform.libc ? { libc: platform.libc } : {}),
           bin: { maka: `bin/${executable}` },
-          files: ['bin', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt'],
+          files: [
+            'bin',
+            'LICENSE',
+            'NOTICE',
+            'THIRD_PARTY_NOTICES.txt',
+            'README.md',
+            'README.zh-CN.md',
+          ],
           publishConfig: {
             access: 'public',
             registry: 'https://registry.npmjs.org/',

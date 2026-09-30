@@ -124,6 +124,10 @@ test('prepared release binds its source and recovers partial publication and mis
       manifest.optionalDependencies,
       Object.fromEntries(previewTargets.map((target) => ['@maka-agent/cli-' + target, version])),
     );
+    assert.match(manifest.description, /Unofficial experimental.*not an ASF release/);
+    const readme = execFileSync('tar', ['-xOf', packed, 'package/README.md'], { encoding: 'utf8' });
+    assert.match(readme, /not an official release of the Apache Software Foundation/);
+    assert.match(readme, /maka-agent@latest.*empty placeholder/);
     assert.deepEqual(manifest.makaSource, source);
     await publicationRecovery(t, stage, packages);
     await writeFile(packed, 'tampered');
