@@ -101,6 +101,7 @@ pub async fn accepted(log: &EventLog, invocation: &Invocation, calls: &[ModelToo
             },
         },
         Fact::ModelRequested {
+            item_acceptance: false,
             effective_source_digest: None,
             step_id: invocation.invocation_id.clone(),
             model_id: "fixture".into(),

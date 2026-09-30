@@ -46,6 +46,7 @@ async fn handoff_reserves_successor_and_cancellation_before_sealing_a_near_capac
             &RuntimeEvent::new(
                 source.invocation.clone(),
                 Fact::ModelRequested {
+                    item_acceptance: false,
                     step_id: "step".into(),
                     model_id: "test".into(),
                     purpose: maka_runtime::context::ModelPurpose::Main,

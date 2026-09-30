@@ -107,6 +107,7 @@ async fn reopened_pending_main_and_summary_are_failed_without_replaying_admissio
                 append(
                     &log,
                     Fact::ModelRequested {
+                        item_acceptance: false,
                         step_id: "summary".into(),
                         purpose: maka_runtime::context::ModelPurpose::Summary,
                         model_id: "test".into(),
@@ -459,4 +460,214 @@ async fn explicit_new_message_after_unknown_dispatch_informs_model_without_repla
         let prefix = log.prefix(100, 128 * 1024).await.unwrap();
         assert!(!prefix.events.iter().any(|event| event.event.invocation.invocation_id == "invocation" && matches!(event.event.fact, Fact::ToolSettled { .. })));
     }).await.unwrap();
+}
+
+#[tokio::test]
+async fn item_acceptance_survives_crashes_before_dispatch_before_settlement_and_after_settlement() {
+    use maka_runtime::{
+        event::{EventWrite, ToolOutcome},
+        model::ModelEvent,
+        tool_call::ToolCallIdentity,
+    };
+    for cut in 0..3 {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.sqlite");
+        let log = EventLog::open(&path).await.unwrap();
+        opening(&log).await;
+        recovery::item_request(&log).await;
+        let call = ModelToolCall {
+            id: "call".into(),
+            name: "write_file".into(),
+            input: json!({"path":"effect.txt"}),
+            provider_options: Some(json!({"openai":{"itemId":"opaque"}})),
+            provider_executed: false,
+        };
+        let dispatch = |input| Fact::ToolDispatched {
+            title: None,
+            operation_id: "step:call".into(),
+            call: ToolCallIdentity::provider("step".into(), "call".into()),
+            name: call.name.clone(),
+            input,
+        };
+        let attempt = |fact| EventWrite::plain(RuntimeEvent::new(invocation(), fact)).unwrap();
+        assert!(
+            log.append(&attempt(dispatch(call.input.clone())))
+                .await
+                .is_err(),
+            "an unaccepted call cannot acquire execution"
+        );
+        append(
+            &log,
+            Fact::ModelObserved {
+                step_id: "step".into(),
+                event: ModelEvent::ToolCall(call.clone()),
+            },
+        )
+        .await;
+        assert!(
+            log.append(&attempt(dispatch(json!({"path":"different.txt"}))))
+                .await
+                .is_err(),
+            "accepted arguments cannot change"
+        );
+        if cut > 0 {
+            append(&log, dispatch(call.input.clone())).await;
+        }
+        if cut > 1 {
+            append(
+                &log,
+                Fact::ToolSettled {
+                    operation_id: "step:call".into(),
+                    outcome: ToolOutcome::Failed {
+                        message: "known failure after operation".into(),
+                    },
+                },
+            )
+            .await;
+        }
+        log.close().await.unwrap();
+        let log = EventLog::open(&path).await.unwrap();
+        assert_eq!(recover(&log).await.unwrap(), 1);
+        assert_eq!(recover(&log).await.unwrap(), 0);
+        let prefix = log.prefix(100, 128 * 1024).await.unwrap();
+        assert_eq!(
+            prefix
+                .events
+                .iter()
+                .filter(|event| matches!(event.event.fact, Fact::ToolDispatched { .. }))
+                .count(),
+            usize::from(cut > 0)
+        );
+        assert_eq!(
+            prefix
+                .events
+                .iter()
+                .filter(|event| matches!(event.event.fact, Fact::ToolRejected { .. }))
+                .count(),
+            usize::from(cut == 0)
+        );
+        assert!(
+            matches!(&prefix.events.last().unwrap().event.fact,Fact::InvocationEnded {outcome:InvocationOutcome::Failed {class,..}}
+            if class == if cut == 1 {"outcome_unknown"} else {"host_interrupted"})
+        );
+        while !log
+            .prepare_transcript("session", prefix.high_water, 32)
+            .await
+            .unwrap()
+        {}
+        if cut != 1 {
+            let source = log
+                .read_model_context("session", None, 100, 128 * 1024)
+                .await
+                .unwrap();
+            assert!(source.tail.iter().any(
+                |event| matches!(event,maka_event_log::context::ContextEvent::ModelItems(items)
+                if items.items.iter().any(|item| matches!(item.part,ModelPart::ToolCall {..})))
+            ));
+        } else {
+            assert!(
+                log.read_model_context("session", None, 100, 128 * 1024)
+                    .await
+                    .is_err(),
+                "unsettled effects cannot silently resume"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn accepted_history_budget_counts_complete_items_not_token_envelopes() {
+    use maka_runtime::{
+        event::EventWrite,
+        model::{ModelEvent, TextKind, assembly::StepBuilder},
+    };
+    for interrupted in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let log = EventLog::open(&directory.path().join("events.sqlite"))
+            .await
+            .unwrap();
+        opening(&log).await;
+        recovery::item_request(&log).await;
+        let mut builder = StepBuilder::for_step("step").unwrap();
+        let mut observations = vec![ModelEvent::PartStarted {
+            id: "text".into(),
+            text_kind: TextKind::Text,
+            provider_options: None,
+        }];
+        observations.extend((0..128).map(|_| ModelEvent::PartDelta {
+            id: "text".into(),
+            text: "x".into(),
+            provider_options: None,
+        }));
+        observations.push(ModelEvent::PartFinished {
+            id: "text".into(),
+            provider_options: Some(json!({"openai":{"itemId":"kept"}})),
+        });
+        if !interrupted {
+            observations.push(ModelEvent::Finished {
+                reason: maka_runtime::model::ModelFinishReason::Stop,
+                usage: ModelUsage::default(),
+                provider_options: None,
+            });
+        }
+        let writes: Vec<_> = observations
+            .into_iter()
+            .map(|event| {
+                builder.push(event.clone()).unwrap();
+                EventWrite::plain(RuntimeEvent::new(
+                    invocation(),
+                    Fact::ModelObserved {
+                        step_id: "step".into(),
+                        event,
+                    },
+                ))
+                .unwrap()
+            })
+            .collect();
+        log.append_batch(&writes).await.unwrap();
+        append(
+            &log,
+            if interrupted {
+                Fact::ModelInterrupted {
+                    step_id: "step".into(),
+                    status: ModelInterruption::RetryableFailure,
+                }
+            } else {
+                Fact::ModelCompleted {
+                    step_id: "step".into(),
+                    output: builder.finish().unwrap(),
+                }
+            },
+        )
+        .await;
+        append(
+            &log,
+            Fact::InvocationEnded {
+                outcome: InvocationOutcome::Failed {
+                    class: "fixture_end".into(),
+                    message: None,
+                },
+            },
+        )
+        .await;
+        let source = log
+            .read_model_context("session", None, 8, 4096)
+            .await
+            .unwrap();
+        let items = source
+            .tail
+            .iter()
+            .find_map(|event| match event {
+                maka_event_log::context::ContextEvent::ModelItems(items) => Some(items),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(items.items.len(), 1);
+        assert!(
+            matches!(&items.items[0].part,ModelPart::Text {text,provider_options:Some(options),..}
+            if text == &"x".repeat(128) && options["openai"]["itemId"] == "kept")
+        );
+        assert!(items.items[0].sequence < items.sequence);
+        assert_eq!(items.items[0].index, 0);
+    }
 }

@@ -73,6 +73,7 @@ async fn handoff_rejects_unresolved_provider_effects_but_accepts_effect_free_sum
             &RuntimeEvent::new(
                 source.invocation.clone(),
                 Fact::ModelRequested {
+                    item_acceptance: false,
                     step_id: "step".into(),
                     model_id: "test".into(),
                     purpose: if provider_effect {

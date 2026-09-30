@@ -39,7 +39,7 @@ async fn legacy(log: &EventLog, id: &str, repeats: usize) {
     for fact in [
         Fact::InvocationOpened { configuration: None,
             input: InvocationInput::Message { source_messages: Vec::new(), content: format!("question-{id}").into(), request_fingerprint: None } },
-        Fact::ModelRequested { purpose: maka_runtime::context::ModelPurpose::Main, context: None, checkpoint_event_id: None, effective_source_digest: None,
+        Fact::ModelRequested { item_acceptance: false, purpose: maka_runtime::context::ModelPurpose::Main, context: None, checkpoint_event_id: None, effective_source_digest: None,
             step_id: step.clone(), model_id: "test".into(), source_scope: LogScope::Session { id: "session".into() },
             source_high_water: 1, source_digest: "legacy".into(), input_digest: "legacy".into(), route_identity: "legacy".into() },
         Fact::ModelCompleted { step_id: step.clone(), output: serde_json::from_value(json!({

@@ -239,7 +239,10 @@ impl InvocationView {
                         )?);
                     }
                     Fact::ModelRequested {
-                        step_id, model_id, ..
+                        step_id,
+                        model_id,
+                        item_acceptance,
+                        ..
                     } => {
                         if step.is_some() {
                             return Err(ProjectionError::Invalid("overlapping model steps"));
@@ -248,6 +251,7 @@ impl InvocationView {
                             step_id.clone(),
                             model_id.clone(),
                             self.max_text_bytes,
+                            *item_acceptance,
                         )));
                     }
                     Fact::ModelObserved {
@@ -259,14 +263,42 @@ impl InvocationView {
                             .ok_or(ProjectionError::Invalid("observation without request"))?;
                         step.check_id(step_id)?;
                         step.observe(event, ts, observation)?;
+                        if step.item_acceptance {
+                            match observation {
+                                maka_runtime::model::ModelEvent::PartFinished { id, .. } => {
+                                    messages.extend(step.deliver_text(id));
+                                }
+                                maka_runtime::model::ModelEvent::Source(_)
+                                | maka_runtime::model::ModelEvent::ToolCall(_)
+                                | maka_runtime::model::ModelEvent::ProviderToolResult { .. } => {
+                                    if let Some((index, part)) = step.accepted_tool() {
+                                        messages.extend(self.tools.accept_item(
+                                            event,
+                                            ts,
+                                            step_id,
+                                            index,
+                                            part,
+                                            step.anchor(),
+                                            step.model(),
+                                        )?);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     Fact::ModelCompleted { step_id, output } => {
                         let completed = step
                             .take()
                             .ok_or(ProjectionError::Invalid("completion without request"))?;
                         completed.check_id(step_id)?;
+                        let streaming = completed.item_acceptance;
                         let text = completed.complete(output)?;
-                        messages.extend(self.tools.accept(event, ts, step_id, output, text)?);
+                        if streaming {
+                            messages.extend(text);
+                        } else {
+                            messages.extend(self.tools.accept(event, ts, step_id, output, text)?);
+                        }
                         if let (Some(input), Some(output_tokens)) =
                             (output.usage.input_tokens, output.usage.output_tokens)
                         {

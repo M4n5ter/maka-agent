@@ -60,6 +60,7 @@ fn assert_same_base(actual: &ModelContextSource, expected: &ModelContextSource) 
             .map(|event| match event {
                 ContextEvent::Canonical(event) => serde_json::to_value(event).unwrap(),
                 ContextEvent::Archived(_) => panic!("fixture has no archived tools"),
+                ContextEvent::ModelItems(items) => serde_json::to_value(items).unwrap(),
             })
             .collect::<Vec<_>>()
     };

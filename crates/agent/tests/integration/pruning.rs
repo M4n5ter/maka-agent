@@ -253,14 +253,13 @@ async fn settled_results_are_pruned_before_context_limits_and_survive_failed_sum
         }
         for stored in prefix.events {
             if let Fact::ModelRequested {
-                purpose,
                 effective_source_digest,
                 ..
             } = stored.event.fact
             {
-                assert_eq!(
+                assert!(
                     effective_source_digest.is_some(),
-                    purpose == maka_runtime::context::ModelPurpose::Summary
+                    "every request must retain its effective source for bundle validation"
                 );
             }
         }

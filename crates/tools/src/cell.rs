@@ -29,6 +29,7 @@ use maka_runtime::tool_call::{ToolCallIdentity, ToolOrigin, ToolRejection};
 use maka_runtime::tools::{ToolExecutor, ToolFuture, ToolJournal};
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{ToolCallContext, ToolCatalog, ToolDefinition};
@@ -208,6 +209,7 @@ impl CellTool {
 /// Nested preflight precedes T1. The cell supplies only arguments, never its
 /// parent identity or a broader catalog. Direct-only entries were removed once.
 struct NestedTools {
+    execution: Arc<tokio::sync::RwLock<()>>,
     catalog: ToolCatalog,
     journal: ToolJournal,
     origin: ToolOrigin,
@@ -220,6 +222,8 @@ impl ToolExecutor for NestedTools {
 
     fn invoke(&self, name: String, input: Value, cancellation: CancellationToken) -> ToolFuture {
         let catalog = self.catalog.clone();
+        let execution = self.execution.clone();
+        let parallel = catalog.semantics(&name) == Ok(crate::ToolSemantics::Parallel);
         let journal = self.journal.clone();
         let call = ToolCallIdentity {
             tool_call_id: Uuid::new_v4().to_string(),
@@ -227,6 +231,13 @@ impl ToolExecutor for NestedTools {
         };
         let operation_id = Uuid::new_v4().to_string();
         Box::pin(async move {
+            // Nested calls share a gate across live cells, separate from the
+            // outer exec/wait envelopes to avoid recursive lock acquisition.
+            let _execution = if parallel {
+                futures_util::future::Either::Left(execution.read_owned().await)
+            } else {
+                futures_util::future::Either::Right(execution.write_owned().await)
+            };
             let context = ToolCallContext {
                 invocation: journal.invocation().clone(),
                 operation_id: operation_id.clone(),

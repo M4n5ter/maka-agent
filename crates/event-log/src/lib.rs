@@ -39,6 +39,7 @@ pub mod message_interrupts;
 pub mod message_queue;
 pub mod message_resolution;
 pub mod message_sources;
+mod model_items;
 pub mod observation;
 pub mod plugins;
 mod prefix;

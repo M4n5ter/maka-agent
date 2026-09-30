@@ -134,8 +134,13 @@ pub(super) async fn admit_summary(
            (SELECT COUNT(*) FROM summaries WHERE sequence >= ?2),
            NOT EXISTS(SELECT 1 FROM summaries) OR EXISTS(
              SELECT 1 FROM runtime_events c JOIN runtime_events r
-               ON r.invocation_id=c.invocation_id AND r.operation_id=c.operation_id AND r.kind='model_requested'
-             WHERE c.invocation_id=?1 AND c.kind='model_completed'
+               ON r.invocation_id=c.invocation_id AND r.kind='model_requested'
+                 AND r.operation_id=CASE WHEN c.kind='model_observed'
+                   THEN json_extract(c.event_json,'$.fact.step_id') ELSE c.operation_id END
+             WHERE c.invocation_id=?1 AND (c.kind='model_completed' OR
+               (c.kind='model_observed' AND json_extract(r.event_json,'$.fact.item_acceptance')=1
+                 AND json_extract(c.event_json,'$.fact.event.kind') IN
+                   ('part_finished','tool_call','provider_tool_result','source')))
                AND json_extract(r.event_json, '$.fact.purpose')='main'
                AND c.sequence <= ?3 AND c.sequence > (
                  SELECT MAX(json_extract(event_json,'$.fact.source_high_water')) FROM summaries))",

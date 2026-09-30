@@ -28,6 +28,8 @@ pub struct ProviderFailure {
     reason: ProviderFailureReason,
     message: String,
     replay_safe: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    retained_output_safe: bool,
     retry_after_ms: Option<u64>,
 }
 
@@ -59,6 +61,7 @@ impl ProviderFailure {
             reason,
             message,
             replay_safe,
+            retained_output_safe: false,
             retry_after_ms: retry_after_ms.filter(|value| (1..=2_147_483_647).contains(value)),
         }
     }
@@ -72,6 +75,17 @@ impl ProviderFailure {
 
     pub fn replay_safe(&self) -> bool {
         self.replay_safe
+    }
+
+    /// The adapter permits continuing from durably retained complete items.
+    /// This does not authorize discarding their output or repeating effects.
+    pub fn with_retained_output(mut self, safe: bool) -> Self {
+        self.retained_output_safe = safe;
+        self
+    }
+
+    pub fn retained_output_safe(&self) -> bool {
+        self.retained_output_safe
     }
 
     pub fn retry_after(&self) -> Option<Duration> {

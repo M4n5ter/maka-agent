@@ -18,6 +18,7 @@
  */
 
 use serde::{Deserialize, Serialize};
+pub mod assembly;
 pub mod budget;
 pub mod error;
 pub mod prompt;

@@ -46,6 +46,7 @@ fn observed(step: &str, observation: ModelEvent) -> Fact {
 
 fn request(step: &str) -> Fact {
     Fact::ModelRequested {
+        item_acceptance: false,
         purpose: maka_runtime::context::ModelPurpose::Main,
         context: None,
         checkpoint_event_id: None,

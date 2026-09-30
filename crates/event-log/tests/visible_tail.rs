@@ -128,6 +128,7 @@ async fn visible_ids_match_presentation_for_accepted_and_partial_parts_across_ca
             &mut view,
             &mut ids,
             Fact::ModelRequested {
+                item_acceptance: false,
                 purpose: maka_runtime::context::ModelPurpose::Main,
                 context: None,
                 checkpoint_event_id: None,

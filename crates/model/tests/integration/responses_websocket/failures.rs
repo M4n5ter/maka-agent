@@ -361,6 +361,7 @@ async fn interrupted_reads_preserve_diagnostics_and_decoder_replay_safety() {
                 let ModelError::Provider(failure) = failure else { panic!("{failure}"); };
                 assert_eq!(failure.reason(), ProviderFailureReason::StreamTruncated);
                 assert_eq!(failure.replay_safe(), matches!(mode, "empty" | "text" | "size" | "reset"));
+                assert_eq!(failure.retained_output_safe(), mode != "provider_effect");
                 if mode != "reset" {
                     assert!(failure.to_string().contains(if mode == "size" {"1009"} else {"1012"}) && failure.to_string().contains("provider restarting"), "{failure}");
                 }

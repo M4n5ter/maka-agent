@@ -53,6 +53,12 @@ pub async fn opening(log: &EventLog) -> RuntimeEvent {
 }
 
 pub async fn request(log: &EventLog) {
+    request_mode(log, false).await;
+}
+pub async fn item_request(log: &EventLog) {
+    request_mode(log, true).await;
+}
+async fn request_mode(log: &EventLog, item_acceptance: bool) {
     let prefix = log
         .scoped_prefix(
             LogScope::Session {
@@ -66,6 +72,7 @@ pub async fn request(log: &EventLog) {
     append(
         log,
         Fact::ModelRequested {
+            item_acceptance,
             effective_source_digest: None,
             purpose: maka_runtime::context::ModelPurpose::Main,
             context: None,

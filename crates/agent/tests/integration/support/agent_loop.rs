@@ -56,15 +56,27 @@ impl ToolExecutor for Effect {
                 &event.event.fact,
                 Fact::ModelRequested { model_id, .. } if model_id == "test"
             )));
-            assert!(matches!(
-                prefix.events.last().unwrap().event.fact,
-                Fact::ToolDispatched { .. }
-            ));
+            let dispatched = prefix.events.iter().find(|event| matches!(&event.event.fact,
+                Fact::ToolDispatched { name, input: arguments, .. } if name == "echo" && arguments == &input)).unwrap();
+            let nested = matches!(&dispatched.event.fact, Fact::ToolDispatched { call, .. }
+                if matches!(call.origin, maka_runtime::tool_call::ToolOrigin::CodeMode { .. }));
             assert!(
-                prefix
-                    .events
-                    .iter()
-                    .any(|event| matches!(event.event.fact, Fact::ModelCompleted { .. }))
+                nested
+                    || prefix
+                        .events
+                        .iter()
+                        .any(|event| event.sequence < dispatched.sequence
+                            && match &event.event.fact {
+                                Fact::ModelObserved {
+                                    event: maka_runtime::model::ModelEvent::ToolCall(call),
+                                    ..
+                                } => call.name == "echo" && call.input == input,
+                                Fact::ModelCompleted { output, .. } => output
+                                    .tool_calls()
+                                    .any(|call| call.name == "echo" && call.input == input),
+                                _ => false,
+                            }),
+                "complete call must commit before its effect"
             );
             count.fetch_add(1, Ordering::SeqCst);
             Ok(input)

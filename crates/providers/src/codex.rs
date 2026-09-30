@@ -60,6 +60,10 @@ impl Plugin for Codex {
     }
 }
 impl ProviderAdapter for Codex {
+    fn supports_item_acceptance(&self) -> bool {
+        self.0.supports_item_acceptance()
+    }
+
     fn open(
         &self,
         lifetime: Lifetime,

@@ -53,7 +53,7 @@ async fn reopened_images_do_not_starve_current_images_and_each_artifact_read_is_
         let message = serde_json::from_value(json!({"text":"historical", "attachments":[historical]})).unwrap();
         let facts = [
             Fact::InvocationOpened { input: InvocationInput::Message { source_messages: Vec::new(), content: message, request_fingerprint: None }, configuration: None },
-            Fact::ModelRequested { effective_source_digest: None, purpose: maka_runtime::context::ModelPurpose::Main, context: None, checkpoint_event_id: None, step_id: "prior-step".into(), model_id: "test".into(),
+            Fact::ModelRequested { item_acceptance: false, effective_source_digest: None, purpose: maka_runtime::context::ModelPurpose::Main, context: None, checkpoint_event_id: None, step_id: "prior-step".into(), model_id: "test".into(),
                 source_scope: maka_runtime::event::LogScope::Session { id: "session".into() },
                 source_high_water: 1, source_digest: "fixture".into(), input_digest: "fixture".into(), route_identity: "fixture".into() },
             Fact::ModelCompleted { step_id: "prior-step".into(), output: serde_json::from_value(json!({

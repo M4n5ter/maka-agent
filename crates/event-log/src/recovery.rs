@@ -26,7 +26,7 @@ use crate::{EventLog, StoreError};
 
 macro_rules! unresolved {
     ($tail:literal) => { concat!(
-        "WITH unresolved(kind, id, name, input, call) AS (
+        "WITH ", crate::model_items::accepted_calls!(), ", unresolved(kind, id, name, input, call) AS (
                     SELECT 0, request.operation_id, '', 'null', 'null'
                     FROM runtime_events AS request
                     WHERE request.invocation_id = ?1 AND request.kind = 'model_requested'
@@ -42,17 +42,15 @@ macro_rules! unresolved {
                         WHERE result.invocation_id = dispatch.invocation_id
                         AND result.operation_id = dispatch.operation_id AND result.kind = 'tool_settled')
                     UNION ALL
-                    SELECT 2, completed.operation_id || ':' || json_extract(part.value, '$.call.id'),
-                        json_extract(part.value, '$.call.name'), part.value -> '$.call.input',
-                        json_object('tool_call_id', json_extract(part.value, '$.call.id'),
-                            'origin', json_object('kind', 'provider', 'step_id', completed.operation_id))
-                    FROM runtime_events AS completed, json_each(completed.event_json, '$.fact.output.parts') AS part
-                    WHERE completed.invocation_id = ?1 AND completed.kind = 'model_completed'
-                    AND json_extract(part.value, '$.kind') = 'tool_call'
-                    AND json_extract(part.value, '$.call.provider_executed') = 0
-                    AND NOT EXISTS(SELECT 1 FROM runtime_events AS dispatch
-                        WHERE dispatch.invocation_id = completed.invocation_id AND dispatch.kind IN ('tool_dispatched', 'tool_rejected')
-                        AND dispatch.operation_id = completed.operation_id || ':' || json_extract(part.value, '$.call.id'))
+                    SELECT 2, accepted.step_id || ':' || json_extract(accepted.call, '$.id'),
+                        json_extract(accepted.call, '$.name'), accepted.call -> '$.input',
+                        json_object('tool_call_id', json_extract(accepted.call, '$.id'),
+                            'origin', json_object('kind', 'provider', 'step_id', accepted.step_id))
+                    FROM accepted_calls accepted
+                    WHERE accepted.invocation_id = ?1 AND json_extract(accepted.call, '$.provider_executed') = 0
+                    AND NOT EXISTS(SELECT 1 FROM runtime_events dispatch
+                        WHERE dispatch.invocation_id = accepted.invocation_id AND dispatch.kind IN ('tool_dispatched', 'tool_rejected')
+                        AND dispatch.operation_id = accepted.step_id || ':' || json_extract(accepted.call, '$.id'))
                     UNION ALL
                     SELECT 3, started.event_id, '', 'null', 'null'
                     FROM runtime_events started

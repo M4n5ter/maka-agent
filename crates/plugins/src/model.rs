@@ -103,6 +103,12 @@ pub enum Lifetime {
     Conversation,
 }
 pub trait ProviderAdapter: Send + Sync {
+    /// Complete stream items have provider-confirmed boundaries, rather than
+    /// being synthesized by an SDK when an incomplete stream is closed.
+    fn supports_item_acceptance(&self) -> bool {
+        false
+    }
+
     fn open(
         &self,
         lifetime: Lifetime,
@@ -116,6 +122,10 @@ pub struct Adapter {
 #[derive(Clone)]
 pub struct Binding(Contribution<Adapter>);
 impl Binding {
+    pub fn supports_item_acceptance(&self) -> bool {
+        self.0.value.provider.supports_item_acceptance()
+    }
+
     pub fn new(contribution: Contribution<Adapter>) -> Self {
         Self(contribution)
     }

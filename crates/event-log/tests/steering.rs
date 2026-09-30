@@ -59,6 +59,7 @@ async fn steering_is_exact_once_session_scoped_and_atomic_with_rebuildable_user_
     log.append(&write(
         "a",
         Fact::ModelRequested {
+            item_acceptance: false,
             step_id: "step".into(),
             model_id: "test".into(),
             source_scope: source.scope,

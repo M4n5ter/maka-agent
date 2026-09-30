@@ -266,6 +266,7 @@ async fn provider_dispatch_requires_the_exact_accepted_local_call() {
     let request = event(
         "one",
         Fact::ModelRequested {
+            item_acceptance: false,
             purpose: maka_runtime::context::ModelPurpose::Main,
             context: None,
             checkpoint_event_id: None,

@@ -261,17 +261,25 @@ async fn run_cell(
         isolate.terminate_execution();
     });
 
-    let result = match budget
-        .run(evaluate(
-            &mut runtime,
-            &source,
-            &names,
-            limits.max_value_bytes,
-            context.metadata(),
-            module,
-        ))
-        .await
-    {
+    // V8 termination interrupts CPU work; the token also wakes idle JS timers.
+    let evaluation = tokio::select! {
+           biased;
+           _ = cancellation.cancelled() => {
+               stopped.lock().unwrap().get_or_insert(StopReason::Cancelled);
+               Ok(Err(CellDiagnostic::new(CellDiagnosticKind::ExecutionError, "cell cancelled")))
+           }
+           result = budget
+           .run(evaluate(
+               &mut runtime,
+               &source,
+               &names,
+               limits.max_value_bytes,
+               context.metadata(),
+               module,
+           ))
+    => result,
+       };
+    let result = match evaluation {
         Ok(result) => result,
         Err(()) => {
             stopped

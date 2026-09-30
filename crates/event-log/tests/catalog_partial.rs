@@ -119,6 +119,7 @@ async fn interrupted_and_terminal_fallback_catalog_match_committed_presentation_
             &log,
             &mut view,
             Fact::ModelRequested {
+                item_acceptance: false,
                 purpose: maka_runtime::context::ModelPurpose::Main,
                 context: None,
                 checkpoint_event_id: None,

@@ -81,19 +81,17 @@ pub(super) async fn capture(
     if !source
         .tail
         .iter()
-        .filter_map(|event| match event {
-            maka_event_log::context::ContextEvent::Canonical(stored) => Some(stored.as_ref()),
-            _ => None,
-        })
-        .any(|stored| {
-            matches!(
+        .any(|event| match event {
+            maka_event_log::context::ContextEvent::ModelItems(step) => !step.items.is_empty(),
+            maka_event_log::context::ContextEvent::Canonical(stored) => matches!(
                 &stored.event.fact,
                 Fact::InvocationOpened {
                     input: maka_runtime::input::InvocationInput::Message { .. },
                     ..
                 } | Fact::MessageSteered { .. }
                     | Fact::ModelCompleted { .. }
-            ) || matches!(&stored.event.fact, Fact::MessageImported { record, .. } if record.is_conversation())
+            ) || matches!(&stored.event.fact, Fact::MessageImported { record, .. } if record.is_conversation()),
+            maka_event_log::context::ContextEvent::Archived(_) => false,
         })
     {
         return Ok(None);
@@ -131,7 +129,7 @@ impl Job {
     ) -> Result<Candidate, RunError> {
         let Self {
             input,
-            source,
+            mut source,
             mode,
             prompt,
             adapter,
@@ -145,10 +143,10 @@ impl Job {
         loop {
             let mut request = prompt.clone();
             request.push(maka_model::prompt::Message::user(format!("{instruction}\n\nNow write the structured summary of the conversation above. Output only the summary.")));
-            let (step_id, output) = model_attempt::execute(
+            let model_attempt::Outcome::Response(step_id, output) = model_attempt::execute(
                 inner,
                 &input,
-                &source,
+                &mut source,
                 request,
                 Vec::new(),
                 model_attempt::Attempt::Summary {
@@ -157,7 +155,12 @@ impl Job {
                 },
                 cancellation,
             )
-            .await?;
+            .await?
+            else {
+                return Err(RunError::Internal(
+                    "summary cannot dispatch a finishing tool".into(),
+                ));
+            };
             if output.finish_reason == ModelFinishReason::Length {
                 if shortened || repair.is_some() {
                     return Ok(failed("output_length"));

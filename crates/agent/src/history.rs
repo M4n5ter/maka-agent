@@ -36,12 +36,13 @@ mod user;
 pub(super) enum EventRef<'a> {
     Canonical(&'a maka_runtime::event::StoredEvent),
     Archived(&'a maka_event_log::context::ArchivedToolResult),
+    ModelItems(&'a maka_event_log::context::AcceptedModelStep),
 }
 impl<'a> EventRef<'a> {
     fn canonical(self) -> Option<&'a maka_runtime::event::StoredEvent> {
         match self {
             Self::Canonical(event) => Some(event),
-            Self::Archived(_) => None,
+            Self::Archived(_) | Self::ModelItems(_) => None,
         }
     }
 }
@@ -50,6 +51,7 @@ impl<'a> From<&'a maka_event_log::context::ContextEvent> for EventRef<'a> {
         match event {
             maka_event_log::context::ContextEvent::Canonical(event) => Self::Canonical(event),
             maka_event_log::context::ContextEvent::Archived(event) => Self::Archived(event),
+            maka_event_log::context::ContextEvent::ModelItems(event) => Self::ModelItems(event),
         }
     }
 }
@@ -133,6 +135,7 @@ mod tests {
                 },
             },
             Fact::ModelRequested {
+                item_acceptance: false,
                 effective_source_digest: None,
                 purpose: maka_runtime::context::ModelPurpose::Main,
                 context: None,

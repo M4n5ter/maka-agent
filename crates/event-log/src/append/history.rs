@@ -33,6 +33,7 @@ pub(crate) async fn validate(
 ) -> Result<(), StoreError> {
     identity(connection, event).await?;
     crate::executor::validate(connection, event).await?;
+    crate::model_items::validate(connection, event).await?;
     crate::tool_calls::validate(connection, event).await?;
     crate::continuation::validate(connection, event).await?;
     crate::handoff::validate_history(connection, event).await?;

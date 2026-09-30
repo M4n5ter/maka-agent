@@ -34,13 +34,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Responses stream ended without completion")]
-    Truncated { replay_safe: bool },
+    Truncated {
+        replay_safe: bool,
+        retained_output_safe: bool,
+    },
     #[error("Responses provider failed: {message}")]
     Provider {
         code: Option<String>,
         message: String,
         observed_output: bool,
         replay_safe: bool,
+        retained_output_safe: bool,
     },
     #[error("{0}")]
     Invalid(String),

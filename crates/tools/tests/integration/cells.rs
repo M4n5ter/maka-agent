@@ -62,6 +62,7 @@ async fn invoke(
         EventWrite::plain(RuntimeEvent::new(
             invocation.clone(),
             Fact::ModelRequested {
+                item_acceptance: false,
                 step_id: step.into(),
                 model_id: "fixture".into(),
                 source_scope: maka_runtime::event::LogScope::Root,

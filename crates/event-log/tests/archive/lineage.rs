@@ -41,6 +41,7 @@ fn selected_ids(source: &ModelContextSource) -> Vec<String> {
         .map(|e| match e {
             ContextEvent::Canonical(e) => e.event.id.clone(),
             ContextEvent::Archived(e) => e.event_id.clone(),
+            ContextEvent::ModelItems(e) => e.event_id.clone(),
         })
         .collect()
 }
@@ -163,6 +164,7 @@ async fn inherited_prune_and_checkpoint_exclude_later_branch_archives_history_an
     assert!(active.tail.iter().all(|e| match e {
         ContextEvent::Canonical(e) => e.event.invocation.run_id != "unrelated",
         ContextEvent::Archived(e) => e.invocation.run_id != "unrelated",
+        ContextEvent::ModelItems(e) => e.invocation.run_id != "unrelated",
     }));
     assert!(
         matches!(

@@ -493,6 +493,7 @@ async fn archive_atomic_retry_reopen_scope_and_source_integrity() {
     assert!(after_archive.context.tail.iter().all(|entry| match entry {
         ContextEvent::Canonical(entry) => entry.event.invocation.invocation_id == "old",
         ContextEvent::Archived(entry) => entry.invocation.invocation_id == "old",
+        ContextEvent::ModelItems(entry) => entry.invocation.invocation_id == "old",
     }));
     log.close().await.unwrap();
     let log = EventLog::open(&path).await.unwrap();

@@ -19,7 +19,7 @@
 
 use crate::{Inner, RunError, RunInput, auto_context, model_attempt, prune};
 use futures_util::FutureExt;
-use maka_runtime::{context::ModelPurpose, tools::ToolError};
+use maka_runtime::context::ModelPurpose;
 use maka_tools::RunTools;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -62,7 +62,7 @@ pub(super) async fn run(
         let mut compaction = CompactionBudget::Available;
         // This tracks work after this physical opening, not after the logical root.
         // A successor may compact the sealed prefix with a PreTurn boundary.
-        let mut completed_step = false;
+        let mut main_progress = false;
         if let crate::RunWork::Handoff { pause, .. } = &input.work {
             tools.restore(&pause.execution.tools)?;
             compaction = pause.execution.compaction;
@@ -191,7 +191,7 @@ pub(super) async fn run(
                     inner,
                     input,
                     &source,
-                    completed_step,
+                    main_progress,
                     cancellation,
                     continuation_base,
                 )
@@ -250,22 +250,41 @@ pub(super) async fn run(
                 prior_unknown,
             )
             .await?;
+            let initial_high_water = source.source_evidence.high_water;
             let result = model_attempt::execute(
                 inner,
                 input,
-                &source,
+                &mut source,
                 surface.apply(prompt),
                 request_tools.definitions(),
                 model_attempt::Attempt::Main {
                     lane: lane.clone(),
                     continuation_base,
                     surface: surface.clone(),
+                    tools: &request_tools,
+                    prior_unknown,
                 },
                 cancellation,
             )
             .await;
-            let (step_id, output) = match result {
-                Ok(output) => output,
+            // Recovery advances this source only after retaining complete Main
+            // items. They renew compaction just like a completed response, even
+            // if the resumed request itself immediately exceeds context.
+            if source.source_evidence.high_water > initial_high_water {
+                main_progress = true;
+                compaction = CompactionBudget::Available;
+            }
+            let output = match result {
+                Ok(model_attempt::Outcome::Response(_, output)) => output,
+                Ok(model_attempt::Outcome::FinishedByTool) => {
+                    crate::interactions::wait_until_clear(
+                        &inner.log,
+                        &input.invocation,
+                        cancellation,
+                    )
+                    .await?;
+                    return Ok(maka_runtime::event::InvocationOutcome::Completed);
+                }
                 Err(
                     error @ RunError::Model(maka_model::ModelError::ContextOverflow {
                         observed_output: false,
@@ -281,7 +300,7 @@ pub(super) async fn run(
                             inner,
                             input,
                             &source,
-                            completed_step,
+                            main_progress,
                             cancellation,
                             continuation_base,
                         )
@@ -311,26 +330,10 @@ pub(super) async fn run(
                     .finish_output(source.source_evidence.high_water)
                     .await?
                 {
-                    completed_step = true;
+                    main_progress = true;
                     continue;
                 }
                 return Ok(maka_runtime::event::InvocationOutcome::Completed);
-            }
-            let mut step_tools = request_tools.into_step(&step_id);
-            for call in &local_calls {
-                let result = std::panic::AssertUnwindSafe(async {
-                    step_tools.invoke(call, cancellation.clone()).await
-                })
-                .catch_unwind()
-                .await
-                .unwrap_or_else(|_| Err(ToolError::CleanupUnconfirmed("tool panicked".into())));
-                match result {
-                    Ok(_)
-                    | Err(
-                        ToolError::Failed(_) | ToolError::Io { .. } | ToolError::OutcomeUnknown(_),
-                    ) => {}
-                    Err(error) => return Err(error.into()),
-                }
             }
             // An exec/wait observation can settle while its cell is still
             // asking the user. Pause before advancing or consuming the final
@@ -344,7 +347,7 @@ pub(super) async fn run(
             if tools.code_idle() && pending.is_none() && !prior_unknown {
                 prune::run(inner, input, cancellation).await?;
             }
-            if step_tools.finished() {
+            if request_tools.finished() {
                 return Ok(maka_runtime::event::InvocationOutcome::Completed);
             }
             if step + 1 < max_steps && !cancellation.is_cancelled() && lane.needs_confirmation() {
@@ -384,7 +387,7 @@ pub(super) async fn run(
                 lane.confirm(&surface.apply(replay), &ids, output.response_id.as_deref())
                     .await?;
             }
-            completed_step = true;
+            main_progress = true;
         }
         if cancellation.is_cancelled() {
             Err(RunError::Cancelled)

@@ -49,6 +49,7 @@ pub async fn record_model_call(
             },
         },
         Fact::ModelRequested {
+            item_acceptance: false,
             effective_source_digest: None,
             step_id: "step".into(),
             model_id: "fixture".into(),

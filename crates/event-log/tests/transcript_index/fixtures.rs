@@ -43,6 +43,7 @@ pub(super) fn opening() -> Fact {
 }
 pub(super) fn request(session: &str) -> Fact {
     Fact::ModelRequested {
+        item_acceptance: false,
         purpose: maka_runtime::context::ModelPurpose::Main,
         context: None,
         checkpoint_event_id: None,

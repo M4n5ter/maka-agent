@@ -56,6 +56,7 @@ async fn accepted(log: &EventLog, step: &str) {
     log.append_batch(
         &([
             event(Fact::ModelRequested {
+                item_acceptance: false,
                 purpose: maka_runtime::context::ModelPurpose::Main,
                 context: None,
                 checkpoint_event_id: None,

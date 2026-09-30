@@ -18,8 +18,8 @@
  */
 
 use super::StepBuilder;
-use crate::{ModelError, events::invalid};
-use maka_runtime::model::ModelToolCall;
+use super::{ModelError, invalid};
+use crate::model::ModelToolCall;
 
 // runtime-store/tool_calls bounds raw and canonical `step:call` identities.
 const TOOL_IDENTITY_MAX_BYTES: usize = 4096;
@@ -57,7 +57,7 @@ impl StepBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maka_runtime::model::{ModelEvent, ModelFinishReason, ModelPart, ModelUsage};
+    use crate::model::{ModelEvent, ModelFinishReason, ModelPart, ModelUsage};
     use serde_json::json;
 
     fn call(id: String, name: String, provider_executed: bool) -> ModelEvent {

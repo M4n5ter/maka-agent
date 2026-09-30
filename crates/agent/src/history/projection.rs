@@ -23,9 +23,12 @@ use maka_model::prompt::{AssistantPart, Message, ToolOutput};
 use maka_runtime::context::{ModelPurpose, resolve_model_purpose};
 use maka_runtime::event::{Fact, ToolOutcome};
 use maka_runtime::input::InvocationInput;
-use maka_runtime::model::{ModelPart, TextKind};
+use maka_runtime::model::{ModelPart, TextKind, assembly::StepBuilder};
 use maka_runtime::tool_call::ToolOrigin;
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 pub(super) fn build<'a>(
     events: impl Iterator<Item = EventRef<'a>> + Clone,
@@ -82,11 +85,37 @@ pub(super) fn build<'a>(
         })
         .collect();
     let mut requests = HashMap::new();
-    for stored in events.clone().filter_map(EventRef::canonical) {
+    for event in events.clone() {
+        let stored = match event {
+            EventRef::Canonical(stored) => stored,
+            EventRef::ModelItems(items) => {
+                let request: &mut RequestSpan<'_> = requests
+                    .get_mut(&(&items.invocation.invocation_id, &items.step_id))
+                    .ok_or_else(|| {
+                        RunError::ReconciliationRequired("accepted items lack request".into())
+                    })?;
+                if !request.item_acceptance {
+                    return Err(RunError::ReconciliationRequired(
+                        "item projection on a legacy request".into(),
+                    ));
+                }
+                request.builder = None;
+                request.end = items.sequence;
+                request.accepted.extend(
+                    items
+                        .items
+                        .iter()
+                        .map(|item| (item.sequence, item.index, Cow::Borrowed(&item.part))),
+                );
+                continue;
+            }
+            EventRef::Archived(_) => continue,
+        };
         if let Fact::ModelRequested {
             step_id,
             purpose,
             source_high_water,
+            item_acceptance,
             ..
         } = &stored.event.fact
         {
@@ -103,15 +132,44 @@ pub(super) fn build<'a>(
                     purpose: resolved,
                     source: *source_high_water,
                     end: u64::MAX,
+                    item_acceptance: *item_acceptance,
+                    builder: if *item_acceptance {
+                        Some(StepBuilder::for_step(step_id)?)
+                    } else {
+                        None
+                    },
+                    accepted: Vec::new(),
                 },
             );
         }
         match &stored.event.fact {
+            Fact::ModelObserved { step_id, event } => {
+                if let Some(request) =
+                    requests.get_mut(&(&stored.event.invocation.invocation_id, step_id))
+                    && let Some(builder) = request.builder.as_mut()
+                {
+                    builder.push(event.clone())?;
+                    if let Some((index, part)) = builder.accepted_item() {
+                        request
+                            .accepted
+                            .push((stored.sequence, index, Cow::Owned(part.clone())));
+                    }
+                }
+            }
             Fact::ModelCompleted { step_id, .. } | Fact::ModelInterrupted { step_id, .. } => {
                 if let Some(request) =
                     requests.get_mut(&(&stored.event.invocation.invocation_id, step_id))
                 {
                     request.end = stored.sequence;
+                    if let Some(builder) = request.builder.take()
+                        && let Fact::ModelCompleted { output, .. } = &stored.event.fact
+                        && builder.finish()? != *output
+                    {
+                        return Err(RunError::ReconciliationRequired(
+                            "model completion differs from accepted observations".into(),
+                        ));
+                    }
+                    request.accepted.sort_by_key(|(_, index, _)| *index);
                 }
             }
             Fact::InvocationEnded { .. } => {
@@ -143,6 +201,12 @@ pub(super) fn build<'a>(
     for event in events {
         let stored = match event {
             EventRef::Canonical(stored) => stored,
+            EventRef::ModelItems(items) => {
+                if calls.is_empty() {
+                    flush_notifications(&mut notifications, items.sequence, &mut messages);
+                }
+                continue;
+            }
             EventRef::Archived(archived) => {
                 let (id, name) = calls.remove(&archived.operation_id).ok_or_else(|| {
                     RunError::ReconciliationRequired("archived result lacks provider call".into())
@@ -268,7 +332,21 @@ pub(super) fn build<'a>(
                     provider_options: None,
                 });
             }
-            Fact::ModelCompleted { step_id, output } => {
+            Fact::ModelCompleted { step_id, .. }
+            | Fact::ModelRequested {
+                step_id,
+                item_acceptance: true,
+                ..
+            } => {
+                let request = requests.get(&(&stored.event.invocation.invocation_id, step_id));
+                if matches!(&stored.event.fact, Fact::ModelCompleted { .. })
+                    && request.is_some_and(|request| request.item_acceptance)
+                {
+                    if calls.is_empty() {
+                        flush_notifications(&mut notifications, stored.sequence, &mut messages);
+                    }
+                    continue;
+                }
                 match requests
                     .get(&(&stored.event.invocation.invocation_id, step_id))
                     .map(|request| request.purpose)
@@ -281,8 +359,22 @@ pub(super) fn build<'a>(
                         ));
                     }
                 }
+                let parts: Vec<_> = match &stored.event.fact {
+                    Fact::ModelCompleted { output, .. } => output
+                        .parts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, part)| (stored.sequence, index, part))
+                        .collect(),
+                    _ => request
+                        .unwrap()
+                        .accepted
+                        .iter()
+                        .map(|(event, index, part)| (*event, *index, part.as_ref()))
+                        .collect(),
+                };
                 let mut content = Vec::new();
-                for (index, part) in output.parts.iter().enumerate() {
+                for (accepted_at, index, part) in parts {
                     let value =
                         match part {
                             // Citations are preserved in the canonical result/UI, not
@@ -341,7 +433,15 @@ pub(super) fn build<'a>(
                         };
                     if cuts
                         .as_ref()
-                        .map(|cuts| cuts.allows(stored, step_id, index, part))
+                        .map(|cuts| {
+                            cuts.allows_at(
+                                accepted_at,
+                                &stored.event.invocation,
+                                step_id,
+                                index,
+                                part,
+                            )
+                        })
                         .transpose()?
                         .unwrap_or(true)
                     {
@@ -505,10 +605,13 @@ fn mark_custom(message: &mut Message) {
     }
 }
 
-struct RequestSpan {
+struct RequestSpan<'a> {
     purpose: ModelPurpose,
     source: u64,
     end: u64,
+    item_acceptance: bool,
+    builder: Option<StepBuilder>,
+    accepted: Vec<(u64, usize, Cow<'a, ModelPart>)>,
 }
 
 fn flush_notifications(

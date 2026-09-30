@@ -17,7 +17,11 @@
  * under the License.
  */
 
-use std::sync::Arc;
+use futures_util::future::BoxFuture;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use maka_js_runtime::CodeExecutor;
 use maka_runtime::event::{EventSink, Invocation};
@@ -159,7 +163,8 @@ impl RunTools {
         RequestTools {
             cwd: String::new(),
             context,
-            captured,
+            captured: captured.map(Arc::new),
+            finished: Arc::new(AtomicBool::new(false)),
             digest,
             direct,
             run: self,
@@ -175,10 +180,12 @@ impl RunTools {
 
 /// The advertised schemas and their handlers share one captured capability view.
 /// Search settlement affects future captures, never this request or its retries.
+#[derive(Clone)]
 pub struct RequestTools<'a> {
     cwd: String,
     context: maka_plugins::prompt::Resolved,
-    captured: Option<maka_plugins::contributions::Captured>,
+    captured: Option<Arc<maka_plugins::contributions::Captured>>,
+    finished: Arc<AtomicBool>,
     digest: String,
     direct: ToolCatalog,
     run: &'a RunTools,
@@ -187,8 +194,12 @@ pub struct RequestTools<'a> {
 }
 
 impl<'a> RequestTools<'a> {
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+
     pub fn captured(&self) -> Option<&maka_plugins::contributions::Captured> {
-        self.captured.as_ref()
+        self.captured.as_deref()
     }
     pub fn catalog_digest(&self) -> &str {
         &self.digest
@@ -208,7 +219,7 @@ impl<'a> RequestTools<'a> {
             cancellation,
         };
         let mut prompt = maka_plugins::prompt::resolve(
-            self.captured.as_ref(),
+            self.captured.as_deref(),
             base,
             request,
             self.catalog.workspace(),
@@ -272,12 +283,12 @@ impl<'a> RequestTools<'a> {
         }
     }
 
-    pub fn into_step(self, step_id: &'a str) -> StepTools<'a> {
+    pub fn into_step(self, step_id: &str) -> StepTools<'a> {
         StepTools {
+            finished: self.finished.clone(),
             request: self,
-            step_id,
+            step_id: step_id.to_owned(),
             admission: Admission::Fresh,
-            finished: false,
         }
     }
 }
@@ -285,9 +296,9 @@ impl<'a> RequestTools<'a> {
 /// Call-order admission is separate from execution scheduling. Serial execution
 /// alone does not make exclusive-step siblings legal.
 pub struct StepTools<'a> {
-    finished: bool,
+    finished: Arc<AtomicBool>,
     request: RequestTools<'a>,
-    step_id: &'a str,
+    step_id: String,
     admission: Admission,
 }
 
@@ -312,9 +323,9 @@ impl Admission {
     }
 }
 
-impl StepTools<'_> {
+impl<'a> StepTools<'a> {
     pub fn finished(&self) -> bool {
-        self.finished
+        self.finished.load(Ordering::Acquire)
     }
 
     pub async fn invoke(
@@ -322,93 +333,124 @@ impl StepTools<'_> {
         call: &ModelToolCall,
         cancellation: CancellationToken,
     ) -> Result<Value, ToolError> {
-        let run = self.request.run;
-        run.code.check()?;
+        self.dispatch(call.clone(), cancellation).await
+    }
+
+    /// Admission happens in arrival order before any concurrent future runs.
+    pub fn dispatch(
+        &mut self,
+        call: ModelToolCall,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<Value, ToolError>> {
+        let request = self.request.clone();
+        let run = request.run;
         let operation_id = format!("{}:{}", self.step_id, call.id);
-        let identity = ToolCallIdentity::provider(self.step_id.into(), call.id.clone());
+        let identity = ToolCallIdentity::provider(self.step_id.clone(), call.id.clone());
+        let finished = self.finished.clone();
         let catalog = if run.mode == ToolMode::CodeMode {
-            &self.request.direct
+            &request.direct
         } else {
-            &self.request.catalog
+            &request.catalog
         };
-        let preparation: Result<PreparedEffect, ToolRejection> = async {
-            if cancellation.is_cancelled() {
-                return Err(ToolRejection::Cancelled);
-            }
-            if call.name == "exec" && run.mode == ToolMode::CodeMode {
-                self.admission.admit(ToolSemantics::ExclusiveStep)?;
-                let executor = cell::CellTool::new(
-                    run.cells.clone(),
-                    cell::source(&call.input)?,
-                    self.request.catalog.clone(),
-                    run.journal.clone(),
-                    operation_id.clone(),
-                    call.id.clone(),
-                );
-                let code = run.code.clone();
-                let effect: PreparedEffect = PreparedEffect::new(move |cancellation| {
-                    Box::pin(async move { code.start(executor, cancellation).await })
-                });
-                Ok(effect)
-            } else if call.name == "wait" && run.mode == ToolMode::CodeMode {
-                self.admission.admit(ToolSemantics::ExclusiveStep)?;
-                let input = cell::wait_input(&call.input)?;
-                let code = run.code.clone();
-                Ok(PreparedEffect::new(move |cancellation| {
-                    Box::pin(async move { code.observe(input, cancellation).await })
-                }))
+        let semantics =
+            if run.mode == ToolMode::CodeMode && matches!(call.name.as_str(), "exec" | "wait") {
+                Ok(ToolSemantics::ExclusiveStep)
             } else if run.mode == ToolMode::Direct
                 && call.name == SEARCH
-                && self.request.availability.enabled()
+                && request.availability.enabled()
             {
-                self.admission.admit(ToolSemantics::Parallel)?;
-                self.request.availability.prepare_search(&call.input)
+                Ok(ToolSemantics::Parallel)
             } else {
-                self.admission.admit(catalog.semantics(&call.name)?)?;
-                catalog
-                    .prepare(
-                        call.name.clone(),
-                        call.input.clone(),
-                        ToolCallContext {
-                            invocation: run.journal.invocation().clone(),
-                            operation_id: operation_id.clone(),
-                        },
-                        cancellation.clone(),
-                    )
-                    .await
-            }
-        }
-        .await;
-        let effect = match preparation {
-            Ok(effect) => effect,
-            Err(reason) => {
-                return run
-                    .journal
-                    .reject(
-                        operation_id,
-                        identity,
-                        call.name.clone(),
-                        call.input.clone(),
-                        reason,
-                    )
-                    .await;
-            }
+                catalog.semantics(&call.name)
+            };
+        let admission = if cancellation.is_cancelled() {
+            Err(ToolRejection::Cancelled)
+        } else {
+            semantics.and_then(|semantics| self.admission.admit(semantics))
         };
-        let result = run
-            .journal
-            .invoke_prepared_call(
-                operation_id,
-                identity,
-                call.name.clone(),
-                call.input.clone(),
-                cancellation,
-                effect,
-            )
-            .await?;
-        if catalog.semantics(&call.name) == Ok(ToolSemantics::FinishTurn) {
-            self.finished = true;
-        }
-        self.request.availability.settled(&call.name, &result)?;
-        Ok(result)
+        Box::pin(async move {
+            run.code.check()?;
+            let catalog = if run.mode == ToolMode::CodeMode {
+                &request.direct
+            } else {
+                &request.catalog
+            };
+            let preparation: Result<PreparedEffect, ToolRejection> = async {
+                if cancellation.is_cancelled() {
+                    return Err(ToolRejection::Cancelled);
+                }
+                admission?;
+                if call.name == "exec" && run.mode == ToolMode::CodeMode {
+                    let executor = cell::CellTool::new(
+                        run.cells.clone(),
+                        cell::source(&call.input)?,
+                        request.catalog.clone(),
+                        run.journal.clone(),
+                        operation_id.clone(),
+                        call.id.clone(),
+                    );
+                    let code = run.code.clone();
+                    let effect: PreparedEffect = PreparedEffect::new(move |cancellation| {
+                        Box::pin(async move { code.start(executor, cancellation).await })
+                    });
+                    Ok(effect)
+                } else if call.name == "wait" && run.mode == ToolMode::CodeMode {
+                    let input = cell::wait_input(&call.input)?;
+                    let code = run.code.clone();
+                    Ok(PreparedEffect::new(move |cancellation| {
+                        Box::pin(async move { code.observe(input, cancellation).await })
+                    }))
+                } else if run.mode == ToolMode::Direct
+                    && call.name == SEARCH
+                    && request.availability.enabled()
+                {
+                    request.availability.prepare_search(&call.input)
+                } else {
+                    catalog
+                        .prepare(
+                            call.name.clone(),
+                            call.input.clone(),
+                            ToolCallContext {
+                                invocation: run.journal.invocation().clone(),
+                                operation_id: operation_id.clone(),
+                            },
+                            cancellation.clone(),
+                        )
+                        .await
+                }
+            }
+            .await;
+            let effect = match preparation {
+                Ok(effect) => effect,
+                Err(reason) => {
+                    return run
+                        .journal
+                        .reject(
+                            operation_id,
+                            identity,
+                            call.name.clone(),
+                            call.input.clone(),
+                            reason,
+                        )
+                        .await;
+                }
+            };
+            let result = run
+                .journal
+                .invoke_prepared_call(
+                    operation_id,
+                    identity,
+                    call.name.clone(),
+                    call.input.clone(),
+                    cancellation,
+                    effect,
+                )
+                .await?;
+            if catalog.semantics(&call.name) == Ok(ToolSemantics::FinishTurn) {
+                finished.store(true, Ordering::Release);
+            }
+            request.availability.settled(&call.name, &result)?;
+            Ok(result)
+        })
     }
 }

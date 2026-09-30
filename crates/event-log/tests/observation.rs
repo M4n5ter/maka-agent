@@ -249,6 +249,7 @@ async fn active_stream_seeds_are_fenced_bounded_and_survive_reopen() {
         log.append(
             &EventWrite::plain(
                 (event(Fact::ModelRequested {
+                    item_acceptance: false,
                     purpose: maka_runtime::context::ModelPurpose::Main,
                     context: None,
                     checkpoint_event_id: None,

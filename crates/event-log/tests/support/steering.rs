@@ -38,6 +38,7 @@ pub async fn provider_completion(log: &EventLog, session: &str, event_id: &str) 
     log.append(&write(
         session,
         Fact::ModelRequested {
+            item_acceptance: false,
             step_id: "provider-step".into(),
             model_id: "test".into(),
             source_scope: prefix.scope,

@@ -74,16 +74,28 @@ async fn additions(
     if !basis.projection_current {
         return Ok(None);
     }
-    // A background notification can precede completion without having been in
-    // that request's frozen input. Wait for fresh provider usage instead of
-    // counting it as already consumed (or inventing a second usage meter).
-    let unobserved_notification: bool = sqlx::query_scalar(
+    // Provider usage does not include locally produced results or notices that
+    // arrived after its source cut, even if they precede response completion.
+    // Retained items from a later interrupted request also invalidate this
+    // display estimate. Wait for fresh usage rather than invent another meter.
+    let unobserved_progress: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM runtime_events c JOIN runtime_events r
          ON r.invocation_id=c.invocation_id AND r.operation_id=c.operation_id AND r.kind='model_requested'
-         JOIN runtime_events n ON n.invocation_id=c.invocation_id AND n.kind='tool_notified'
-         WHERE c.sequence=? AND n.sequence>json_extract(r.event_json,'$.fact.source_high_water') AND n.sequence<c.sequence)",
-    ).bind(basis.sequence as i64).fetch_one(&mut *connection).await?;
-    if unobserved_notification {
+         JOIN runtime_events n ON n.invocation_id=c.invocation_id
+         WHERE c.sequence=?1 AND n.sequence>json_extract(r.event_json,'$.fact.source_high_water') AND n.sequence<c.sequence
+           AND (n.kind='tool_notified'
+             OR (n.kind='tool_rejected' AND json_extract(n.event_json,'$.fact.call.origin.kind')='provider')
+             OR (n.kind='tool_settled' AND EXISTS(SELECT 1 FROM runtime_events d
+                 WHERE d.invocation_id=n.invocation_id AND d.operation_id=n.operation_id AND d.kind='tool_dispatched'
+                   AND json_extract(d.event_json,'$.fact.call.origin.kind')='provider'))))
+         OR EXISTS(SELECT 1 FROM runtime_events i JOIN runtime_events r ON r.invocation_id=i.invocation_id
+           AND r.operation_id=i.operation_id AND r.kind='model_requested' AND json_extract(r.event_json,'$.fact.item_acceptance')=1
+           JOIN runtime_events o ON o.invocation_id=i.invocation_id AND o.kind='model_observed'
+             AND json_extract(o.event_json,'$.fact.step_id')=i.operation_id AND o.sequence<i.sequence
+           WHERE i.kind='model_interrupted' AND i.sequence>?1 AND json_extract(i.event_json,'$.invocation.session_id')=?2
+             AND json_extract(o.event_json,'$.fact.event.kind') IN ('source','part_finished','tool_call','provider_tool_result'))",
+    ).bind(basis.sequence as i64).bind(session).fetch_one(&mut *connection).await?;
+    if unobserved_progress {
         return Ok(None);
     }
     // A changed system/tool/plugin surface or provider route is not a text
@@ -110,8 +122,8 @@ async fn additions(
         return Ok(None);
     }
     // Only model-facing tool results, not nested Code Mode/SDK model calls.
-    // Interrupted stream fragments never become retained context. Completed
-    // Main output is already in the newest usage; Summary output is not.
+    // Legacy interrupted fragments are discarded; marked retained progress
+    // was handled above. Completed Main output is already in newest usage.
     const FILTER: &str = "
         e.sequence > ?1 AND json_extract(e.event_json,'$.invocation.session_id')=?2
         AND e.kind IN ('invocation_opened','message_steered','model_requested',
@@ -315,6 +327,7 @@ mod tests {
             Some(12 + text_units("draft now admitted"))
         );
         let request = Fact::ModelRequested {
+            item_acceptance: false,
             step_id: "next".into(),
             model_id: "other".into(),
             source_scope: maka_runtime::event::LogScope::Session { id: "s".into() },

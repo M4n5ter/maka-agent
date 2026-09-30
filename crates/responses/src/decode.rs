@@ -218,6 +218,7 @@ pub struct Decoder {
     finished: bool,
     pub observed_output: bool,
     pub replay_safe: bool,
+    pending_effects: HashSet<String>,
 }
 impl Decoder {
     pub fn new(plaintext: Option<PlaintextResponses>, tools: &[ToolDefinition]) -> Self {
@@ -234,6 +235,7 @@ impl Decoder {
             finished: false,
             observed_output: false,
             replay_safe: true,
+            pending_effects: HashSet::new(),
             search_name: tools
                 .iter()
                 .find(|tool| {
@@ -256,9 +258,14 @@ impl Decoder {
         } else {
             Err(Error::Truncated {
                 replay_safe: self.replay_safe,
+                retained_output_safe: self.retained_output_safe(),
             })
         }
     }
+    pub fn retained_output_safe(&self) -> bool {
+        !self.finished && self.pending_effects.is_empty()
+    }
+
     fn invalid(message: &str) -> Error {
         Error::Invalid(message.into())
     }
@@ -287,6 +294,7 @@ impl Decoder {
                 return Err(Self::invalid("invalid Responses tool identity"));
             }
             if identity == Identity::Search {
+                self.pending_effects.insert(id.into());
                 let name = self
                     .search_name
                     .clone()
@@ -545,6 +553,7 @@ impl Decoder {
                 // Retain its call without fabricating a settlement; the strict
                 // step assembler then keeps the outcome unknown.
                 if matches!(status.as_str(), "completed" | "failed") {
+                    self.pending_effects.remove(&id);
                     out.push(ModelEvent::ProviderToolResult {
                         id,
                         name,
@@ -568,12 +577,22 @@ impl Decoder {
             .is_some_and(|name| {
                 name.starts_with("response.")
                     && (name.contains("_call.") || name.contains("tool_call"))
+                    && !name.starts_with("response.custom_tool_call_input.")
             })
         {
             self.observed_output = true;
             // Provider-executed tools may have produced effects even if their
             // final result has not arrived. Function input deltas are local only.
             self.replay_safe = false;
+            let id = if value["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("response.web_search_call."))
+            {
+                value["item_id"].as_str().unwrap_or("")
+            } else {
+                ""
+            }; // Unknown remote effects have no replayable completion contract.
+            self.pending_effects.insert(id.into());
         }
         let event: Event = serde_json::from_value(value)
             .map_err(|e| Error::Invalid(format!("invalid Responses event: {e}")))?;
@@ -714,6 +733,7 @@ impl Decoder {
             message: error.message,
             observed_output: self.observed_output,
             replay_safe: self.replay_safe,
+            retained_output_safe: self.retained_output_safe(),
         }
     }
 }

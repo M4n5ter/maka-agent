@@ -137,14 +137,15 @@ async fn run(
                     wait(idle_timeout, exchange.next())
                         .await?
                         .map_err(|error| match error {
-                            crate::Error::Interrupted(message) => {
-                                ModelError::Provider(ProviderFailure::new(
+                            crate::Error::Interrupted(message) => ModelError::Provider(
+                                ProviderFailure::new(
                                     ProviderFailureReason::StreamTruncated,
                                     message,
                                     decoder.replay_safe,
                                     None,
-                                ))
-                            }
+                                )
+                                .with_retained_output(decoder.retained_output_safe()),
+                            ),
                             error => failure(error),
                         })?
                 {
@@ -251,12 +252,15 @@ async fn run(
     while let Some(chunk) = wait(idle_timeout, response.body.next())
         .await?
         .map_err(|error| match error {
-            http::Error::Failed(_) => ModelError::Provider(ProviderFailure::new(
-                ProviderFailureReason::Network,
-                "Responses stream read failed",
-                decoder.replay_safe,
-                None,
-            )),
+            http::Error::Failed(_) => ModelError::Provider(
+                ProviderFailure::new(
+                    ProviderFailureReason::Network,
+                    "Responses stream read failed",
+                    decoder.replay_safe,
+                    None,
+                )
+                .with_retained_output(decoder.retained_output_safe()),
+            ),
             http::Error::Denied => ModelError::Cancelled,
             other => ModelError::Adapter(other.to_string()),
         })?
@@ -322,12 +326,18 @@ fn context_overflow(code: &str) -> bool {
 fn failure(error: crate::Error) -> ModelError {
     use crate::Error;
     match error {
-        Error::Truncated { replay_safe } => ModelError::Provider(ProviderFailure::new(
-            ProviderFailureReason::StreamTruncated,
-            "model stream ended without finish",
+        Error::Truncated {
             replay_safe,
-            None,
-        )),
+            retained_output_safe,
+        } => ModelError::Provider(
+            ProviderFailure::new(
+                ProviderFailureReason::StreamTruncated,
+                "model stream ended without finish",
+                replay_safe,
+                None,
+            )
+            .with_retained_output(retained_output_safe),
+        ),
         Error::Provider {
             code,
             observed_output,
@@ -339,6 +349,7 @@ fn failure(error: crate::Error) -> ModelError {
             code,
             message,
             replay_safe,
+            retained_output_safe,
             ..
         } if matches!(
             code.as_deref(),
@@ -350,7 +361,10 @@ fn failure(error: crate::Error) -> ModelError {
             } else {
                 ProviderFailureReason::ProviderUnavailable
             };
-            ModelError::Provider(ProviderFailure::new(reason, message, replay_safe, None))
+            ModelError::Provider(
+                ProviderFailure::new(reason, message, replay_safe, None)
+                    .with_retained_output(retained_output_safe),
+            )
         }
         error => ModelError::Adapter(error.to_string()),
     }

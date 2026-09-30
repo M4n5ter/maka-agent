@@ -45,6 +45,7 @@ pub(super) async fn tool(
     let event = |fact| EventWrite::plain(RuntimeEvent::new(invocation.clone(), fact)).unwrap();
     log.append(
         &event(Fact::ModelRequested {
+            item_acceptance: false,
             step_id: step.into(),
             model_id: "test".into(),
             purpose: ModelPurpose::Main,

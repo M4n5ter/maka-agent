@@ -35,6 +35,7 @@ pub(super) fn opening() -> Fact {
 }
 pub(super) fn step(facts: &mut Vec<Fact>, id: &str, text: bool, native: bool) {
     facts.push(Fact::ModelRequested {
+        item_acceptance: false,
         effective_source_digest: None,
         purpose: maka_runtime::context::ModelPurpose::Main,
         context: None,

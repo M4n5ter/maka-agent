@@ -213,7 +213,7 @@ async fn continuation_claim_replays_only_its_lineage_and_retries_with_frozen_inp
         let route = format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&source.provider).unwrap()));
         for fact in [
             opening("question source"),
-            Fact::ModelRequested { step_id: "old".into(), model_id: "test".into(), purpose: maka_runtime::context::ModelPurpose::Main, context: None,
+            Fact::ModelRequested { item_acceptance: false, step_id: "old".into(), model_id: "test".into(), purpose: maka_runtime::context::ModelPurpose::Main, context: None,
                 source_scope: LogScope::Session { id: "session".into() }, source_high_water: 1,
                 source_digest: "fixture".into(), input_digest: "fixture".into(), route_identity: route,
                 checkpoint_event_id: None, effective_source_digest: None },

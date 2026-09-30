@@ -43,89 +43,117 @@ impl Tools {
         let mut text = text.into_iter();
         let mut rows = Vec::new();
         for (index, part) in output.parts.iter().enumerate() {
-            match part {
-                ModelPart::Source { source } => {
-                    let text = match source {
-                        maka_runtime::model::ModelSource::Url { url, title, .. } => {
-                            format!("Source: {}\n{}", title.as_deref().unwrap_or(""), url)
-                        }
-                        maka_runtime::model::ModelSource::Document {
-                            title, filename, ..
-                        } => format!("Source: {}\n{}", title, filename.as_deref().unwrap_or("")),
-                    };
-                    rows.push(message(
-                        event,
-                        ts,
-                        format!("{}:source:{index}", event.id),
-                        Content::Assistant {
-                            imported: false,
-                            text,
-                            model_id: output.model.clone().unwrap_or_default(),
-                            interrupted: false,
-                            thinking: None,
-                            provider_options: None,
-                        },
-                    ));
-                }
-                ModelPart::Text { .. } => rows.push(
+            if matches!(part, ModelPart::Text { .. }) {
+                rows.push(
                     text.next()
                         .ok_or(ProjectionError::Invalid("missing accepted text"))?,
-                ),
-                ModelPart::ToolCall { call } => {
-                    let operation = format!("{step}:{}", call.id);
-                    let identity = ToolCallIdentity::provider(step.into(), call.id.clone());
-                    let metadata = self.insert(
-                        &operation,
-                        identity,
-                        &call.name,
-                        &call.input,
-                        if call.provider_executed {
-                            CallState::ProviderExecuted
-                        } else {
-                            CallState::AwaitingDispatch
-                        },
-                        event,
-                    )?;
-                    rows.push(message(
-                        event,
-                        ts,
-                        tool_message_id(&event.invocation.invocation_id, &operation),
-                        Content::ToolCall {
-                            tool_name: call.name.clone(),
-                            args: call.input.clone(),
-                            step_id: anchor.clone(),
-                            provider_options: call.provider_options.clone(),
-                            provider_executed: Some(call.provider_executed),
-                            metadata,
-                        },
-                    ));
-                }
-                ModelPart::ToolResult {
-                    id,
-                    name,
-                    output,
-                    is_error,
-                    ..
-                } => {
-                    let operation = format!("{step}:{id}");
-                    let pending = self
-                        .pending
-                        .get(&operation)
-                        .ok_or(ProjectionError::Invalid("provider result without call"))?;
-                    if pending.name != *name || pending.state != CallState::ProviderExecuted {
-                        return Err(ProjectionError::Invalid("provider result name mismatch"));
+                );
+            } else {
+                rows.extend(self.accept_item(
+                    event,
+                    ts,
+                    step,
+                    index,
+                    part,
+                    anchor.as_deref(),
+                    output.model.as_deref().unwrap_or_default(),
+                )?);
+            }
+        }
+        Ok(rows)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_item(
+        &mut self,
+        event: &RuntimeEvent,
+        ts: u64,
+        step: &str,
+        index: usize,
+        part: &ModelPart,
+        anchor: Option<&str>,
+        model: &str,
+    ) -> Result<Vec<Message>, ProjectionError> {
+        let mut rows = Vec::new();
+        match part {
+            ModelPart::Source { source } => {
+                let text = match source {
+                    maka_runtime::model::ModelSource::Url { url, title, .. } => {
+                        format!("Source: {}\n{}", title.as_deref().unwrap_or(""), url)
                     }
-                    rows.push(self.result(
-                        event,
-                        ts,
-                        &operation,
-                        maka_runtime::tool_call::provider_result_id(&event.id, index),
-                        *is_error,
-                        ToolContent::Json {
-                            value: output.clone(),
-                        },
-                    )?);
+                    maka_runtime::model::ModelSource::Document {
+                        title, filename, ..
+                    } => format!("Source: {}\n{}", title, filename.as_deref().unwrap_or("")),
+                };
+                rows.push(message(
+                    event,
+                    ts,
+                    format!("{}:source:{index}", event.id),
+                    Content::Assistant {
+                        imported: false,
+                        text,
+                        model_id: model.to_owned(),
+                        interrupted: false,
+                        thinking: None,
+                        provider_options: None,
+                    },
+                ));
+            }
+            ModelPart::Text { .. } => {}
+            ModelPart::ToolCall { call } => {
+                let operation = format!("{step}:{}", call.id);
+                let identity = ToolCallIdentity::provider(step.into(), call.id.clone());
+                let metadata = self.insert(
+                    &operation,
+                    identity,
+                    &call.name,
+                    &call.input,
+                    if call.provider_executed {
+                        CallState::ProviderExecuted
+                    } else {
+                        CallState::AwaitingDispatch
+                    },
+                    event,
+                )?;
+                rows.push(message(
+                    event,
+                    ts,
+                    tool_message_id(&event.invocation.invocation_id, &operation),
+                    Content::ToolCall {
+                        tool_name: call.name.clone(),
+                        args: call.input.clone(),
+                        step_id: anchor.map(str::to_owned),
+                        provider_options: call.provider_options.clone(),
+                        provider_executed: Some(call.provider_executed),
+                        metadata,
+                    },
+                ));
+            }
+            ModelPart::ToolResult {
+                id,
+                name,
+                output,
+                is_error,
+                ..
+            } => {
+                let operation = format!("{step}:{id}");
+                let pending = self
+                    .pending
+                    .get(&operation)
+                    .ok_or(ProjectionError::Invalid("provider result without call"))?;
+                if pending.name != *name || pending.state != CallState::ProviderExecuted {
+                    return Err(ProjectionError::Invalid("provider result name mismatch"));
                 }
+                rows.push(self.result(
+                    event,
+                    ts,
+                    &operation,
+                    maka_runtime::tool_call::provider_result_id(&event.id, index),
+                    *is_error,
+                    ToolContent::Json {
+                        value: output.clone(),
+                    },
+                )?);
             }
         }
         Ok(rows)

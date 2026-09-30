@@ -56,6 +56,40 @@ pub(crate) async fn validate(
     // for every streamed delta. Derived tool IDs are checked here.
     let invocation = &event.invocation.invocation_id;
     match &event.fact {
+        Fact::ModelObserved {
+            step_id,
+            event:
+                observation @ (maka_runtime::model::ModelEvent::ToolCall(_)
+                | maka_runtime::model::ModelEvent::ProviderToolResult { .. }),
+        } => {
+            if let Some(mut builder) = crate::model_items::read(tx, invocation, step_id).await? {
+                builder
+                    .push(observation.clone())
+                    .map_err(|error| StoreError::InvalidTransition(error.to_string()))?;
+                match observation {
+                    maka_runtime::model::ModelEvent::ToolCall(call) => {
+                        reject_claim(
+                            tx,
+                            session,
+                            &tool_use_id(invocation, &format!("{step_id}:{}", call.id)),
+                        )
+                        .await?;
+                    }
+                    maka_runtime::model::ModelEvent::ProviderToolResult { .. } => {
+                        let (index, _) = builder
+                            .accepted_item()
+                            .expect("validated result is complete");
+                        reject_claim(
+                            tx,
+                            session,
+                            &maka_runtime::tool_call::provider_result_id(&event.id, index),
+                        )
+                        .await?;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
         Fact::ModelCompleted { step_id, output } => {
             for (index, part) in output.parts.iter().enumerate() {
                 if matches!(part, maka_runtime::model::ModelPart::ToolResult { .. }) {
@@ -128,13 +162,21 @@ pub(crate) async fn validate_source_id(
     if let Some((event_id, index)) = maka_runtime::tool_call::parse_provider_result_id(message_id) {
         let used: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM session_history_events WHERE event_id = ?1
-                 AND kind = 'model_completed'
                  AND owner_session_id = ?2
-                 AND json_extract(event_json, ?3) = 'tool_result')",
+                 AND ((kind = 'model_completed' AND json_extract(event_json, ?3) = 'tool_result')
+                   OR (kind='model_observed' AND json_extract(event_json,'$.fact.event.kind')='provider_tool_result'
+                     AND EXISTS(SELECT 1 FROM runtime_events r WHERE r.invocation_id=session_history_events.invocation_id
+                       AND r.kind='model_requested' AND r.operation_id=json_extract(session_history_events.event_json,'$.fact.step_id')
+                       AND json_extract(r.event_json,'$.fact.item_acceptance')=1)
+                     AND ?4=(SELECT COUNT(*) FROM runtime_events o WHERE o.invocation_id=session_history_events.invocation_id
+                       AND o.kind='model_observed' AND o.sequence<session_history_events.sequence
+                       AND json_extract(o.event_json,'$.fact.step_id')=json_extract(session_history_events.event_json,'$.fact.step_id')
+                       AND json_extract(o.event_json,'$.fact.event.kind') IN ('source','part_started','tool_call','provider_tool_result')))))",
         )
         .bind(event_id)
         .bind(session)
         .bind(format!("$.fact.output.parts[{index}].kind"))
+        .bind(index as i64)
         .fetch_one(&mut *tx)
         .await?;
         if used {
@@ -144,19 +186,14 @@ pub(crate) async fn validate_source_id(
     // Only this exact generated spelling can equal a tool ID. Ordinary
     // client UUIDs never scan tool facts; this is not a reserved prefix.
     if message_id.starts_with("tool_") {
-        let used: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
+        let used: bool = sqlx::query_scalar(concat!("WITH ", crate::model_items::accepted_calls!(),
+                " SELECT EXISTS(
                     SELECT 1 FROM session_history_events WHERE kind IN ('tool_dispatched', 'tool_rejected')
-                    AND owner_session_id = ?1
-                    AND maka_tool_use_id(invocation_id, operation_id) = ?2
+                    AND owner_session_id = ?1 AND maka_tool_use_id(invocation_id, operation_id) = ?2
                     UNION ALL
-                    SELECT 1 FROM session_history_events event, json_each(event_json, '$.fact.output.parts') part
-                    WHERE event.kind = 'model_completed'
-                    AND event.owner_session_id = ?1
-                    AND json_extract(part.value, '$.kind') = 'tool_call'
-                    AND maka_tool_use_id(event.invocation_id, event.operation_id || ':' ||
-                        json_extract(part.value, '$.call.id')) = ?2)"
-            ).bind(session).bind(message_id).fetch_one(&mut *tx).await?;
+                    SELECT 1 FROM accepted_calls c JOIN session_history_events e ON e.event_id=c.event_id
+                    WHERE e.owner_session_id=?1 AND maka_tool_use_id(c.invocation_id, c.step_id || ':' || json_extract(c.call,'$.id'))=?2)"
+            )).bind(session).bind(message_id).fetch_one(&mut *tx).await?;
         if used {
             return Err(conflict());
         }

@@ -46,6 +46,7 @@ pub(crate) struct Cells(Arc<State>);
 #[derive(Default)]
 struct State {
     cells: Mutex<BTreeMap<String, Arc<Cell>>>,
+    execution: Arc<tokio::sync::RwLock<()>>,
     store: CellStore,
     cancellation: CancellationToken,
     tasks: TaskTracker,
@@ -193,6 +194,7 @@ impl Cells {
             max_output_tokens,
         } = tool.input;
         let nested = Arc::new(NestedTools {
+            execution: self.0.execution.clone(),
             catalog: tool.catalog,
             journal: tool.journal.clone(),
             origin: ToolOrigin::CodeMode {

@@ -30,6 +30,10 @@ pub struct Adapter {
     transport: Arc<Shared>,
 }
 impl ProviderAdapter for Adapter {
+    fn supports_item_acceptance(&self) -> bool {
+        true
+    }
+
     fn open(
         &self,
         lifetime: Lifetime,

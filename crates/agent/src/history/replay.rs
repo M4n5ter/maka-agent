@@ -20,7 +20,7 @@
 use super::EventRef;
 use crate::RunError;
 use maka_runtime::{
-    event::{Fact, StoredEvent},
+    event::{Fact, Invocation},
     input::InvocationInput,
     model::{ModelPart, TextKind},
     tool_call::ToolOrigin,
@@ -61,45 +61,71 @@ impl<'a> Cuts<'a> {
             stable: HashMap::new(),
             routes: HashMap::new(),
         };
+        let mut marked = HashSet::new();
         for event in events {
             let (sequence, invocation) = match event {
                 EventRef::Canonical(stored) => (stored.sequence, &stored.event.invocation),
                 EventRef::Archived(archived) => (archived.sequence, &archived.invocation),
+                EventRef::ModelItems(items) => (items.sequence, &items.invocation),
             };
             let inherited = sequence > policy.base && invocation.invocation_id != policy.current;
             if inherited {
                 result.stable.entry(&invocation.invocation_id).or_default();
             }
             let cut = match event {
-                EventRef::Archived(_) => Some(usize::MAX),
+                EventRef::Archived(_) => Some((sequence, usize::MAX)),
+                EventRef::ModelItems(items) => items
+                    .items
+                    .iter()
+                    .filter(|item| matches!(item.part, ModelPart::ToolResult { .. }))
+                    .map(|item| (item.sequence, usize::MAX))
+                    .max(),
                 EventRef::Canonical(stored) => match &stored.event.fact {
                     Fact::InvocationOpened {
                         input: InvocationInput::Message { .. },
                         ..
                     }
                     | Fact::MessageSteered { .. }
-                    | Fact::ToolNotified { .. } => Some(usize::MAX),
+                    | Fact::ToolNotified { .. } => Some((sequence, usize::MAX)),
                     Fact::ToolRejected { call, .. }
                         if matches!(call.origin, ToolOrigin::Provider { .. }) =>
                     {
-                        Some(usize::MAX)
+                        Some((sequence, usize::MAX))
                     }
                     Fact::ToolSettled { operation_id, .. }
                         if provider_operations.contains(operation_id.as_str()) =>
                     {
-                        Some(usize::MAX)
+                        Some((sequence, usize::MAX))
+                    }
+                    Fact::ModelObserved {
+                        step_id,
+                        event: maka_runtime::model::ModelEvent::ProviderToolResult { .. },
+                    } if marked
+                        .contains(&(invocation.invocation_id.as_str(), step_id.as_str())) =>
+                    {
+                        Some((sequence, usize::MAX))
+                    }
+                    Fact::ModelCompleted { step_id, .. }
+                        if marked
+                            .contains(&(invocation.invocation_id.as_str(), step_id.as_str())) =>
+                    {
+                        None
                     }
                     Fact::ModelCompleted { output, .. } => output
                         .parts
                         .iter()
                         .rposition(|part| matches!(part, ModelPart::ToolResult { .. }))
-                        .map(|index| index + 1),
+                        .map(|index| (sequence, index + 1)),
                     Fact::ModelRequested {
                         step_id,
                         model_id,
                         route_identity,
+                        item_acceptance,
                         ..
                     } => {
+                        if *item_acceptance {
+                            marked.insert((invocation.invocation_id.as_str(), step_id.as_str()));
+                        }
                         result.routes.insert(
                             (&invocation.invocation_id, step_id),
                             (model_id, route_identity),
@@ -109,10 +135,12 @@ impl<'a> Cuts<'a> {
                     _ => None,
                 },
             };
-            if inherited && let Some(part) = cut {
+            if inherited && let Some(cut) = cut {
                 result
                     .stable
-                    .insert(&invocation.invocation_id, (sequence, part));
+                    .entry(&invocation.invocation_id)
+                    .and_modify(|prior| *prior = (*prior).max(cut))
+                    .or_insert(cut);
             }
         }
         result
@@ -120,22 +148,32 @@ impl<'a> Cuts<'a> {
 
     /// Call pairing is still validated against all facts by the history builder;
     /// this gate controls only the emitted model parts, including event-internal cuts.
+    #[cfg(test)]
     pub fn allows(
         &self,
-        stored: &StoredEvent,
+        stored: &maka_runtime::event::StoredEvent,
         step: &str,
         index: usize,
         part: &ModelPart,
     ) -> Result<bool, RunError> {
-        if stored.sequence > self.policy.base
-            && stored.event.invocation.invocation_id != self.policy.current
-        {
+        self.allows_at(stored.sequence, &stored.event.invocation, step, index, part)
+    }
+
+    pub fn allows_at(
+        &self,
+        sequence: u64,
+        invocation: &Invocation,
+        step: &str,
+        index: usize,
+        part: &ModelPart,
+    ) -> Result<bool, RunError> {
+        if sequence > self.policy.base && invocation.invocation_id != self.policy.current {
             let cut = self
                 .stable
-                .get(stored.event.invocation.invocation_id.as_str())
+                .get(invocation.invocation_id.as_str())
                 .copied()
                 .unwrap_or_default();
-            if (stored.sequence, index) >= cut {
+            if (sequence, index) >= cut {
                 return Ok(false);
             }
         }
@@ -147,7 +185,7 @@ impl<'a> Cuts<'a> {
             }
         ) && self
             .routes
-            .get(&(stored.event.invocation.invocation_id.as_str(), step))
+            .get(&(invocation.invocation_id.as_str(), step))
             .copied()
             != Some((self.policy.model, self.policy.route))
         {
@@ -162,6 +200,7 @@ impl<'a> Cuts<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maka_runtime::event::StoredEvent;
     use maka_runtime::event::{Invocation, RuntimeEvent};
     use serde_json::json;
 
@@ -176,7 +215,7 @@ mod tests {
         let events: Vec<_> = [
             Fact::InvocationOpened { configuration: None, input: InvocationInput::Message {
                 content: "question".into(), request_fingerprint: None, source_messages: Vec::new(),             }},
-            Fact::ModelRequested { step_id: "step".into(), model_id: "old".into(), route_identity: "old".into(),
+            Fact::ModelRequested { item_acceptance: false, step_id: "step".into(), model_id: "old".into(), route_identity: "old".into(),
                 purpose: maka_runtime::context::ModelPurpose::Main, context: None, source_scope: maka_runtime::event::LogScope::Root, source_high_water: 1,
                 source_digest: "fixture".into(), input_digest: "fixture".into(), checkpoint_event_id: None, effective_source_digest: None },
             Fact::ModelCompleted { step_id: "step".into(), output: serde_json::from_value(json!({

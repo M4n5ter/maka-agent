@@ -91,6 +91,25 @@ pub struct AcceptedMainContext {
 pub enum ContextEvent {
     Canonical(Box<StoredEvent>),
     Archived(Box<ArchivedToolResult>),
+    ModelItems(Box<AcceptedModelStep>),
+}
+
+/// A bounded read projection of real item acceptance facts, never a new log
+/// authority. Source digests still cover the original canonical observations.
+#[derive(Debug, serde::Serialize)]
+pub struct AcceptedModelStep {
+    pub sequence: u64,
+    pub event_id: String,
+    pub invocation: maka_runtime::event::Invocation,
+    pub step_id: String,
+    pub items: Vec<AcceptedModelItem>,
+}
+#[derive(Debug, serde::Serialize)]
+pub struct AcceptedModelItem {
+    pub sequence: u64,
+    pub event_id: String,
+    pub index: usize,
+    pub part: maka_runtime::model::ModelPart,
 }
 
 #[derive(Debug)]

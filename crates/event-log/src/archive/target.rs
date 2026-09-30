@@ -41,8 +41,8 @@ pub(super) async fn read(
     session: &str,
     id: &str,
 ) -> Result<Option<Target>, StoreError> {
-    let row = sqlx::query(
-        "SELECT t.sequence, t.event_id, t.operation_id, json_extract(t.event_json, '$.invocation') AS ti,
+    let row = sqlx::query(concat!("WITH ", crate::model_items::accepted_calls!(),
+        " SELECT t.sequence, t.event_id, t.operation_id, json_extract(t.event_json, '$.invocation') AS ti,
          json_extract(d.event_json, '$.invocation') AS di, json_extract(d.event_json, '$.fact.call') AS call,
          json_extract(d.event_json, '$.fact.name') AS name,
          json_extract(t.event_json, '$.fact.outcome.kind') AS outcome,
@@ -58,16 +58,17 @@ pub(super) async fn read(
            AND json_extract(d.event_json,'$.id')=d.event_id
            AND json_extract(d.event_json,'$.fact.operation_id')=d.operation_id
            AND json_extract(d.event_json,'$.fact.kind')='tool_dispatched'
-           AND json_extract(c.event_json,'$.invocation')=json_extract(t.event_json,'$.invocation')
-           AND json_extract(c.event_json,'$.fact.kind')='model_completed'
-           AND json_extract(c.event_json,'$.fact.step_id')=c.operation_id
+           AND c.invocation_id=t.invocation_id
+           AND json_extract(c.call,'$.name')=json_extract(d.event_json,'$.fact.name')
+           AND json_extract(c.call,'$.provider_executed')=0
            AND c.sequence<d.sequence AND d.sequence<t.sequence) AS identities
          FROM session_history_events t LEFT JOIN runtime_events d ON d.invocation_id = t.invocation_id
            AND d.operation_id = t.operation_id AND d.kind = 'tool_dispatched'
-         LEFT JOIN runtime_events c ON c.invocation_id = t.invocation_id AND c.kind = 'model_completed'
-           AND c.operation_id = json_extract(d.event_json, '$.fact.call.origin.step_id')
+         LEFT JOIN accepted_calls c ON c.invocation_id = t.invocation_id
+           AND c.step_id = json_extract(d.event_json, '$.fact.call.origin.step_id')
+           AND json_extract(c.call,'$.id') = json_extract(d.event_json,'$.fact.call.tool_call_id')
          WHERE t.event_id = ? AND t.kind = 'tool_settled' AND t.owner_session_id = ?",
-    ).bind(id).bind(session).fetch_optional(&mut *connection).await?;
+    )).bind(id).bind(session).fetch_optional(&mut *connection).await?;
     let Some(row) = row else {
         return Ok(None);
     };
@@ -102,17 +103,7 @@ pub(super) async fn read(
         })
     })()
     .ok_or(ArchiveError::Corrupt)?;
-    let ToolOrigin::Provider { step_id } = &decoded.call.origin else {
-        unreachable!()
-    };
-    let valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM runtime_events c, json_each(c.event_json, '$.fact.output.parts') p
-         WHERE c.invocation_id = ? AND c.operation_id = ? AND c.kind = 'model_completed'
-           AND json_extract(p.value, '$.kind') = 'tool_call' AND json_extract(p.value, '$.call.id') = ?
-           AND json_extract(p.value, '$.call.name') = ? AND json_extract(p.value, '$.call.provider_executed') = 0)",
-    ).bind(&decoded.invocation.invocation_id).bind(step_id).bind(&decoded.call.tool_call_id).bind(&decoded.name)
-        .fetch_one(connection).await?;
-    if !valid || decoded.step_sequence >= decoded.sequence {
+    if decoded.step_sequence >= decoded.sequence {
         return Err(ArchiveError::Corrupt.into());
     }
     Ok(Some(decoded))

@@ -90,8 +90,9 @@ async fn require_safe_through_policy(
     through: u64,
     allow_sealed_unknown: bool,
 ) -> Result<(), StoreError> {
-    let unsafe_history: bool = sqlx::query_scalar(
-        "WITH runtime_events AS NOT MATERIALIZED (SELECT * FROM main.runtime_events WHERE sequence <= ?3)
+    let unsafe_history: bool = sqlx::query_scalar(concat!(
+        "WITH runtime_events AS NOT MATERIALIZED (SELECT * FROM main.runtime_events WHERE sequence <= ?3), ",
+        crate::model_items::accepted_calls!(), "
          SELECT EXISTS(SELECT 1 FROM runtime_events e
          WHERE json_extract(e.event_json, '$.invocation.session_id') = ?1
          AND (?2 IS NULL OR e.invocation_id != ?2) AND (
@@ -104,10 +105,10 @@ async fn require_safe_through_policy(
                 AND json_extract(terminal.event_json, '$.fact.outcome.class') = 'outcome_unknown')))
            OR (e.kind = 'model_requested' AND NOT EXISTS(SELECT 1 FROM runtime_events t
               WHERE t.invocation_id = e.invocation_id AND t.operation_id = e.operation_id AND t.kind IN ('model_completed','model_interrupted')))
-           OR (e.kind = 'model_completed' AND EXISTS(SELECT 1 FROM json_each(e.event_json, '$.fact.output.parts') p
-              WHERE json_extract(p.value, '$.kind') = 'tool_call' AND json_extract(p.value, '$.call.provider_executed') = 0
+           OR (e.kind = 'model_requested' AND EXISTS(SELECT 1 FROM accepted_calls p
+              WHERE p.invocation_id=e.invocation_id AND p.step_id=e.operation_id AND json_extract(p.call, '$.provider_executed') = 0
               AND NOT EXISTS(SELECT 1 FROM runtime_events d WHERE d.invocation_id = e.invocation_id
-                AND d.operation_id = e.operation_id || ':' || json_extract(p.value, '$.call.id')
+                AND d.operation_id = e.operation_id || ':' || json_extract(p.call, '$.id')
                 AND d.kind IN ('tool_dispatched','tool_rejected'))))
            OR (e.kind = 'model_completed' AND EXISTS(SELECT 1 FROM json_each(e.event_json, '$.fact.output.parts') p
               WHERE json_extract(p.value, '$.kind') = 'tool_call' AND json_extract(p.value, '$.call.provider_executed') = 1
@@ -115,7 +116,7 @@ async fn require_safe_through_policy(
                 WHERE json_extract(result.value, '$.kind') = 'tool_result'
                   AND json_extract(result.value, '$.id') = json_extract(p.value, '$.call.id')
                   AND json_extract(result.value, '$.name') = json_extract(p.value, '$.call.name'))))))",
-    ).bind(session).bind(current).bind(through as i64).bind(allow_sealed_unknown).fetch_one(&mut *connection).await?;
+    )).bind(session).bind(current).bind(through as i64).bind(allow_sealed_unknown).fetch_one(&mut *connection).await?;
     if unsafe_history {
         return Err(invalid(
             "Session contains unsealed or unresolved prior execution",
@@ -264,6 +265,10 @@ pub(crate) async fn model_source_unchanged(
              AND json_remove(json_extract(r.event_json,'$.fact'),'$.step_id')=json_remove(json(?7),'$.step_id')
              AND EXISTS(SELECT 1 FROM runtime_events t WHERE t.invocation_id=r.invocation_id AND t.operation_id=r.operation_id
                  AND t.kind='model_interrupted' AND json_extract(t.event_json,'$.fact.status')='retryable_failure')
+             AND NOT (COALESCE(json_extract(r.event_json,'$.fact.item_acceptance'),0)=1 AND EXISTS(
+                 SELECT 1 FROM runtime_events accepted WHERE accepted.invocation_id=r.invocation_id
+                 AND accepted.kind='model_observed' AND json_extract(accepted.event_json,'$.fact.step_id')=r.operation_id
+                 AND json_extract(accepted.event_json,'$.fact.event.kind') IN ('source','part_finished','tool_call','provider_tool_result')))
              AND NOT EXISTS(SELECT 1 FROM runtime_events barrier WHERE barrier.invocation_id=r.invocation_id
                  AND barrier.kind='model_observed' AND json_extract(barrier.event_json,'$.fact.step_id')=r.operation_id
                  AND (json_extract(barrier.event_json,'$.fact.event.kind') IN ('provider_tool_result','finished')
@@ -303,8 +308,9 @@ async fn execution_boundary(
     through: u64,
     boundary: Boundary,
 ) -> Result<(), StoreError> {
+    let accepted_calls = crate::model_items::accepted_calls!();
     let pending: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "{INDEPENDENT_CELLS}, {PRIVATE_SUMMARIES}
+        "{INDEPENDENT_CELLS}, {PRIVATE_SUMMARIES}, {accepted_calls}
         SELECT EXISTS(SELECT 1 FROM runtime_events e WHERE e.invocation_id = ?1 AND e.sequence <= ?2 AND (
           (e.kind = 'tool_dispatched' AND NOT EXISTS(SELECT 1 FROM runtime_events t
              WHERE t.invocation_id = e.invocation_id AND t.operation_id = e.operation_id AND t.kind = 'tool_settled' AND t.sequence <= ?2)
@@ -313,25 +319,38 @@ async fn execution_boundary(
              AND NOT (?4 AND e.operation_id IN (SELECT operation_id FROM private_summaries))
              AND NOT EXISTS(SELECT 1 FROM runtime_events t
              WHERE t.invocation_id = e.invocation_id AND t.operation_id = e.operation_id AND t.kind IN ('model_completed','model_interrupted') AND t.sequence <= ?2))
-          OR (e.kind = 'model_completed' AND EXISTS(SELECT 1 FROM json_each(e.event_json, '$.fact.output.parts') p
-             WHERE json_extract(p.value, '$.kind') = 'tool_call' AND json_extract(p.value, '$.call.provider_executed') = 0
+          OR (e.kind = 'model_requested' AND EXISTS(SELECT 1 FROM accepted_calls p
+             WHERE p.invocation_id=e.invocation_id AND p.step_id=e.operation_id AND p.sequence <= ?2
+             AND json_extract(p.call, '$.provider_executed') = 0
              AND NOT EXISTS(SELECT 1 FROM runtime_events d WHERE d.invocation_id = e.invocation_id
-               AND d.operation_id = e.operation_id || ':' || json_extract(p.value, '$.call.id')
+               AND d.operation_id = e.operation_id || ':' || json_extract(p.call, '$.id')
                AND d.kind IN ('tool_dispatched','tool_rejected') AND d.sequence <= ?2)))
           OR (e.kind = 'model_interrupted'
              AND (json_extract(e.event_json, '$.fact.status') != 'retryable_failure'
-               OR EXISTS(SELECT 1 FROM runtime_events barrier WHERE barrier.invocation_id=e.invocation_id
+               OR (NOT EXISTS(SELECT 1 FROM runtime_events request WHERE request.invocation_id=e.invocation_id
+                   AND request.operation_id=e.operation_id AND request.kind='model_requested'
+                   AND json_extract(request.event_json,'$.fact.item_acceptance')=1)
+                 AND EXISTS(SELECT 1 FROM runtime_events barrier WHERE barrier.invocation_id=e.invocation_id
                  AND json_extract(barrier.event_json, '$.fact.step_id')=e.operation_id
                  AND barrier.kind='model_observed' AND barrier.sequence <= ?2
                  AND (json_extract(barrier.event_json, '$.fact.event.kind') IN ('provider_tool_result','finished')
                    OR (json_extract(barrier.event_json, '$.fact.event.kind')='tool_call'
                      AND json_extract(barrier.event_json, '$.fact.event.data.provider_executed')=1)
                    OR (json_extract(barrier.event_json, '$.fact.event.data.provider_options') IS NOT NULL
-                     AND json_extract(barrier.event_json, '$.fact.event.data.provider_options') != '{{}}'))))
+                     AND json_extract(barrier.event_json, '$.fact.event.data.provider_options') != '{{}}')))))
              AND NOT ((?3 OR ?4) AND e.operation_id IN (SELECT operation_id FROM private_summaries))
              AND EXISTS(SELECT 1 FROM runtime_events o
              WHERE o.invocation_id = e.invocation_id AND json_extract(o.event_json, '$.fact.step_id') = e.operation_id
              AND o.kind = 'model_observed' AND o.sequence <= ?2))
+          OR (e.kind='model_requested' AND json_extract(e.event_json,'$.fact.item_acceptance')=1
+             AND EXISTS(SELECT 1 FROM accepted_calls p WHERE p.invocation_id=e.invocation_id AND p.step_id=e.operation_id
+               AND p.sequence <= ?2 AND json_extract(p.call,'$.provider_executed')=1
+               AND NOT EXISTS(SELECT 1 FROM runtime_events result WHERE result.invocation_id=e.invocation_id
+                 AND result.kind='model_observed' AND result.sequence <= ?2
+                 AND json_extract(result.event_json,'$.fact.step_id')=e.operation_id
+                 AND json_extract(result.event_json,'$.fact.event.kind')='provider_tool_result'
+                 AND json_extract(result.event_json,'$.fact.event.data.id')=json_extract(p.call,'$.id')
+                 AND json_extract(result.event_json,'$.fact.event.data.name')=json_extract(p.call,'$.name'))))
           OR (e.kind = 'model_completed' AND EXISTS(SELECT 1 FROM json_each(e.event_json, '$.fact.output.parts') p
              WHERE json_extract(p.value, '$.kind') = 'tool_call' AND json_extract(p.value, '$.call.provider_executed') = 1
              AND NOT EXISTS(SELECT 1 FROM json_each(e.event_json, '$.fact.output.parts') result

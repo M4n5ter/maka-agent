@@ -41,6 +41,7 @@ pub(super) fn event(fact: Fact, micros: u64) -> EventWrite {
 pub(super) fn request(id: &str, micros: u64) -> EventWrite {
     event(
         Fact::ModelRequested {
+            item_acceptance: false,
             step_id: id.into(),
             model_id: "model".into(),
             purpose: ModelPurpose::Main,

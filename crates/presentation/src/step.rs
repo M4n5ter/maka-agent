@@ -38,6 +38,7 @@ struct Part {
     text: String,
     options: Option<Value>,
     state: PartState,
+    delivered: bool,
 }
 enum Observed {
     Text(usize),
@@ -45,6 +46,7 @@ enum Observed {
 }
 pub(super) struct Step {
     id: String,
+    pub item_acceptance: bool,
     model: String,
     parts: Vec<Part>,
     order: Vec<Observed>,
@@ -52,9 +54,10 @@ pub(super) struct Step {
     limit: usize,
 }
 impl Step {
-    pub fn new(id: String, model: String, limit: usize) -> Self {
+    pub fn new(id: String, model: String, limit: usize, item_acceptance: bool) -> Self {
         Self {
             id,
+            item_acceptance,
             model,
             parts: Vec::new(),
             order: Vec::new(),
@@ -97,6 +100,7 @@ impl Step {
                     text: String::new(),
                     options: provider_options.clone(),
                     state: PartState::Open,
+                    delivered: false,
                 });
             }
             ModelEvent::PartDelta {
@@ -190,7 +194,7 @@ impl Step {
                         };
                     }
                 };
-                Some((|| {
+                let validation = (|| {
                     let ModelPart::Text {
                         text_kind,
                         text,
@@ -208,14 +212,38 @@ impl Step {
                         ));
                     }
                     Ok(part.message(&self.model, provider_options.clone(), false))
-                })())
+                })();
+                if part.delivered && validation.is_ok() {
+                    None
+                } else {
+                    Some(validation)
+                }
             })
             .collect()
+    }
+
+    pub fn accepted_tool(&self) -> Option<(usize, &ModelPart)> {
+        match self.order.last()? {
+            Observed::Tool(part) => Some((self.order.len() - 1, part)),
+            _ => None,
+        }
+    }
+    pub fn anchor(&self) -> Option<&str> {
+        self.parts.last().map(|part| part.message_id.as_str())
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn deliver_text(&mut self, id: &str) -> Option<Message> {
+        let part = self.parts.iter_mut().find(|part| part.provider_id == id)?;
+        part.delivered = true;
+        Some(part.message(&self.model, part.options.clone(), false))
     }
 
     pub fn partial(&self, failed: bool) -> Vec<Message> {
         self.parts
             .iter()
+            .filter(|part| !part.delivered)
             .map(|part| {
                 let interrupted = failed
                     && !(part.kind == TextKind::Thinking

@@ -67,6 +67,7 @@ pub(super) fn request(id: &str, step: &str, source: Option<&ModelContextSource>)
     event(
         id,
         Fact::ModelRequested {
+            item_acceptance: false,
             step_id: step.into(),
             model_id: "test".into(),
             purpose: if source.is_some() {

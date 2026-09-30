@@ -118,6 +118,10 @@ pub enum Fact {
         configuration: Option<Box<crate::execution::InvocationConfiguration>>,
     },
     ModelRequested {
+        /// Complete ModelObserved items are durably accepted before stream end.
+        /// Absent on older journals, which accept only ModelCompleted output.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        item_acceptance: bool,
         step_id: String,
         model_id: String,
         source_scope: LogScope,
@@ -146,8 +150,8 @@ pub enum Fact {
     ToolResultArchived {
         placeholder: crate::archive::ArchivedPlaceholder,
     },
-    /// Observations are durable before presentation, but are not accepted model
-    /// history until the complete response passes semantic validation.
+    /// Durable stream evidence. Marked requests accept complete items as they
+    /// arrive; legacy requests accept history at ModelCompleted only.
     ModelObserved {
         step_id: String,
         event: crate::model::ModelEvent,
@@ -257,7 +261,8 @@ pub enum ModelInterruption {
     Cancelled,
     TimedOut,
     Failed,
-    /// Trusted ingress classified a transient failure with no raw replay barrier.
+    /// Trusted ingress permits retry: legacy steps can discard observations;
+    /// item-accepting steps must retain completed items and settle their tools.
     /// This records safety evidence, not an instruction to retry.
     RetryableFailure,
 }
