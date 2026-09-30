@@ -98,6 +98,7 @@ pub(super) async fn interrupt(log: &EventLog, session: &str) -> u64 {
     log.append(&event(
         session,
         Fact::ModelInterrupted {
+            diagnostic: None,
             step_id: format!("step-{session}"),
             status: ModelInterruption::Cancelled,
         },

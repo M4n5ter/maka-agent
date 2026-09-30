@@ -212,6 +212,12 @@ impl<'a> RequestTools<'a> {
         cancellation: CancellationToken,
     ) -> Result<maka_plugins::prompt::Resolved, ToolError> {
         let request = maka_plugins::prompt::Request {
+            tools: self
+                .catalog
+                .definitions()
+                .chain(self.direct.definitions())
+                .map(|tool| tool.name.clone())
+                .collect(),
             target: maka_plugins::prompt::Target::ModelStep {
                 invocation,
                 cwd: self.cwd.clone(),

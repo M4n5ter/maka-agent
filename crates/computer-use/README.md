@@ -42,17 +42,29 @@ await app.getAXState();
 `cua.getState()` discovers native applications and configured browser providers.
 `getApp`, `getTab` and `createBrowserTab` emit initial accessibility state.
 Observations emit by default; `nodeRepl.write` and `nodeRepl.emitImage` provide
-explicit output. The bundled `maka-cua` skill explains the workflow and is
+explicit output. Do not wrap automatically emitted observations in those helpers.
+CUA deduplicates identical images within each evaluation before counting output
+budget, without retaining an image cache across calls. Inventory errors remain
+visible even with `emit:false`. The bundled `maka-cua` skill explains the workflow and is
 available from the native Skill library without automatic installation.
 
 ## Ownership and lifecycle
 
 The Host owns one Cua driver per desktop process (Cua permits one embedded driver per process).
-Each Maka Session owns its REPL, native Cua session, opaque target bindings and
-observations. Every operation uses fresh Run authority, canonical approval and
+Each Maka Session owns its REPL, a bound SDK `CuaDriverSession`, opaque target
+bindings and observations. Inventory and input share that bound surface; there
+is no implicit driver session or per-method session-label injection. Reset creates
+a new private lifecycle identity. Driver leases have explicit 24-hour total and
+idle bounds; expired authority requires reset and fresh observation, never action
+replay. Normal close ends native state before revoking the lease; after expiry the
+SDK collects the isolated old native episode through its idle cleanup. Every operation uses fresh Run authority, canonical approval and
 its own journal settlement. Explore refuses access; Ask requests a Computer Use
 Session grant; Bypass skips that prompt. A retained JS object never retains a grant.
 The shared input queue serializes access to the physical keyboard and clipboard.
+For logical model steps with callable CUA tools, the plugin supplies a read-only snapshot of REPL
+state and configured browser providers. This reads existing memory without starting
+a VM or inspecting the desktop. Later tool results supersede a frozen retry snapshot.
+A Host restart therefore cannot silently imply that old JavaScript bindings survived.
 
 App bindings retain process start identity; on macOS they also retain the exact
 AX window and elements. Accessibility text and diffs are presentation, not an

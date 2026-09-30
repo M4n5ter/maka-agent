@@ -155,6 +155,7 @@ impl Executions {
                 Some(&captured),
                 base.as_ref().map(|prompt| prompt.text.as_str()),
                 maka_plugins::prompt::Request {
+                    tools: vec![],
                     target: maka_plugins::prompt::Target::Session {
                         session_id: session_id.clone(),
                         cwd: session.workspace.host_cwd.clone(),

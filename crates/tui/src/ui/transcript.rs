@@ -1738,6 +1738,22 @@ mod tests {
     }
 
     #[test]
+    fn model_failure_is_readable_while_waiting_without_trace_or_expanding_a_row() {
+        let rows = BTreeMap::from([(
+            1,
+            json!({"type":"model_interruption", "id":"attempt", "turnId":"turn", "message":"Responses WebSocket closed: diagnostic-marker"}),
+        )]);
+        let mut view = Transcript::default();
+        view.sync(&rows, &[], 0, &locale(), false);
+        let screen = draw(&mut view, 100, 15);
+        assert!(screen.contains("diagnostic-marker"), "{screen}");
+        assert!(
+            !screen.contains("model_interruption"),
+            "raw protocol must not be shown"
+        );
+    }
+
+    #[test]
     fn tool_cards_keep_identity_folds_and_results_through_pagination_waiting_and_interleaving() {
         let i18n = locale();
         let call = |id: &str| {

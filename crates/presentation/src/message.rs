@@ -97,6 +97,9 @@ pub struct Message {
     rename_all_fields = "camelCase"
 )]
 pub enum Content {
+    ModelInterruption {
+        message: String,
+    },
     SystemNote {
         kind: ImportedNoteKind,
         data: ImportedNote,

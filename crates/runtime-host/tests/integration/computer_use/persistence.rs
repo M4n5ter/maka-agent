@@ -57,9 +57,17 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
             ("approved","delayed","cua_repl",json!({"code":"await cua.cursor.configure({label:'approved',enabled:false}); await cua.rewriteDocumentation(); nodeRepl.write(43);","timeout_ms":1000}),"43"),
         ] {
             assert_eq!(peer.rpc("turn.start",json!({"sessionId":session,"turnId":turn,"content":{"text":"Exercise only the Computer Use JavaScript environment"}})).await["ok"],true);
-            requests.recv().await.unwrap().reply.send(call("search","tool_search",json!({"query":tool}))).unwrap();
+            let search = requests.recv().await.unwrap();
+            if turn == "platform" {
+                assert!(!search.body["messages"].to_string().contains("Computer Use state captured"), "CUA state is only relevant after CUA becomes callable");
+            }
+            search.reply.send(call("search","tool_search",json!({"query":tool}))).unwrap();
             let request=requests.recv().await.unwrap();
             assert!(request.body["tools"].as_array().unwrap().iter().any(|entry|entry["function"]["name"]==tool));
+            let snapshot = request.body["messages"].to_string();
+            let expected_state = if matches!(turn, "platform" | "isolated" | "fresh" | "delayed") { "REPL was fresh" } else { "REPL was running" };
+            assert!(snapshot.contains(expected_state), "{session}/{turn}: missing {expected_state}");
+            assert!(snapshot.contains("No browser-tab provider is configured"));
             request.reply.send(call(&format!("cell-{turn}"),tool,input)).unwrap();
             if session=="approved" {
                 let id:String=loop {

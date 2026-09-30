@@ -102,6 +102,7 @@ const observation = async (method, options = {}) => {
   const value = await invoke(method, { options });
   await documentation();
   if (options.emit !== false) write(value);
+  else if (value?.errors?.length) write({ errors: value.errors });
   return value;
 };
 const bind = async (method, args) => {

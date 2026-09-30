@@ -75,6 +75,7 @@ async fn physical_attempt_usage_survives_rejection_copy_removal_and_reopen() {
         ),
         event(
             Fact::ModelInterrupted {
+                diagnostic: None,
                 step_id: "rejected".into(),
                 status: ModelInterruption::Failed,
             },
@@ -83,6 +84,7 @@ async fn physical_attempt_usage_survives_rejection_copy_removal_and_reopen() {
         retry.clone(),
         event(
             Fact::ModelInterrupted {
+                diagnostic: None,
                 step_id: "retry".into(),
                 status: ModelInterruption::RetryableFailure,
             },

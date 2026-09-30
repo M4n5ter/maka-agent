@@ -60,7 +60,18 @@ pub struct BrowserConnection {
 }
 
 pub trait Computer: Send + Sync {
+    /// Read only current process state; does not allocate a VM, inspect the
+    /// desktop or grant authority. Prompt providers use it before model calls.
+    fn state(&self, session_id: String) -> BoxFuture<'_, Result<ReplState, crate::Error>>;
+
     /// Returns the native MCP-shaped result, including image content and
     /// structured refusals. Returning must include native operation settlement.
     fn call(&self, scope: Scope, input: Call) -> BoxFuture<'_, Result<CallResult, ToolError>>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplState {
+    Fresh,
+    Ready,
+    ResetRequired,
 }

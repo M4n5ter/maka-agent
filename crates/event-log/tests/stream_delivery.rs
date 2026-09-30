@@ -165,6 +165,7 @@ async fn giant_bodies_and_metadata_do_not_block_stream_delivery() {
     ))
     .await;
     let interrupted = append(Fact::ModelInterrupted {
+        diagnostic: None,
         step_id: "second".into(),
         status: maka_runtime::event::ModelInterruption::Failed,
     })

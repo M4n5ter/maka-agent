@@ -185,6 +185,7 @@ async fn interrupted_and_terminal_fallback_catalog_match_committed_presentation_
                 &log,
                 &mut view,
                 Fact::ModelInterrupted {
+                    diagnostic: None,
                     step_id: "step".into(),
                     status: ModelInterruption::Cancelled,
                 },

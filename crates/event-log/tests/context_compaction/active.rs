@@ -300,6 +300,7 @@ async fn active_cut_rejects_pending_child_and_changed_summary_repair_source() {
     log.append(&event(
         "active",
         Fact::ModelInterrupted {
+            diagnostic: None,
             step_id: "repair".into(),
             status: maka_runtime::event::ModelInterruption::Failed,
         },

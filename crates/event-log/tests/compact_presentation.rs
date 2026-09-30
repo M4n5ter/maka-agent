@@ -204,6 +204,7 @@ async fn compact_attempts_preserve_visible_history_read_markers_and_rebuild() {
                     &mut view,
                     &compact,
                     Fact::ModelInterrupted {
+                        diagnostic: None,
                         step_id: "summary".into(),
                         status: ModelInterruption::Cancelled,
                     },

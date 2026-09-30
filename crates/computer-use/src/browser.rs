@@ -239,12 +239,6 @@ impl Browsers {
                 Err(error) => errors.push(format!("{}: {error}", provider.id)),
             }
         }
-        if self.connections.is_empty() {
-            errors.push(
-                "browser_unavailable: configure a loopback CDP provider in maka.computer-use"
-                    .into(),
-            );
-        }
         (browsers, errors)
     }
     pub(crate) async fn invoke(
@@ -369,7 +363,7 @@ impl Browsers {
             .iter()
             .filter(|p| id.is_none_or(|id| p.id == id))
             .collect();
-        if providers.is_empty() {
+        if providers.is_empty() && id.is_some() {
             return Err(failed(
                 "browser_unavailable: no matching configured CDP provider",
             ));

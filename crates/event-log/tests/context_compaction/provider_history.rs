@@ -107,6 +107,7 @@ async fn interrupted_history_preserves_provider_effect_uncertainty_without_rejec
             event(
                 "old",
                 Fact::ModelInterrupted {
+                    diagnostic: None,
                     step_id: "interrupted".into(),
                     status: maka_runtime::event::ModelInterruption::Failed,
                 },

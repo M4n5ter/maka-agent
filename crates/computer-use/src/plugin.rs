@@ -78,6 +78,16 @@ impl Plugin for Builtin {
             };
             let handler = Arc::new(Tools(host.computer, settings.browsers, settings.desktop));
             let mut staged = Staged::default();
+            staged
+                .insert(
+                    "computer-state",
+                    maka_plugins::prompt::DynamicContext {
+                        format: maka_plugins::prompt::Format::Plain,
+                        order: 0,
+                        text: maka_plugins::prompt::Text::Dynamic(handler.clone()),
+                    },
+                )
+                .map_err(|error| error.to_string())?;
             for definition in definitions() {
                 let name = definition.name.clone();
                 let tool = PluginTool::new(ToolRegistration {
@@ -101,6 +111,51 @@ struct Tools(
     Vec<maka_plugins::computer::BrowserConnection>,
     maka_plugins::computer::Desktop,
 );
+
+impl maka_plugins::prompt::Provider for Tools {
+    fn evaluate(
+        &self,
+        request: maka_plugins::prompt::Request,
+        _: maka_plugins::filesystem::ReadDirectory,
+    ) -> maka_plugins::prompt::TextFuture {
+        if !request
+            .tools
+            .iter()
+            .any(|name| matches!(name.as_str(), "cua_repl" | "cua_reset"))
+        {
+            return Box::pin(async { Ok(None) });
+        }
+        let computer = self.0.clone();
+        let browsers = self
+            .1
+            .iter()
+            .map(|browser| browser.id.clone())
+            .collect::<Vec<_>>();
+        Box::pin(async move {
+            use maka_plugins::computer::ReplState;
+            let state = tokio::select! {
+                biased;
+                _ = request.cancellation.cancelled() => return Err(maka_plugins::Error::Retired),
+                state = computer.state(request.target.session_id().into()) => state?,
+            };
+            let mut text = String::from(
+                "Computer Use state captured before this model step's first attempt. Later CUA tool results supersede this snapshot. ",
+            );
+            text.push_str(match state {
+                ReplState::Fresh => "The REPL was fresh; earlier runtime variables and app/tab bindings did not exist. If no later call has initialized it, start with exactly one entry point: await cua.getState(), const app = await cua.getApp(...), or const tab = await cua.getTab(...), then read its documentation and initial state.",
+                ReplState::Ready => "The REPL was running with its existing variables and bindings.",
+                ReplState::ResetRequired => "The REPL was stopped. Call cua_reset unless a later reset already succeeded, then select and observe the current app/tab. An interrupted input may have taken effect; inspect before repeating it.",
+            });
+            text.push_str(" Bindings created afterward can be reused unless a later reset or terminated REPL invalidated them. Inspect the current UI before acting.");
+            if browsers.is_empty() {
+                text.push_str(" No browser-tab provider is configured. Use cua.getApp for native browser windows; the Chrome extension/IAB IDs from other agents are not available here.");
+            } else {
+                text.push_str(&format!(" Configured browser providers: {}. Select them through cua.getState/getBrowser; availability is checked on discovery.", serde_json::to_string(&browsers).expect("browser IDs serialize")));
+            }
+            Ok(Some(text))
+        })
+    }
+}
 impl ToolPreparer for Tools {
     fn names(&self) -> Vec<String> {
         definitions().into_iter().map(|d| d.name).collect()

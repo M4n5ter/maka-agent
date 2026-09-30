@@ -48,6 +48,16 @@ async fn identity(
     event: &RuntimeEvent,
 ) -> Result<(), StoreError> {
     let id = &event.invocation.invocation_id;
+    if let Fact::ModelInterrupted {
+        diagnostic: Some(message),
+        ..
+    } = &event.fact
+        && (message.trim().is_empty() || message.len() > 4096)
+    {
+        return Err(invalid(
+            "model interruption diagnostic must be nonempty and bounded",
+        ));
+    }
     let sealed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE invocation_id=? AND kind='invocation_ended')",
     ).bind(id).fetch_one(&mut *connection).await?;

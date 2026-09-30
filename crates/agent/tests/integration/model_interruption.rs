@@ -183,6 +183,9 @@ async fn safe_retry_preserves_failed_evidence_and_cancellation_stops_backoff() {
             assert_eq!(prefix.events.iter().filter(|event| matches!(event.event.fact,
                 Fact::ModelInterrupted { status: ModelInterruption::RetryableFailure, .. })).count(), 1);
             assert!(prefix.events.iter().any(|event| matches!(&event.event.fact,
+                Fact::ModelInterrupted { diagnostic: Some(message), .. } if !message.is_empty())),
+                "a recovered request must retain its original failure cause");
+            assert!(prefix.events.iter().any(|event| matches!(&event.event.fact,
                 Fact::ModelObserved { event: ModelEvent::PartDelta { text, .. }, .. } if text == "unfinished-secret-fragment")));
             assert!(!prefix.events.iter().any(|event| matches!(event.event.fact,
                 Fact::ToolDispatched { .. } | Fact::ToolRejected { .. })));
@@ -399,7 +402,7 @@ async fn partial_text_survives_cancellation_without_becoming_replayed_model_hist
             let tail = &settled.events[observed.events.len()..];
             let interrupted = tail.iter().position(|stored| matches!(
                 &stored.event.fact,
-                Fact::ModelInterrupted { step_id, status: ModelInterruption::Cancelled }
+                Fact::ModelInterrupted { step_id, status: ModelInterruption::Cancelled, .. }
                     if step_id == &active.unfinished_model_steps[0]
             )).unwrap();
             assert!(matches!(&tail.last().unwrap().event.fact,

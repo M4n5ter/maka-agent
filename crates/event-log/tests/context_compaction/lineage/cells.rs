@@ -149,6 +149,7 @@ async fn lineage_model_cut_allows_only_independent_cell_progress_not_compaction_
     log.append(&event(
         "child",
         Fact::ModelInterrupted {
+            diagnostic: None,
             step_id: "attempt".into(),
             status: maka_runtime::event::ModelInterruption::RetryableFailure,
         },

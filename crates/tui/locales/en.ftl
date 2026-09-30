@@ -1486,3 +1486,5 @@ controls-open-created = Open found session
 providers-search = Search providers
 providers-search-hint = Name, provider ID or sign-in method
 providers-no-matches = No matching providers
+
+chat-model-interrupted = Model request interrupted

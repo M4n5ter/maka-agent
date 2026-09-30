@@ -13,9 +13,12 @@ required-tools:
 
 Discover `cua_repl` with `tool_search`. Call it directly; it has its own persistent
 JavaScript environment and works with Code Mode disabled. Variables survive calls
-and Turns in this Session. `cua_reset` clears this environment and its bindings.
+and Turns within the current Host process. Follow the current REPL-state snapshot;
+after a Host restart old variables no longer exist. `cua_reset` clears this
+environment and its bindings. Later tool results supersede a frozen snapshot.
 
-Start with one of these calls and read its automatic output:
+For a fresh REPL, execute exactly one of these entry points, then read its
+automatic documentation and initial state before further calls:
 
 ```js
 await cua.getState();
@@ -28,7 +31,8 @@ ambiguous. `getApp({windowId})` binds an existing window. App selection emits it
 initial state. macOS can launch a named app; other platforms require an open window.
 Browser IDs refer to explicitly configured CDP providers and their existing
 profiles. A missing provider does not authorize changing debugging settings or
-restarting the browser.
+restarting the browser. If none is configured, use native browser windows through
+`cua.getApp`; do not guess extension or IAB IDs.
 
 Prefer observed accessibility indices. Batch deterministic actions and a final
 observation in one call:
@@ -50,7 +54,10 @@ to point without acting. For display preferences, use `cua.cursor.configure` as
 described in the emitted API reference. Judge task success from the application
 state; cursor animation is only visual feedback and does not isolate keyboard focus.
 
-Observations emit automatically. Use `{emit:false}` for programmatic inspection;
+Observations emit automatically; call them directly without wrapping in
+`nodeRepl.write` or `nodeRepl.emitImage`. Use `{emit:false}` for programmatic
+inspection; inventory failures still appear. Identical images within one call
+are emitted once;
 use `nodeRepl.write(value)` and `await nodeRepl.emitImage(image)` for explicit
 output. There is no Node, arbitrary filesystem or network API. Get a screenshot
 before coordinate input; moving the window, navigating or acting invalidates

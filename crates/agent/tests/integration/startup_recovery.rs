@@ -133,7 +133,7 @@ async fn reopened_pending_main_and_summary_are_failed_without_replaying_admissio
         let end = prefix.events.len();
         assert!(
             matches!(&prefix.events[end - 2].event.fact, Fact::ModelInterrupted {
-        step_id, status: ModelInterruption::Failed
+        step_id, status: ModelInterruption::Failed, ..
     } if step_id == if summary { "summary" } else { "step" })
         );
         assert!(
@@ -629,6 +629,7 @@ async fn accepted_history_budget_counts_complete_items_not_token_envelopes() {
             &log,
             if interrupted {
                 Fact::ModelInterrupted {
+                    diagnostic: None,
                     step_id: "step".into(),
                     status: ModelInterruption::RetryableFailure,
                 }

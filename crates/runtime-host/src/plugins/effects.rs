@@ -375,6 +375,26 @@ impl maka_plugins::session::history::History for Effects {
 }
 
 impl maka_plugins::computer::Computer for Effects {
+    fn state(
+        &self,
+        session_id: String,
+    ) -> BoxFuture<'_, Result<maka_plugins::computer::ReplState, maka_plugins::Error>> {
+        Box::pin(async move {
+            let _lease = self.owner.resource_call()?;
+            match self.owner.identity()?.scope {
+                maka_plugins::composition::Scope::Profile => {}
+                maka_plugins::composition::Scope::Session(id) if id == session_id => {}
+                _ => {
+                    return Err(maka_plugins::Error::Invalid(
+                        "Computer Use state is outside plugin scope".into(),
+                    ));
+                }
+            }
+            let host = self.host.upgrade().ok_or(maka_plugins::Error::Retired)?;
+            Ok(host.computer_state(&session_id).await)
+        })
+    }
+
     fn call(
         &self,
         call: Authority,

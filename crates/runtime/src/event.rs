@@ -159,6 +159,10 @@ pub enum Fact {
     ModelInterrupted {
         step_id: String,
         status: ModelInterruption,
+        /// Provider-owned diagnostic for users and inspection, not model input
+        /// or retry authority. Missing on journals written by older Hosts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<String>,
     },
     ModelCompleted {
         step_id: String,

@@ -96,6 +96,7 @@ struct State {
     notifications: VecDeque<String>,
     output_bytes: usize,
     output_count: usize,
+    deduplicate_images: bool,
     yielded: bool,
     failure: Option<ToolError>,
 }
@@ -121,6 +122,7 @@ impl CellContext {
                 notifications: VecDeque::new(),
                 output_bytes: 0,
                 output_count: 0,
+                deduplicate_images: false,
                 yielded: false,
                 failure: None,
             }),
@@ -134,6 +136,14 @@ impl CellContext {
 
     pub(crate) fn metadata(&self) -> &[ToolMetadata] {
         &self.0.metadata
+    }
+
+    /// Observation tools can emit a screenshot automatically and then receive
+    /// the same image through explicit output. Count it once in this batch;
+    /// retain no image cache across evaluations or drained batches.
+    pub fn with_image_deduplication(self) -> Self {
+        self.0.state.lock().unwrap().deduplicate_images = true;
+        self
     }
 
     /// Host failures are visible before drain, but never erased by JS catch.
@@ -196,8 +206,20 @@ impl CellContext {
                 "expected image or audio content",
             ));
         }
-        let bytes = serde_json::to_vec(&output).unwrap().len();
         let mut state = self.0.state.lock().unwrap();
+        if state.deduplicate_images
+            && let CellOutput::Media {
+                content: image @ maka_runtime::capability::ContentBlock::Image { .. },
+                detail,
+            } = &output
+            && state
+                .output
+                .iter()
+                .any(|prior| matches!(prior, CellOutput::Media { content, detail: previous } if content == image && previous == detail))
+        {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec(&output).unwrap().len();
         // A lifetime bound, not a per-observation bound: slow observers cannot
         // cause unbounded memory, and fast observers cannot defeat the budget.
         if state.output_count >= 63 || bytes > self.0.max_bytes.saturating_sub(state.output_bytes) {
@@ -279,6 +301,32 @@ impl CellContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observation_image_deduplication_precedes_budget_and_does_not_cross_batches() {
+        let image = CellOutput::Media {
+            content: maka_runtime::capability::ContentBlock::Image {
+                data: "a".repeat(2048),
+                mime_type: "image/png".into(),
+            },
+            detail: None,
+        };
+        let bytes = serde_json::to_vec(&image).unwrap().len();
+        let context =
+            CellContext::new(CellStore::default(), bytes, vec![]).with_image_deduplication();
+        context.emit(image.clone()).unwrap();
+        context.emit(image.clone()).unwrap();
+        assert_eq!(context.take_output().len(), 1);
+        // Deduplication cannot reset the lifetime quota after a drain.
+        assert!(context.emit(image.clone()).is_err());
+        let next = CellContext::new(CellStore::default(), bytes, vec![]).with_image_deduplication();
+        next.emit(image.clone()).unwrap();
+        assert_eq!(next.take_output().len(), 1);
+        let ordinary = CellContext::new(CellStore::default(), bytes * 2, vec![]);
+        ordinary.emit(image.clone()).unwrap();
+        ordinary.emit(image).unwrap();
+        assert_eq!(ordinary.take_output().len(), 2);
+    }
+
     #[test]
     fn notification_acceptance_and_empty_queue_closure_are_atomic() {
         let gate = NotificationGate::default();

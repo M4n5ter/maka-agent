@@ -316,7 +316,11 @@ impl InvocationView {
                             });
                         }
                     }
-                    Fact::ModelInterrupted { step_id, status } => {
+                    Fact::ModelInterrupted {
+                        step_id,
+                        status,
+                        diagnostic,
+                    } => {
                         let interrupted = step
                             .take()
                             .ok_or(ProjectionError::Invalid("interruption without request"))?;
@@ -326,6 +330,18 @@ impl InvocationView {
                                 *status != maka_runtime::event::ModelInterruption::Cancelled,
                             ),
                         );
+                        if let Some(message) = diagnostic
+                            && *status != maka_runtime::event::ModelInterruption::Cancelled
+                        {
+                            messages.push(Message {
+                                id: event.id.clone(),
+                                turn_id: invocation.turn_id.clone(),
+                                ts,
+                                content: Content::ModelInterruption {
+                                    message: message.clone(),
+                                },
+                            });
+                        }
                     }
                     Fact::InvocationEnded { outcome } => {
                         if let Some(executor) = self.executor.take() {

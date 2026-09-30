@@ -35,7 +35,25 @@ pub(super) struct Interaction {
     pub(super) repl: tokio::sync::Mutex<Option<Repl>>,
     pub(super) native: Arc<tokio::sync::Mutex<maka_computer_use::Session>>,
 }
+impl super::Executions {
+    pub(crate) async fn computer_state(&self, session: &str) -> maka_plugins::computer::ReplState {
+        self.computer.state(session).await
+    }
+}
 impl Computers {
+    pub(super) async fn state(&self, session: &str) -> maka_plugins::computer::ReplState {
+        use maka_plugins::computer::ReplState;
+        let interaction = self.sessions.lock().unwrap().get(session).cloned();
+        let Some(interaction) = interaction else {
+            return ReplState::Fresh;
+        };
+        match interaction.repl.lock().await.as_ref() {
+            None => ReplState::Fresh,
+            Some(repl) if repl.is_closed() => ReplState::ResetRequired,
+            Some(_) => ReplState::Ready,
+        }
+    }
+
     pub(super) fn get(&self, session: &str) -> Result<Arc<Interaction>, ToolError> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(existing) = sessions.get(session) {

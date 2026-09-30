@@ -55,6 +55,10 @@ struct Evaluation {
 }
 
 impl Repl {
+    pub fn is_closed(&self) -> bool {
+        self.stopped.is_cancelled() || self.worker.is_finished()
+    }
+
     /// `bootstrap` is trusted facade source, evaluated once. It can capture the
     /// two bridge functions `call(name, input)` and `emit(CellOutput)`; these
     /// are not globals and contain no persistent invocation authority.

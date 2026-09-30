@@ -261,10 +261,14 @@ pub(super) async fn execute(
                     failures = 0;
                     failure.retry_after().unwrap_or_default()
                 } else {
-                    let base_ms = 1_000u64 << failures.min(5);
+                    // Codex's ordinary stream recovery starts at 200 ms with
+                    // +/-10% jitter. The bounded attempt count caps this delay.
+                    let base_ms = 200u64 << failures;
                     failures += 1;
                     failure.retry_after().unwrap_or_else(|| {
-                        std::time::Duration::from_millis(base_ms + fastrand::u64(0..=base_ms / 4))
+                        std::time::Duration::from_millis(fastrand::u64(
+                            base_ms * 9 / 10..=base_ms * 11 / 10,
+                        ))
                     })
                 }
             }
@@ -664,6 +668,7 @@ async fn finish(
                 Fact::ModelInterrupted {
                     step_id: step_id.clone(),
                     status,
+                    diagnostic: Some(error.to_string().chars().take(1024).collect()),
                 },
             )
             .await?;

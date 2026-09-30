@@ -143,7 +143,8 @@ impl Executions {
             ..Default::default()
         };
         let context =
-            maka_js_runtime::CellContext::new(Default::default(), limits.max_value_bytes, vec![]);
+            maka_js_runtime::CellContext::new(Default::default(), limits.max_value_bytes, vec![])
+                .with_image_deduplication();
         let runtime = repl.get_or_insert_with(|| {
             maka_js_runtime::repl::Repl::new(maka_computer_use::facade_for(platform), limits)
         });

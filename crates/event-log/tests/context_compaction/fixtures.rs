@@ -189,6 +189,7 @@ pub(super) async fn prepare_trace(
             event(
                 id,
                 Fact::ModelInterrupted {
+                    diagnostic: None,
                     step_id: format!("{id}-summary"),
                     status: maka_runtime::event::ModelInterruption::Failed,
                 },

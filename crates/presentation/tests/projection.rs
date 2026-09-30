@@ -123,6 +123,7 @@ fn events(outcome: InvocationOutcome) -> Vec<StoredEvent> {
         ]);
     } else {
         facts.push(Fact::ModelInterrupted {
+            diagnostic: None,
             step_id: "step".into(),
             status: if matches!(outcome, InvocationOutcome::Cancelled { .. }) {
                 ModelInterruption::Cancelled
@@ -372,4 +373,33 @@ fn malformed_or_oversized_evidence_poison_the_view_instead_of_publishing_partial
         "sequence replay is not another message"
     );
     assert!(watermark(9_007_199_254_740_991).is_err());
+}
+
+#[test]
+fn interrupted_request_without_output_has_a_durable_diagnostic_not_an_assistant_message() {
+    let source = events(InvocationOutcome::Completed);
+    let mut view = InvocationView::new(4096).unwrap();
+    view.push(&source[0]).unwrap();
+    view.push(&source[1]).unwrap();
+    let failed = StoredEvent {
+        sequence: source[1].sequence + 1,
+        event: RuntimeEvent::new(
+            source[0].event.invocation.clone(),
+            Fact::ModelInterrupted {
+                step_id: "step".into(),
+                status: ModelInterruption::RetryableFailure,
+                diagnostic: Some("Responses WebSocket closed: fixture diagnostic".into()),
+            },
+        ),
+    };
+    let failed = StoredEvent {
+        sequence: failed.sequence,
+        event: serde_json::from_slice(&serde_json::to_vec(&failed.event).unwrap()).unwrap(),
+    };
+    let rows = view.push(&failed).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(
+        matches!(&rows[0].message.content, Content::ModelInterruption { message } if message.contains("fixture diagnostic"))
+    );
+    assert!(view.overlay().is_empty());
 }

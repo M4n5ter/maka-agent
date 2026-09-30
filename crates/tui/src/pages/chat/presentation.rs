@@ -135,6 +135,7 @@ impl Presentation {
                 "system_note" if row["kind"] == "imported" => Kind::Meta,
                 "tool_call" | "tool_result" => Kind::Other,
                 "turn_state" if row["status"].as_str() == Some("failed") => Kind::Failure,
+                "model_interruption" => Kind::Meta,
                 "turn_state" | "token_usage" => Kind::Meta,
                 _ => Kind::Other,
             };
@@ -302,6 +303,11 @@ fn project(row: &Value, i18n: &I18n, ascii: bool) -> String {
     match row["type"].as_str().unwrap() {
         "user" => Some(prompt_content(row, ascii)),
         "assistant" => row["text"].as_str().map(str::to_owned),
+        "model_interruption" => Some(format!(
+            "{}\n{}",
+            i18n.text("chat-model-interrupted"),
+            row["message"].as_str().unwrap_or("")
+        )),
         "system_note" if row["kind"] == "imported" => {
             row["data"]["text"].as_str().map(str::to_owned)
         }

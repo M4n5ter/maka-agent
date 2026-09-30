@@ -64,6 +64,7 @@ async fn active_cuts_require_settled_effects_or_explicit_retry_safety() {
             log.append(&event(
                 "active",
                 Fact::ModelInterrupted {
+                    diagnostic: None,
                     step_id: "main".into(),
                     status: if retryable {
                         maka_runtime::event::ModelInterruption::RetryableFailure
@@ -166,6 +167,7 @@ async fn private_summary_failure_allows_main_progress_only_without_provider_effe
         log.append(&event(
             "active",
             Fact::ModelInterrupted {
+                diagnostic: None,
                 step_id: "summary".into(),
                 status: maka_runtime::event::ModelInterruption::Failed,
             },

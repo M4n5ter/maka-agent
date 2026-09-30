@@ -278,6 +278,7 @@ async fn active_stream_seeds_are_fenced_bounded_and_survive_reopen() {
     log.append(
         &EventWrite::plain(
             (event(Fact::ModelInterrupted {
+                diagnostic: None,
                 step_id: "interrupted".into(),
                 status: ModelInterruption::Cancelled,
             }))

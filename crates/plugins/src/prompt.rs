@@ -37,6 +37,9 @@ pub type TextFuture = Pin<Box<dyn Future<Output = Result<Option<String>, Error>>
 #[derive(Clone)]
 pub struct Request {
     pub target: Target,
+    /// Captured Host tools callable directly or through Code Mode in this
+    /// request. Empty when preparing external executor instructions.
+    pub tools: Vec<String>,
     pub cancellation: CancellationToken,
 }
 
@@ -343,6 +346,7 @@ mod tests {
         owner.publish().unwrap();
         let catalog = Catalog::default();
         let request = Request {
+            tools: vec![],
             target: Target::ModelStep {
                 invocation: Invocation {
                     session_id: "session".into(),
@@ -425,6 +429,7 @@ mod tests {
         owner.publish().unwrap();
         let catalog = Catalog::default();
         let request = Request {
+            tools: vec![],
             target: Target::Session {
                 session_id: "session".into(),
                 cwd: ".".into(),

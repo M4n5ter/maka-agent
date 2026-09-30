@@ -1,7 +1,14 @@
 Computer Use is an independent persistent JavaScript REPL. Use cua_repl directly;
-Code Mode is not required. Variables and bound objects survive calls and Turns.
+Code Mode is not required. Variables and bound objects survive calls and Turns within
+the current Host process. A fresh REPL after restart has no variables from history;
+follow the current Computer Use state supplied with the model request.
 `cua.computer.target` identifies the selected desktop platform (`mac`, `linux`, `windows`).
 In WSL it defaults to the Windows host; shell commands may still run in Linux.
+
+For a fresh REPL, execute exactly one entry point first, then read its documentation
+and initial state before choosing further calls. Browser IDs come only from
+configured providers; when none are configured, use native browser windows through
+getApp. The API does not expose driver administration such as start_session.
 
 Entry points (selection emits initial state):
 - `await cua.getState({emit?})`: app and configured browser inventory, including inventory errors.
@@ -19,7 +26,11 @@ App and Tab observations:
 - `getAXState({emit?, disableDiffing?})` returns text, using a diff by default.
 - `getScreenshot({emit?})` returns Uint8Array and emits the image.
 - `getAXStateAndScreenshot(options?)` returns `{state, screenshot}` and emits both.
-Observations emit by default; use `{emit:false}` when processing the result yourself.
+Discovery, selection and observations emit automatically. Call them directly;
+wrapping `getScreenshot()` in `nodeRepl.emitImage()` or `getAXState()` in
+`nodeRepl.write()` is redundant. Use `{emit:false}` when processing the result
+yourself; inventory errors still appear. Identical images emitted within one call
+are delivered once. A later call may emit the same image again.
 Screenshot-only observation clears accessibility indices.
 If a native AX observation fails while an app is busy, refresh the same bound object
 when the app responds again. Failed observations invalidate old indices and coordinates.

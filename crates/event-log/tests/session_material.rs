@@ -89,6 +89,7 @@ async fn collection_waits_for_the_last_history_owner_and_preserves_frozen_accoun
     .unwrap();
     log.append(&event(
         Fact::ModelInterrupted {
+            diagnostic: None,
             step_id: "observed".into(),
             status: maka_runtime::event::ModelInterruption::Failed,
         },

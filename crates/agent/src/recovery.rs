@@ -55,6 +55,7 @@ pub async fn recover(log: &EventLog) -> Result<usize, RunError> {
             append(Fact::ModelInterrupted {
                 step_id,
                 status: ModelInterruption::Failed,
+                diagnostic: Some("Host stopped before the model request settled.".into()),
             })
             .await?;
         }

@@ -139,7 +139,17 @@ fn retained(event: &RuntimeEvent) -> Value {
         Fact::ModelCompleted { step_id, output } => {
             json!({"step_id":step_id,"output":{"usage":output.usage}})
         }
-        Fact::ModelInterrupted { step_id, status } => json!({"step_id":step_id,"status":status}),
+        Fact::ModelInterrupted {
+            step_id,
+            status,
+            diagnostic,
+        } => {
+            let mut material = json!({"step_id":step_id,"status":status});
+            if let Some(diagnostic) = diagnostic {
+                material["diagnostic"] = json!(diagnostic);
+            }
+            material
+        }
         Fact::ModelObserved {
             step_id,
             event: ModelEvent::Finished { usage, .. },

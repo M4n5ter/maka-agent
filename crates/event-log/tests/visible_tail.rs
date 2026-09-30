@@ -224,6 +224,7 @@ async fn visible_ids_match_presentation_for_accepted_and_partial_parts_across_ca
                     &mut view,
                     &mut ids,
                     Fact::ModelInterrupted {
+                        diagnostic: None,
                         step_id: "step".into(),
                         status: ModelInterruption::Cancelled,
                     },

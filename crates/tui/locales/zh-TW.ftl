@@ -1486,3 +1486,5 @@ controls-open-created = 開啟找到的對話
 providers-search = 搜尋供應商
 providers-search-hint = 名稱、供應商 ID 或登入方式
 providers-no-matches = 沒有符合的供應商
+
+chat-model-interrupted = 模型請求中斷

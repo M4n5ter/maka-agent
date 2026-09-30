@@ -1486,3 +1486,5 @@ controls-open-created = 打开找到的会话
 providers-search = 搜索提供商
 providers-search-hint = 名称、提供商 ID 或登录方式
 providers-no-matches = 没有匹配的提供商
+
+chat-model-interrupted = 模型请求中断

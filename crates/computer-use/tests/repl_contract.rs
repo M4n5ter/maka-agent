@@ -1,0 +1,130 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+use maka_computer_use::facade;
+use maka_js_runtime::{CellContext, CellLimits, CellOutput, CellResult, repl::Repl};
+use maka_runtime::tools::{ToolExecutor, ToolFuture};
+use serde_json::{Value, json};
+use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
+
+struct Fixture;
+impl ToolExecutor for Fixture {
+    fn names(&self) -> Vec<String> {
+        vec!["cua".into()]
+    }
+    fn invoke(&self, _: String, input: Value, _: CancellationToken) -> ToolFuture {
+        Box::pin(async move {
+            Ok(match input["method"].as_str().unwrap() {
+                "documentation" => json!("Fixture CUA reference"),
+                "getState" => {
+                    json!({"apps":[],"browsers":[],"errors":["desktop_fixture_unavailable"]})
+                }
+                "getApp" => {
+                    json!({"kind":"app","handle":{"kind":"app","id":"fixture"},"state":"Fixture window"})
+                }
+                "observe" => {
+                    json!({"image":{"type":"image","mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="}})
+                }
+                other => panic!("unexpected fixture command {other}"),
+            })
+        })
+    }
+}
+
+async fn evaluate(repl: &Repl, code: &str) -> Vec<CellOutput> {
+    let context = CellContext::new(Default::default(), 4096, vec![]).with_image_deduplication();
+    let result = repl
+        .evaluate(
+            code.into(),
+            Arc::new(Fixture),
+            CancellationToken::new(),
+            context.clone(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(result, CellResult::Success { .. }), "{result:?}");
+    context.take_output()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inventory_failures_remain_visible_and_auto_explicit_screenshot_output_is_once_per_call() {
+    let repl = Repl::new(facade(), CellLimits::default());
+    let output = evaluate(
+        &repl,
+        "const state=await cua.getState({emit:false}); nodeRepl.write(state.apps);",
+    )
+    .await;
+    assert!(output.iter().any(|part| matches!(part, CellOutput::Text { text } if text.contains("desktop_fixture_unavailable"))));
+    let output = evaluate(&repl, "const app=await cua.getApp('fixture'); const shot=await app.getScreenshot(); await nodeRepl.emitImage(shot);").await;
+    assert_eq!(
+        output
+            .iter()
+            .filter(|part| matches!(part, CellOutput::Media { .. }))
+            .count(),
+        1
+    );
+    let output = evaluate(&repl, "await nodeRepl.emitImage(shot);").await;
+    assert_eq!(
+        output
+            .iter()
+            .filter(|part| matches!(part, CellOutput::Media { .. }))
+            .count(),
+        1,
+        "a later call can intentionally show the same image"
+    );
+    repl.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn browser_discovery_distinguishes_no_configuration_from_an_unavailable_selection() {
+    let driver = Arc::new(tokio::sync::Mutex::new(maka_computer_use::Driver::default()));
+    let mut session = maka_computer_use::Session::new(driver.clone());
+    session
+        .configure(maka_plugins::computer::Desktop::Local, vec![])
+        .unwrap();
+    for method in ["listBrowsers", "listTabs"] {
+        let output = session
+            .invoke(
+                serde_json::from_value(json!({"method":method,"options":{}})).unwrap(),
+                "fixture",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, json!([]));
+    }
+    let missing = session
+        .invoke(
+            serde_json::from_value(json!({"method":"getBrowser","options":{"id":"chrome"}}))
+                .unwrap(),
+            "fixture",
+            &CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        missing
+            .unwrap_err()
+            .to_string()
+            .contains("no matching configured CDP provider")
+    );
+    session.close().await.unwrap();
+    driver.lock().await.close().await.unwrap();
+}
