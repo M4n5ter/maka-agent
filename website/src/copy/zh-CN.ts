@@ -189,7 +189,7 @@ export const zhCN: Copy = {
     source: {
       h2: '从源码构建',
       prerequisites: [
-        'Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0 和 just。',
+        'Rust 1.98 或更新版本、Node.js 24 LTS、npm 11.19.0 和 just。',
         'macOS 需要 Xcode Command Line Tools，Linux Computer Use 需要 X11 开发库。',
       ],
       clone: '第 1 步：克隆仓库',

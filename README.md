@@ -27,7 +27,7 @@ Maka runs agents through a native Rust CLI and TUI. A Runtime Host owns executio
 
 ## Run from source
 
-Install Rust 1.98 or newer, Node.js 22.19 or newer, npm 11.19.0 and [just](https://github.com/casey/just). Native Computer Use additionally needs Xcode Command Line Tools on macOS or the X11 development libraries on Linux.
+Install Rust 1.98 or newer, Node.js 24 LTS, npm 11.19.0 and [just](https://github.com/casey/just). Native Computer Use additionally needs Xcode Command Line Tools on macOS or the X11 development libraries on Linux.
 
 ```sh
 git clone https://github.com/apache/maka.git

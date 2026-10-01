@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   },
   "bin": {
     "maka": "bin/maka.mjs"

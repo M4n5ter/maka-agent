@@ -27,7 +27,7 @@
 
 ## 开发
 
-需要 Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0、just、cargo-nextest 和 Python 3。许可证清单检查还需要 cargo-deny。
+需要 Rust 1.98 或更新版本、Node.js 24 LTS、npm 11.19.0、just、cargo-nextest 和 Python 3。许可证清单检查还需要 cargo-deny。
 
 常用任务统一使用 [just](https://github.com/casey/just)。推荐通过包管理器安装（macOS：`brew install just`），也可运行 `cargo install --locked just`。Windows 还需将 Git for Windows 的 `sh` 加入 `PATH`。
 

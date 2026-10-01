@@ -27,7 +27,7 @@ Maka 使用原生 Rust CLI 和 TUI 运行 Agent。Runtime Host 统一管理执�
 
 ## 从源码运行
 
-需要 Rust 1.98 或更新版本、Node.js 22.19 或更新版本、npm 11.19.0 和 [just](https://github.com/casey/just)。原生 Computer Use 在 macOS 需要 Xcode Command Line Tools，在 Linux 需要 X11 开发库。
+需要 Rust 1.98 或更新版本、Node.js 24 LTS、npm 11.19.0 和 [just](https://github.com/casey/just)。原生 Computer Use 在 macOS 需要 Xcode Command Line Tools，在 Linux 需要 X11 开发库。
 
 ```sh
 git clone https://github.com/apache/maka.git
