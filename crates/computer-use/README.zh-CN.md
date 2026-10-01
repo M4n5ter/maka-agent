@@ -90,12 +90,13 @@ extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅�
 
 原生覆盖层运行在同一 CLI/service 可执行文件的私有显示子进程中，只接收有界绘制命令；
 macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参与布局、命中测试和 AX
-的装饰层，空闲后自动删除。Session/reset 清理自己的光标，Host 退出回收显示进程。
+的装饰层。自动输入反馈会先等待光标到达；显示失败不阻止输入。空闲时保留光标，
+Session/reset 清理自己的光标，Host 退出回收显示进程。
 原生 macOS 当前沿用上游主屏渲染；Windows 已在真实交互桌面验收，X11 在独立 Xvfb
 显示器中验证，未启用 Wayland 覆盖层。多个图案不会隔离操作系统键盘、焦点或输入法。
 
 Linux 构建需要 X11、Xi、Xtst 开发库；Windows MSVC 构建还需要对应的 Spectre CRT 库。
-当前固定 [M4n5ter 的 Cua fork](https://github.com/M4n5ter/cua) 提交
+当前固定 [maka-agent 维护的 Cua fork](https://github.com/maka-agent/cua) 提交
 `2af03305efd8e713f833dcaed1f247f4f616eca5`，让光标到达通知在渲染后发出，
 关闭减弱动画模式下的回弹，并修复 X11 跨分块重复标签和字形接缝
 （[上游 PR](https://github.com/trycua/cua/pull/4260)）。

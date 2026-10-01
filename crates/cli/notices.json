@@ -1,7 +1,7 @@
 {
   "inputs": {
-    "Cargo.lock": "7b516d988b1aace6a09d648797ec9690f5341e8dd16afc3d2c238a5de024d825",
-    "Cargo.toml": "a03ff75f5896a8677e5098c9ecdf4aa4bdd544b6f6da5c7168d431ae34a40465",
+    "Cargo.lock": "868bb6d57703f74a7efa001d0dae3a94ea9233d7d4e0a09ebbeb77108999b8ca",
+    "Cargo.toml": "8b05c8e3fb30448e85354daa9cc3c9b9dc57af09f73f46edcc647ade5631bf22",
     "crates/acp/Cargo.toml": "ec8063c582a78f23c769b41049a7ddbbaae77c7448b61e66c27588265c9c6de9",
     "crates/agent/Cargo.toml": "3f7e5c7bf16591dee2b13be943f6df7a66961a81a615b7ed3484c0f4a0c41fbd",
     "crates/apply-patch/Cargo.toml": "ae6cee922934258aed6416316cacc7d11124fdcd2558547d11459cd5524184e2",
@@ -10,8 +10,8 @@
     "crates/cli/Cargo.toml": "a1002bc881887334453163ecfb55a016f428ce1448202fbfeef3b6f4509729d6",
     "crates/client-capability/Cargo.toml": "410fd844a1f883ad02b6dda7cf50f457186737b30054e84b1358d8a0f7ad711b",
     "crates/client/Cargo.toml": "a64f86196f71100b4c21fa3c32180105953907c22c178bb59b233ca0b72f7c7a",
-    "crates/computer-use/Cargo.toml": "3bfa4cd2d7d5c4a26a3e3a03f0b0a4d2ad06eadcae87068e9e9f02c816cd3163",
-    "crates/computer-use/THIRD_PARTY_NOTICES": "4eb0bee74c2140b81200fbd9bf0afd89674613a2da4194608bd449d64c569b25",
+    "crates/computer-use/Cargo.toml": "29b402ccbc325a3440e0513a4d92ae3f82da10a803cb708da00b60583014b4a5",
+    "crates/computer-use/THIRD_PARTY_NOTICES": "709951ed2ee5c4b9ed933f375a37c5b15ec0efa2dea340dc0f289906d72a7bde",
     "crates/config/Cargo.toml": "0fa7ee6c33bc16f7d4b35638401141b2223d92f0816322fa914f1e8aa27a6249",
     "crates/event-log/Cargo.toml": "3d33e27ae3743ca3e7a66be0320aea9dfb32ecf2c28c8904b8ac4524e3736893",
     "crates/external-agent/Cargo.toml": "f51638e1f8b09105975b58c94f6278e77463ba91aa5884207afc85596df5387f",
@@ -63,12 +63,12 @@
     "scripts/rust/licenses/declared-mit.txt": "64b7f750f9d400b9635353034dbc015638ded8dbdeb2c79ae555e1a6ef9cf314",
     "scripts/rust/licenses/selectors-0.38.0.txt": "d040d92f5deb344505a902a2442a75e99c7a2057f836d96150664c9310ceeed4",
     "scripts/rust/notices-sources.json": "e5fbe5fc01d40b54dcdd91eb454260c1a8e83c90cc71867be9a98d245b095c14",
-    "scripts/rust/notices.mjs": "9f31206427455cdd76171a927015bb6a5c52d24a341394906b9eb32af230136f",
+    "scripts/rust/notices.mjs": "397ab461be008c17fb9204c1aec297bdbc60cfa5722b15b97722164e3434f7a5",
     "scripts/rust/v8-cache.mjs": "7b54f331b2a3f9b71bb7d72fc9eac260c47c2e157b84917fad6284452a7714f5",
     "scripts/rust/v8-notices.mjs": "b97838d131fc81bc547cec0994a357fa8a4d36c94ea418ebaedc75bedf291e37",
     "scripts/rust/v8-prebuilt.mjs": "3500ad76d885b3490f2ead8f0f4138f26be384837f4f1fb6913261e9e0e37e90",
     "scripts/rust/v8-prebuilts.json": "44e8700ccdbda523b1bc0a47a2cdfc26e4c6bc355572dde05a7f10474896cb89",
     "scripts/rust/v8-source.json": "c8bac739fa6361d8c3ca5f7e30021241f5d6cd9e4dc2c1183b97d96c05a59c11"
   },
-  "sha256": "1cbeca09c9478537baa977e300af118592bad75acf906f788a839f255e4b4686"
+  "sha256": "1213d088b8d0132c0d46fd852056336f72a295bf0a6b6219370eb6642eda68c7"
 }

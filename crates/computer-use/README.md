@@ -20,7 +20,7 @@
 # Computer Use
 
 Maka owns the Computer Use object API and an isolated, persistent JavaScript REPL.
-Cua supplies native platform code, pinned to the [M4n5ter fork](https://github.com/M4n5ter/cua)
+Cua supplies native platform code, pinned to the [Maka-maintained fork](https://github.com/maka-agent/cua)
 at `2af03305efd8e713f833dcaed1f247f4f616eca5` for rendered cursor-arrival acknowledgements,
 reduced-motion movement without a spring, and the X11 cursor badge fix
 ([upstream PR](https://github.com/trycua/cua/pull/4260)).
@@ -152,9 +152,10 @@ or public socket. macOS owns AppKit on that child's main thread. Library hosts c
 `cursor::bootstrap()` at process entry or pass a trusted, compatible executable through
 `Driver::with_cursor_executable`. Renderer failure leaves input outcomes unchanged;
 configuration explicitly permits retry after a failure.
-Automatic native feedback uses a bounded display queue and drops stale cues; it
-does not wait for rendering before dispatching input. Explicit cursor movement and
-state queries await a response. Visibility describes the target's rendered surface,
+Automatic native feedback awaits the renderer's cursor-arrival acknowledgement
+before dispatching input. Display failure remains best effort and does not prevent
+input. Explicit cursor movement and state queries also await a response.
+Visibility describes the target's rendered surface,
 which may still be covered by another window or an inactive browser tab.
 
 CDP renders the same artwork in an isolated world with a decorative, fixed-position

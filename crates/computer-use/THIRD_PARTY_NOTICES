@@ -1,6 +1,6 @@
 Cua Driver Rust SDK and its workspace crates
 Source: https://github.com/trycua/cua
-Fork: https://github.com/M4n5ter/cua
+Fork: https://github.com/maka-agent/cua
 Revision: 2af03305efd8e713f833dcaed1f247f4f616eca5
 Based on upstream 7a0fe0b0ba6c58de586c863d79ef41976233b1e7 with an X11 cursor
 badge viewport and clipped-glyph fix.

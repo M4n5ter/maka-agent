@@ -229,7 +229,7 @@ export async function generateNotices(root = repository) {
           }),
         )
       ).filter(Boolean);
-      if (pkg.source.includes('github.com/M4n5ter/cua')) {
+      if (pkg.source.includes('github.com/maka-agent/cua')) {
         add(
           component,
           source,
