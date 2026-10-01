@@ -84,6 +84,30 @@ pub struct MenuItem<M> {
 }
 
 #[derive(Clone)]
+pub struct Menu<M> {
+    pub identity: String,
+    pub items: Vec<MenuItem<M>>,
+}
+impl<M> Menu<M> {
+    pub fn map<N>(self, f: &dyn Fn(M) -> N) -> Menu<N> {
+        Menu {
+            identity: self.identity,
+            items: self
+                .items
+                .into_iter()
+                .map(|item| MenuItem {
+                    key: item.key,
+                    label: item.label,
+                    action: f(item.action),
+                    enabled: item.enabled,
+                    role: item.role,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum On<M> {
     /// Local collection controls share one state with their presenter.
     Collection(super::collection::Control<M>),
@@ -168,6 +192,7 @@ pub struct Node<M> {
     pub size: Size,
     pub kind: Kind<M>,
     pub on: Option<On<M>>,
+    pub context_menu: Option<Menu<M>>,
     pub enabled: bool,
     /// The chosen item of a selection group; independent of keyboard focus.
     pub current: bool,
@@ -226,6 +251,7 @@ impl<M> Node<M> {
             size: Size::Content,
             kind,
             on: None,
+            context_menu: None,
             enabled: true,
             current: false,
             follow_focus: false,
@@ -234,6 +260,12 @@ impl<M> Node<M> {
             hint: None,
             role: None,
         }
+    }
+    /// Secondary actions belong to the same object without replacing its
+    /// primary click, keyboard activation, focus or selection semantics.
+    pub fn context_menu(mut self, menu: Menu<M>) -> Self {
+        self.context_menu = (!menu.items.is_empty()).then_some(menu);
+        self
     }
     pub fn column(key: impl Into<Cow<'static, str>>, children: Vec<Node<M>>) -> Self {
         Self::new(key, Kind::Column { children, gap: 0 })
@@ -439,6 +471,7 @@ impl<M> Node<M> {
             size: self.size,
             kind,
             on,
+            context_menu: self.context_menu.map(|menu| menu.map(f)),
             enabled: self.enabled,
             current: self.current,
             follow_focus: self.follow_focus,

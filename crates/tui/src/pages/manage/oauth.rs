@@ -45,9 +45,21 @@ impl Choice {
     fn label(&self) -> String {
         format!(
             "{} · {}",
-            self.provider.descriptor.label,
+            self.protocol_label()
+                .unwrap_or(&self.provider.descriptor.label),
             self.authentication().label
         )
+    }
+    fn protocol_label(&self) -> Option<&'static str> {
+        if self.provider.identity.package_id != "maka.providers" {
+            return None;
+        }
+        match self.provider.identity.name.as_str() {
+            "openai-compatible" => Some("Chat Completions"),
+            "openai-responses-compatible" => Some("Responses"),
+            "anthropic-compatible" => Some("Anthropic Messages"),
+            _ => None,
+        }
     }
     fn authentication(&self) -> &maka_protocol::model_provider::Method {
         &self.provider.descriptor.authentication[self.method]
@@ -57,6 +69,7 @@ impl Choice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     PickProvider,
+    Anonymous,
     BackProvider,
     Provider(usize),
     Identity,
@@ -73,6 +86,7 @@ impl Command {
         match self {
             Self::PickProvider | Self::Provider(_) => "onboard-provider",
             Self::BackProvider => "onboard-back",
+            Self::Anonymous => "connection-add-anonymous",
             Self::Identity => "oauth-identity",
             Self::Field(0) => "oauth-name",
             Self::Field(1) => "oauth-slug",
@@ -176,7 +190,7 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Reque
 #[derive(Default)]
 pub struct State {
     root: String,
-    provider: usize,
+    provider: Option<usize>,
     picker: crate::providers::picker::Picker,
     choices: Vec<Choice>,
     existing: Option<maka_protocol::configuration::ConnectionCredentialTarget>,
@@ -207,7 +221,7 @@ impl State {
         if self.attempt.is_some() {
             "oauth-resume"
         } else {
-            "oauth-title"
+            "connection-add"
         }
     }
 
@@ -335,8 +349,14 @@ impl State {
                 })
             })
             .collect();
-        self.provider = 0;
-        if let Some(choice) = self.choices.first() {
+        self.provider = self
+            .existing
+            .as_ref()
+            .and_then(|_| (!self.choices.is_empty()).then_some(0));
+        if self.existing.is_none() {
+            self.picker.open();
+        }
+        if let Some(choice) = self.provider.and_then(|index| self.choices.get(index)) {
             self.identity.configure(choice, self.existing.as_ref());
             self.identity.expanded = !choice.authentication().interactive;
         }
@@ -349,8 +369,8 @@ impl State {
         })
     }
     fn provider_name(&self) -> String {
-        self.choices
-            .get(self.provider)
+        self.provider
+            .and_then(|index| self.choices.get(index))
             .map(Choice::label)
             .unwrap_or_else(|| {
                 self.attempt
@@ -481,8 +501,18 @@ impl App {
         {
             return false;
         }
+        if command == Command::Anonymous {
+            return state.picker.open
+                && state.attempt.is_none()
+                && state.existing.is_none()
+                && self
+                    .providers
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.descriptor.anonymous);
+        }
         if command == Command::BackProvider {
-            return state.picker.open;
+            return state.picker.open && state.provider.is_some();
         }
         if state.picker.open && !matches!(command, Command::Provider(_)) {
             return false;
@@ -507,7 +537,7 @@ impl App {
             // availability answer is kept only for the provider it was for.
             _ if state.requested.is_some() => false,
             Command::PickProvider => !state.choices.is_empty() && state.attempt.is_none(),
-            Command::BackProvider => false,
+            Command::BackProvider | Command::Anonymous => false,
             Command::Provider(index) => {
                 index < state.choices.len() && state.attempt.is_none() && state.picker.offers(index)
             }
@@ -532,10 +562,10 @@ impl App {
             Command::BackProvider => state.picker.open = false,
             Command::Provider(index) => {
                 state.picker.open = false;
-                if state.provider == index {
+                if state.provider == Some(index) {
                     return None;
                 }
-                state.provider = index;
+                state.provider = Some(index);
                 state
                     .identity
                     .configure(&state.choices[index], state.existing.as_ref());
@@ -544,13 +574,17 @@ impl App {
                 state.enrollment = None;
                 state.error = None;
             }
+            Command::Anonymous => {
+                self.apply(Action::Manage(Manage::Close));
+                return self.apply(Action::Onboard(crate::pages::onboarding::Command::Open));
+            }
             Command::Identity => {
                 state.identity.expanded = !state.identity.expanded;
                 state.identity.invalidate_geometry();
             }
             Command::Field(_) => {}
             Command::Begin => {
-                let choice = state.choices.get(state.provider)?;
+                let choice = state.choices.get(state.provider?)?;
                 let start = state.identity.start(choice, state.existing.as_ref()).ok()?;
                 state.connection_label = match &start.target {
                     LoginTarget::Create { name, slug, .. } => format!("{name} · {slug}"),
@@ -603,7 +637,12 @@ impl App {
             requested
         } else if state.next_poll.is_some_and(|time| time <= Instant::now()) {
             Operation::Query
-        } else if visible && state.attempt.is_none() && state.error.is_none() {
+        } else if visible
+            && state.provider.is_some()
+            && !state.picker.open
+            && state.attempt.is_none()
+            && state.error.is_none()
+        {
             if !state.ready {
                 Operation::Publish
             } else if state.enrollment.is_none() {
@@ -622,9 +661,14 @@ impl App {
             epoch: epoch.clone(),
             call: match operation {
                 Operation::Publish => Call::Publish,
-                Operation::Enrollment => {
-                    Call::Enrollment(state.choices.get(state.provider)?.provider.identity.clone())
-                }
+                Operation::Enrollment => Call::Enrollment(
+                    state
+                        .choices
+                        .get(state.provider?)?
+                        .provider
+                        .identity
+                        .clone(),
+                ),
                 Operation::Start => Call::Start(Box::new(state.prepared.take()?)),
                 Operation::Query | Operation::Cancel => {
                     let observation = Observation {
@@ -677,7 +721,7 @@ impl App {
             // The choice changed while asking: the current one is asked next.
             Ok(Output::Enrollment(enrollment)) => {
                 if matches!(&request.call, Call::Enrollment(provider)
-                    if state.choices.get(state.provider).is_some_and(|choice| choice.provider.identity == *provider))
+                    if state.provider.and_then(|index| state.choices.get(index)).is_some_and(|choice| choice.provider.identity == *provider))
                 {
                     state.enrollment = Some(enrollment.enabled);
                 }
@@ -816,6 +860,8 @@ mod tests {
         };
         let action = app.oauth_commands()[0].0.clone();
         app.apply(action);
+        render(&mut app, 80, 24);
+        app.apply(Action::Manage(Manage::Oauth(Command::Provider(0))));
         app
     }
 
@@ -831,6 +877,92 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn new_connection_panel_exposes_protocols_and_builds_exact_provider_inputs() {
+        let protocols = [
+            ("openai-compatible", "Chat Completions"),
+            ("openai-responses-compatible", "Responses"),
+            ("anthropic-compatible", "Anthropic Messages"),
+        ];
+        for (selected, (expected, _)) in protocols.iter().enumerate() {
+            let mut app = App::new(
+                "/unused".into(),
+                I18n::new(LocalePreference::Explicit(Locale::En), Locale::En),
+            );
+            app.connection = ConnectionState::Connected {
+                root_id: "root".into(),
+                epoch: "epoch".into(),
+            };
+            app.apply(Action::Visit(Route::Connections));
+            let mut entries: Vec<_> = protocols.iter().map(|(name, _)| {
+                let mut entry = crate::providers::fixtures::entry(name, false);
+                entry.identity.package_id = "maka.providers".into();
+                entry.identity.entry_id = "maka.providers".into();
+                entry.descriptor.anonymous = false;
+                entry.descriptor.configuration_schema = serde_json::json!({"type":"object","properties":{"baseUrl":{"type":"string","minLength":1}},"required":["baseUrl"],"additionalProperties":false});
+                entry.descriptor.configuration_defaults = serde_json::json!({});
+                entry
+            }).collect();
+            entries.push(crate::providers::fixtures::entry("Subscription", true));
+            entries.push(crate::providers::fixtures::entry("API provider", false));
+            let generation = app.providers.query().unwrap();
+            app.providers.complete(
+                generation,
+                Ok(maka_client::ProviderDirectory {
+                    revision: 1,
+                    entries,
+                }),
+            );
+            let adds: Vec<_> = app
+                .connection_actions()
+                .into_iter()
+                .filter(|action| crate::view::icon(&app, action) == "+")
+                .collect();
+            assert_eq!(adds.len(), 1);
+            app.apply(adds[0].clone());
+            let text = render(&mut app, 120, 40);
+            assert!(text.contains("Custom protocol") && text.contains("Subscription account"));
+            for (_, label) in protocols {
+                assert!(text.contains(label));
+            }
+            assert!(
+                app.oauth_request().is_none(),
+                "opening the chooser cannot start or prepare authentication"
+            );
+            assert!(!app.oauth_enabled(Command::Begin));
+            let narrow = render(&mut app, 48, 24);
+            assert!(narrow.contains("Add model connection"));
+            assert!(narrow.contains("Custom protocol"));
+            render(&mut app, 120, 40);
+            act(&mut app, Command::Provider(selected));
+            let text = render(&mut app, 120, 40);
+            assert!(text.contains("Base URL"));
+            assert_eq!(app.management.oauth.identity.fields[2].text(), "");
+            app.management.oauth.identity.fields[2].insert("https://relay.example/v1");
+            app.management.oauth.identity.fields[3].insert("example-key");
+            let state = &app.management.oauth;
+            let choice = &state.choices[selected];
+            let request = state.identity.start(choice, None).unwrap();
+            let LoginTarget::Create {
+                provider,
+                configuration,
+                ..
+            } = request.target
+            else {
+                panic!("new connection")
+            };
+            assert_eq!(provider.name, *expected);
+            assert_eq!(
+                configuration,
+                serde_json::json!({"baseUrl":"https://relay.example/v1"})
+            );
+            assert_eq!(
+                request.authentication.input,
+                serde_json::json!({"apiKey":"example-key"})
+            );
+        }
     }
 
     #[test]
@@ -857,7 +989,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         render(&mut app, 80, 24);
-        assert_eq!(app.management.oauth.provider, 3);
+        assert_eq!(app.management.oauth.provider, Some(3));
         assert!(!app.management.oauth.picker.open);
         let name = app.management.oauth.identity.fields[0].text().to_owned();
         app.apply(Action::Manage(Manage::Oauth(Command::PickProvider)));
@@ -867,11 +999,11 @@ mod tests {
         assert!(app.layer.rect("providers/rows/1").is_some());
         app.input(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         render(&mut app, 80, 24);
-        assert_eq!(app.management.oauth.provider, 3);
+        assert_eq!(app.management.oauth.provider, Some(3));
         assert_eq!(app.management.oauth.identity.fields[0].text(), name);
         assert!(!app.oauth_enabled(Command::Provider(1)));
         app.apply(Action::Manage(Manage::Oauth(Command::Provider(1))));
-        assert_eq!(app.management.oauth.provider, 3);
+        assert_eq!(app.management.oauth.provider, Some(3));
     }
 
     fn login(app: &App, phase: Phase) -> LoginProjection {
@@ -947,6 +1079,8 @@ mod tests {
         app.providers = crate::providers::fixtures::catalog();
         app.oauth_catalog_loaded();
         assert!(!app.management.oauth.choices.is_empty());
+        render(&mut app, 80, 24);
+        act(&mut app, Command::Provider(0));
         // Client publication/admission is covered by the wire test below. Here
         // the already-published service is a fixed prerequisite for UI states.
         app.management.oauth.ready = true;
@@ -1087,6 +1221,8 @@ mod tests {
         app.apply(app.oauth_commands()[0].0.clone());
         render(&mut app, 80, 24);
         act(&mut app, Command::New);
+        render(&mut app, 80, 24);
+        act(&mut app, Command::Provider(2));
         let enrollment = app.oauth_request().unwrap();
         assert_eq!(enrollment.operation(), Operation::Enrollment);
         app.oauth_completed(
@@ -1222,6 +1358,8 @@ mod tests {
             epoch: "epoch".into(),
         };
         app.apply(app.oauth_commands()[0].0.clone());
+        render(&mut app, 80, 24);
+        act(&mut app, Command::Provider(0));
         let mut service = rpc(
             &mut app,
             &client,

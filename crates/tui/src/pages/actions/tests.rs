@@ -235,34 +235,55 @@ fn normal_header_menu_marks_the_message_exposed_by_the_current_draw() {
 
 #[test]
 fn connection_row_menu_keeps_its_own_target_while_another_row_is_selected() {
-    let mut app = app(Locale::En);
-    app.apply(Action::Visit(Route::Connections));
-    app.providers = crate::providers::fixtures::catalog();
-    app.connections.refresh();
-    app.connections.query().unwrap();
-    let provider = crate::providers::fixtures::entry("openai-compatible", false).identity;
-    app.connections.complete(Ok(serde_json::json!({"kind":"page","revision":1,"connectionCount":2,"nextCursor":null,"defaultTarget":null,
+    for right in [false, true] {
+        let mut app = app(Locale::En);
+        app.apply(Action::Visit(Route::Connections));
+        app.providers = crate::providers::fixtures::catalog();
+        app.connections.refresh();
+        app.connections.query().unwrap();
+        let provider = crate::providers::fixtures::entry("openai-compatible", false).identity;
+        app.connections.complete(Ok(serde_json::json!({"kind":"page","revision":1,"connectionCount":2,"nextCursor":null,"defaultTarget":null,
         "items": [
             {"kind":"connection","connectionIndex":0,"connectionId":"a","revision":1,"slug":"a","name":"First","provider":provider,"configuration":{},"requestBodyOverlay":{},"enabled":true,"enabledModelIdCount":0},
             {"kind":"connection","connectionIndex":1,"connectionId":"b","revision":1,"slug":"b","name":"Second","provider":provider,"configuration":{},"requestBodyOverlay":{},"enabled":true,"enabledModelIdCount":0}
         ]})));
-    draw(&mut app, 80);
-    assert_eq!(app.connections.selected.as_deref(), Some("a"));
-    let menu = app
-        .connections
-        .surface
-        .rect("connections/rows/b/actions")
-        .unwrap();
-    app.input(click(menu));
-    let terminal = draw(&mut app, 80);
-    app.input(click(locate(
-        &terminal,
-        &app.i18n.text("connection-rename"),
-    )));
-    assert!(app.management.dialog.as_ref().is_some_and(
-        |dialog| matches!(&dialog.target.entity, Entity::Connection(row) if row.id == "b")
-    ));
-    assert!(app.palette.is_none());
+        draw(&mut app, 80);
+        assert_eq!(app.connections.selected.as_deref(), Some("a"));
+        let menu = app
+            .connections
+            .surface
+            .rect(if right {
+                "connections/rows/b/summary"
+            } else {
+                "connections/rows/b/actions"
+            })
+            .unwrap();
+        let before = app.focus;
+        let event = if right {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Right),
+                column: menu.x,
+                row: menu.y,
+                modifiers: KeyModifiers::NONE,
+            })
+        } else {
+            click(menu)
+        };
+        app.input(event);
+        assert_eq!(app.connections.selected.as_deref(), Some("a"));
+        if right {
+            assert_eq!(app.focus, before);
+        }
+        let terminal = draw(&mut app, 80);
+        app.input(click(locate(
+            &terminal,
+            &app.i18n.text("connection-rename"),
+        )));
+        assert!(app.management.dialog.as_ref().is_some_and(
+            |dialog| matches!(&dialog.target.entity, Entity::Connection(row) if row.id == "b")
+        ));
+        assert!(app.palette.is_none());
+    }
 }
 
 #[test]
@@ -402,4 +423,211 @@ fn reader_rebase_between_menu_paint_and_click_cannot_copy_another_message() {
         };
         assert!(!target.current(&app));
     }
+}
+
+#[test]
+fn composer_context_menu_preserves_selection_and_revalidates_clipboard_results() {
+    use super::native::Edit;
+    let mut app = session(Locale::En);
+    app.focus = Focus::Composer;
+    app.drafts.get_mut("chat").unwrap().select_all();
+    draw(&mut app, 80);
+    let original = app.drafts["chat"].text().to_owned();
+    let area = app
+        .chrome
+        .composer
+        .rect("composer/body/content/editor")
+        .unwrap();
+    let right = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: area.x,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.input(right.clone());
+    draw(&mut app, 80);
+    assert!(app.chrome.context.captures());
+    assert_eq!(app.focus, Focus::Composer);
+    app.input(Event::Resize(80, 12));
+    let mut small = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    small
+        .draw(|frame| crate::view::draw(frame, &mut app))
+        .unwrap();
+    assert!(
+        app.chrome.context.captures(),
+        "a visible composer keeps its menu after resize"
+    );
+    let terminal = draw(&mut app, 80);
+    assert!(
+        app.input(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL
+        )))
+        .1
+        .is_none()
+    );
+    app.input(Event::Paste("must not edit".into()));
+    assert_eq!(app.drafts["chat"].text(), original);
+    let (_, effect) = app.input(click(locate(&terminal, "Copy")));
+    let Some(Action::EditComposer(target)) = effect else {
+        panic!("editor copy must carry its target")
+    };
+    assert_eq!(target.command, Edit::Copy);
+    assert_eq!(target.text(&app).as_deref(), Some(original.as_str()));
+    app.input(right.clone());
+    let terminal = draw(&mut app, 80);
+    let copy = locate(&terminal, "Copy");
+    app.drafts.get_mut("chat").unwrap().insert("replacement");
+    assert!(app.input(click(copy)).1.is_none());
+    assert_eq!(app.drafts["chat"].text(), "replacement");
+    app.drafts.get_mut("chat").unwrap().select_all();
+    draw(&mut app, 80);
+    app.input(right);
+    let terminal = draw(&mut app, 80);
+    let label = if cfg!(any(target_os = "macos", windows)) {
+        "Cut"
+    } else {
+        "Copy"
+    };
+    let Some(Action::EditComposer(mut target)) = app.input(click(locate(&terminal, label))).1
+    else {
+        panic!("clipboard edit")
+    };
+    // Completion gates are platform-independent; native Cut is offered only
+    // where a confirmed clipboard writer is safe for the terminal.
+    target.command = Edit::Cut;
+    assert!(!target.cut_completed(&mut app, Err("chat-copy-failed")));
+    assert_eq!(app.drafts["chat"].text(), "replacement");
+    assert!(target.cut_completed(&mut app, Ok(())));
+    assert!(app.drafts["chat"].text().is_empty());
+    app.input(Event::Key(KeyEvent::new(
+        KeyCode::Char('z'),
+        KeyModifiers::CONTROL,
+    )));
+    assert_eq!(app.drafts["chat"].text(), "replacement");
+    app.drafts.get_mut("chat").unwrap().insert("new draft");
+    assert!(!target.cut_completed(&mut app, Ok(())));
+    assert_eq!(app.drafts["chat"].text(), "new draft");
+}
+
+#[test]
+fn hiding_the_sidebar_retires_its_context_menu() {
+    for shrink in [false, true] {
+        let mut app = session(Locale::En);
+        app.chrome.sidebar_expanded = Some(true);
+        draw(&mut app, 120);
+        let point = app
+            .sidebar
+            .surface
+            .rect("sidebar/list/rows/session-chat")
+            .unwrap();
+        app.input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: point.x,
+            row: point.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        draw(&mut app, 120);
+        assert!(app.sidebar.surface.captures());
+        if !shrink {
+            app.input(Event::Key(KeyEvent::new(
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL,
+            )));
+        }
+        draw(&mut app, if shrink { 48 } else { 120 });
+        assert!(!app.sidebar.surface.captures());
+        app.focus = Focus::Composer;
+        app.input(Event::Paste(" visible".into()));
+        assert!(app.drafts["chat"].text().ends_with(" visible"));
+    }
+}
+
+#[test]
+fn transcript_context_copy_uses_the_pointed_message_without_changing_selection() {
+    use crate::ui::transcript::{MessageKey, Part};
+    let mut app = session(Locale::En);
+    app.chat.select(&Route::Session("chat".into()));
+    app.chat.snapshot=Some(maka_protocol::subscription::decode_session_observation_snapshot(&serde_json::json!({
+        "schemaVersion":5,"session":{"sessionId":"chat","metadataRevision":1,"status":"active","createdAt":0,"isArchived":false},
+        "projectionRevision":1,"rootTurn":null,"goal":null,"queue":{"hostEpoch":"epoch","queueRevision":0,"steering":[],"followup":[]},"interactions":{"pending":[]}
+    })).unwrap());
+    app.chat.fixture_rows(std::collections::BTreeMap::from([
+        (1,serde_json::json!({"type":"user","id":"a","turnId":"turn","text":"First message"})),
+        (2,serde_json::json!({"type":"assistant","id":"b","turnId":"turn","text":"Second target message"})),
+    ]));
+    draw(&mut app, 80);
+    let selected = MessageKey::new("turn", "a", Part::Text);
+    app.chat.view.select(selected.clone());
+    let terminal = draw(&mut app, 80);
+    let point = locate(&terminal, "Second target message");
+    app.input(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: point.x,
+        row: point.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    let terminal = draw(&mut app, 80);
+    assert!(app.chrome.context.captures());
+    assert_eq!(app.chat.view.selection(), Some(selected.clone()));
+    let Some(Action::CopyMessage { target, mode }) =
+        app.input(click(locate(&terminal, "Copy as Markdown"))).1
+    else {
+        panic!("message copy target")
+    };
+    assert_eq!(target.text(&app, mode).unwrap(), "Second target message");
+    assert_eq!(app.chat.view.selection(), Some(selected));
+}
+
+#[test]
+fn history_context_disclosure_stays_in_its_preview_reader() {
+    use crate::ui::transcript::{MessageKey, Part, search::Command};
+    let rows = std::collections::BTreeMap::from([(
+        1,
+        serde_json::json!({
+            "type":"assistant", "id":"a", "turnId":"turn",
+            "text":"Preview message\n".repeat(24)
+        }),
+    )]);
+    let prepare = || {
+        let mut app = session(Locale::En);
+        app.chat.select(&Route::Session("chat".into()));
+        app.chat.snapshot=Some(maka_protocol::subscription::decode_session_observation_snapshot(&serde_json::json!({
+            "schemaVersion":5,"session":{"sessionId":"chat","metadataRevision":1,"status":"active","createdAt":0,"isArchived":false},
+            "projectionRevision":1,"rootTurn":null,"goal":null,"queue":{"hostEpoch":"epoch","queueRevision":0,"steering":[],"followup":[]},"interactions":{"pending":[]}
+        })).unwrap());
+        app.chat.fixture_rows(rows.clone());
+        draw(&mut app, 80);
+        app
+    };
+    let mut app = prepare();
+    app.chat.subscription = Some("fixture-subscription".into());
+    let preview = prepare().chat.view;
+    let message = MessageKey::new("turn", "a", Part::Text);
+    assert!(app.chat.view.can_toggle(&message));
+    let main_folded = app.chat.view.folded(&message);
+    app.chat.search_command(Command::Open);
+    app.chat.search_command(Command::Scope);
+    let history = app.chat.history.as_mut().unwrap();
+    history
+        .matches
+        .push(maka_protocol::transcript::TranscriptSearchMatch {
+            sequence: 1,
+            preview: "Result".into(),
+        });
+    history.preview = Some(preview);
+    let terminal = draw(&mut app, 80);
+    let point = locate(&terminal, "Preview message");
+    app.input(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: point.x,
+        row: point.y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    let terminal = draw(&mut app, 80);
+    assert!(app.chrome.context.captures());
+    app.input(click(locate(&terminal, "Collapse message")));
+    assert!(app.chat.history_scope());
+    assert_eq!(app.chat.view.folded(&message), main_folded);
+    assert!(app.chat.reader().unwrap().folded(&message));
 }

@@ -69,9 +69,41 @@ pub(super) fn review(app: &App, key: &'static str, change: Change) -> Node<Comma
         },
     )
 }
-pub(super) fn link(key: String, title: String, place: Place) -> Node<Command> {
+pub(super) fn link(app: &App, key: String, title: String, place: Place) -> Node<Command> {
+    let mut commands = vec![(Command::Visit(place.clone()), "context-open")];
+    match &place {
+        Place::Package(id) => {
+            commands.push((Command::Visit(Place::New(id.clone())), "plugins-create"));
+            commands.push((Command::Visit(Place::Export(id.clone())), "plugins-export"));
+        }
+        Place::Entry(key) => {
+            commands.push((
+                Command::Visit(Place::Configure(key.clone())),
+                "plugins-configure",
+            ));
+            commands.push((
+                Command::Visit(Place::Services(key.clone())),
+                "plugins-services",
+            ));
+        }
+        _ => {}
+    }
+    let menu = crate::ui::Menu {
+        identity: crate::pages::actions::identity(app, &format!("plugin/{place:?}")),
+        items: commands
+            .into_iter()
+            .map(|(action, label)| crate::ui::MenuItem {
+                key: label.into(),
+                label: app.i18n.text(label),
+                enabled: app.plugins_enabled(&action),
+                action,
+                role: Role::Normal,
+            })
+            .collect(),
+    };
     text(key, title, Tone::Normal)
         .on(On::Activate(Command::Visit(place)))
+        .context_menu(menu)
         .clip()
 }
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -301,6 +333,7 @@ fn overview(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
     }
     rows.extend(snapshot.packages.iter().enumerate().map(|(i, p)| {
         link(
+            app,
             format!("package-{i}"),
             safe(&p.display_name),
             Place::Package(p.extension_id.clone()),
@@ -313,6 +346,7 @@ fn overview(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
     ));
     rows.extend(snapshot.entries.iter().enumerate().map(|(i, e)| {
         link(
+            app,
             format!("entry-{i}"),
             format!(
                 "{} · {} · {}",

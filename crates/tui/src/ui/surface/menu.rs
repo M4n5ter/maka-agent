@@ -25,6 +25,8 @@ pub(super) struct Frozen<M> {
     identity: String,
     items: Vec<MenuItem<M>>,
     presented: bool,
+    context: bool,
+    anchor: Option<Position>,
 }
 
 pub(super) fn open<M: Clone>(owner: String, identity: &str, items: &[MenuItem<M>]) -> Popover<M> {
@@ -35,6 +37,8 @@ pub(super) fn open<M: Clone>(owner: String, identity: &str, items: &[MenuItem<M>
             identity: identity.into(),
             items: items.to_vec(),
             presented: false,
+            context: false,
+            anchor: None,
         }),
     }
 }
@@ -83,6 +87,77 @@ impl<M: Clone> Surface<M> {
         true
     }
 
+    /// Owner-drawn text exposes only rectangles from its last painted frame.
+    /// These targets share the ordinary menu lifetime, without creating tabs or
+    /// a second action dispatcher for native editors and transcripts.
+    pub fn context_regions(
+        &mut self,
+        area: Rect,
+        regions: Vec<(String, Rect, crate::ui::Menu<M>)>,
+    ) {
+        let previous = self.committed.take().and_then(|frame| frame.popover);
+        let items = regions
+            .into_iter()
+            .map(|(id, rect, menu)| Item {
+                id,
+                rect: rect.intersection(area),
+                top: i32::from(rect.y),
+                height: rect.height,
+                scroller: None,
+                group: 0,
+                tab_group: None,
+                axis: Axis::Vertical,
+                on: On::Menu {
+                    identity: menu.identity,
+                    items: menu.items,
+                },
+                context_menu: None,
+                enabled: true,
+                current: false,
+                follow_focus: false,
+                submit: None,
+                hint: None,
+                role: None,
+                slot: true,
+                row: None,
+            })
+            .collect();
+        self.committed = Some(Committed {
+            area,
+            items,
+            scrollers: vec![],
+            canvases: vec![],
+            transcripts: vec![],
+            popover: previous,
+        });
+    }
+
+    /// Open secondary actions from the last committed object geometry,
+    /// without selecting the object or moving keyboard focus.
+    pub fn open_context_menu(&mut self, owner: &str, point: Position) -> bool {
+        let Some(item) = self.committed.as_ref().and_then(|frame| {
+            frame
+                .items
+                .iter()
+                .find(|item| item.id == owner && item.enabled && item.rect.contains(point))
+        }) else {
+            return false;
+        };
+        let context = item.context_menu.is_some();
+        let Some((identity, items)) = item.menu(context) else {
+            return false;
+        };
+        if items.is_empty() {
+            return false;
+        }
+        let mut popover = open(owner.into(), identity, items);
+        let frozen = popover.menu.as_mut().unwrap();
+        frozen.context = context;
+        frozen.anchor = Some(point);
+        self.open_popover(popover);
+        true
+    }
+
     pub(super) fn draw_menu(
         &mut self,
         frame: &mut Frame<'_>,
@@ -95,13 +170,14 @@ impl<M: Clone> Surface<M> {
         let current = items
             .iter()
             .find(|item| item.id == popover.owner && item.enabled && !item.rect.is_empty());
-        let Some(owner) = current.filter(|item| matches!(&item.on, On::Menu { identity, items } if *identity == frozen.identity && unique(items))) else {
+        let Some(owner) = current.filter(|item| {
+            item.menu(frozen.context)
+                .is_some_and(|(identity, items)| identity == frozen.identity && unique(items))
+        }) else {
             self.popover = None;
             return None;
         };
-        let On::Menu { items: live, .. } = &owner.on else {
-            unreachable!()
-        };
+        let (_, live) = owner.menu(frozen.context).expect("validated menu owner");
         if frozen.items.is_empty() || !unique(&frozen.items) {
             self.popover = None;
             return None;
@@ -142,6 +218,16 @@ impl<M: Clone> Surface<M> {
             .right()
             .saturating_sub(width)
             .clamp(area.x, area.right().saturating_sub(width));
+        let (x, y) = frozen.anchor.map_or((x, y), |point| {
+            let x = point.x.clamp(area.x, area.right().saturating_sub(width));
+            let y = if point.y.saturating_add(height) <= area.bottom() {
+                point.y
+            } else {
+                point.y.saturating_sub(height).max(area.y)
+            }
+            .clamp(area.y, area.bottom().saturating_sub(height));
+            (x, y)
+        });
         let rect = Rect::new(x, y, width, height);
         let colors = context.colors;
         frame.render_widget(Clear, rect);
@@ -181,7 +267,7 @@ impl<M: Clone> Surface<M> {
                 }
             };
             let mut style = if index == popover.highlighted {
-                colors.focused()
+                colors.current()
             } else {
                 Style::default()
             }
@@ -247,9 +333,16 @@ impl<M: Clone> Surface<M> {
         let Some(row) = frozen.items.get(index).filter(|row| row.enabled) else {
             return Outcome::handled(false);
         };
-        let live = committed.items.iter().find(|owner| owner.id == popover.owner && owner.enabled).is_some_and(|owner| {
-            matches!(&owner.on, On::Menu { identity, items } if *identity == frozen.identity && items.iter().any(|item| item.key == row.key && item.enabled))
-        });
+        let live = committed
+            .items
+            .iter()
+            .find(|owner| owner.id == popover.owner && owner.enabled)
+            .is_some_and(|owner| {
+                owner.menu(frozen.context).is_some_and(|(identity, items)| {
+                    identity == frozen.identity
+                        && items.iter().any(|item| item.key == row.key && item.enabled)
+                })
+            });
         if !live {
             return Outcome::handled(false);
         }

@@ -26,6 +26,13 @@ use crate::{
     view::safe,
 };
 
+pub(crate) struct Choice {
+    pub label: String,
+    pub identity: String,
+    pub group: Option<(u8, String)>,
+    pub action: Action,
+}
+
 /// A local search step over the form's frozen provider inventory.
 #[derive(Default)]
 pub(crate) struct Picker {
@@ -52,39 +59,64 @@ impl Picker {
         &self,
         app: &App,
         key: String,
-        choices: Vec<(String, String, Action)>,
+        choices: Vec<Choice>,
+        title: String,
         back: Action,
         enabled: bool,
     ) -> Sheet<Action> {
+        let mut groups = Vec::new();
+        for choice in &choices {
+            let group = choice.group.clone().unwrap_or((0, "providers".into()));
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+        groups.sort_by_key(|(order, _)| *order);
+        let groups: Vec<_> = groups.into_iter().map(|(_, name)| name).collect();
         self.query.model(
-            vec!["providers".into()],
+            groups.clone(),
             choices
                 .iter()
                 .enumerate()
-                .map(|(index, (label, identity, _))| Entry {
+                .map(|(index, choice)| Entry {
                     key: index.to_string(),
-                    group: "providers".into(),
-                    title: label.clone(),
-                    summary: identity.clone(),
+                    group: choice
+                        .group
+                        .as_ref()
+                        .map_or_else(|| "providers".into(), |(_, name)| name.clone()),
+                    title: choice.label.clone(),
+                    summary: choice.identity.clone(),
                 })
                 .collect(),
             None,
         );
-        let mut rows: Vec<_> = self
-            .query
-            .visible()
-            .iter()
-            .filter_map(|entry| {
-                let index = entry.key.parse::<usize>().ok()?;
-                let (label, _, action) = choices.get(index)?;
-                Some(
-                    Node::text(entry.key.clone(), vec![(safe(label), Tone::Normal)])
+        let visible = self.query.visible();
+        let mut rows = Vec::new();
+        for (section, group) in groups.iter().enumerate() {
+            let entries: Vec<_> = visible
+                .iter()
+                .filter(|entry| &entry.group == group)
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            if group != "providers" {
+                rows.push(Node::text(
+                    format!("section-{section}"),
+                    vec![(group.clone(), Tone::Muted)],
+                ));
+            }
+            for entry in entries {
+                let index = entry.key.parse::<usize>().expect("local picker index");
+                let choice = &choices[index];
+                rows.push(
+                    Node::text(entry.key.clone(), vec![(safe(&choice.label), Tone::Normal)])
                         .clip()
-                        .on(On::Activate(action.clone()))
-                        .enabled(enabled && app.enabled(action)),
-                )
-            })
-            .collect();
+                        .on(On::Activate(choice.action.clone()))
+                        .enabled(enabled && app.enabled(&choice.action)),
+                );
+            }
+        }
         if rows.is_empty() {
             rows.push(Node::text(
                 "empty",
@@ -92,7 +124,7 @@ impl Picker {
             ));
         }
         let height = app.frame_size.map_or(24, |(_, height)| height);
-        Sheet::new(key, app.i18n.text("onboard-provider"))
+        Sheet::new(key, title)
             .body(
                 Node::slot("filter", 1)
                     .on(On::Collection(Control::Query {
@@ -108,7 +140,7 @@ impl Picker {
             )
             .button(
                 "back",
-                app.i18n.text("onboard-back"),
+                crate::view::action_label(app, &back),
                 Role::Normal,
                 back.clone(),
                 true,

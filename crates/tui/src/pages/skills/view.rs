@@ -94,8 +94,22 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                     vec![(format!("[{mark}] {}", safe(&row.name)), Tone::Normal)],
                 )
                 .clip()
-                .on(On::Activate(Action::Skills(Command::Toggle(index))))
-                .enabled(app.skills_enabled(&Command::Toggle(index)))
+                .on(On::Activate(Action::Skills(Command::Toggle(
+                    row.id.clone(),
+                ))))
+                .enabled(app.skills_enabled(&Command::Toggle(row.id.clone())))
+                .context_menu(crate::pages::actions::context(
+                    app,
+                    &format!("skill/{}", row.id),
+                    [(
+                        Action::Skills(Command::Toggle(row.id.clone())),
+                        if mark == " " {
+                            "context-select"
+                        } else {
+                            "context-deselect"
+                        },
+                    )],
+                ))
             })
             .collect();
         let height = app.frame_size.map_or(24, |(_, height)| height);

@@ -125,6 +125,17 @@ impl Editor {
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
+    pub(crate) fn selection_range(&self) -> Range<usize> {
+        self.selection.range()
+    }
+    pub(crate) fn selected_text(&self) -> &str {
+        &self.text[self.selection.range()]
+    }
+    pub(crate) fn select_all(&mut self) {
+        self.selection.anchor = Some(0);
+        self.selection.cursor = self.text.len();
+        self.reveal_cursor();
+    }
     pub fn retained_bytes(&self) -> usize {
         self.text.len() + self.history_bytes + marks::bytes(&self.marks)
     }

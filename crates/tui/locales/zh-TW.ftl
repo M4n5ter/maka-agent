@@ -1508,3 +1508,26 @@ providers-search-hint = 名稱、供應商 ID 或登入方式
 providers-no-matches = 沒有符合的供應商
 
 chat-model-interrupted = 模型請求中斷
+
+connection-add = 新增模型連線
+connection-add-key = API Key
+connection-add-account = 訂閱帳號
+connection-add-anonymous = 本機服務 · 無須認證
+connection-add-custom = 自訂通訊協定
+connection-base-url-required = 請填寫服務的 Base URL。
+connection-authentication-required = 請填寫驗證資訊後繼續。
+
+session-open = 開啟對話
+context-cut = 剪下
+context-cut-copied = 已複製到剪貼簿
+context-copy = 複製
+context-paste = 貼上
+context-select-all = 全選
+context-copy-selection = 複製選取範圍
+context-copy-markdown = 複製為 Markdown
+context-expand = 展開訊息
+context-collapse = 摺疊訊息
+
+context-open = 開啟
+context-select = 選取
+context-deselect = 取消選取

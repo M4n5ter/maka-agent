@@ -70,7 +70,7 @@ pub enum Command {
     Previous,
     Next,
     Selected,
-    Toggle(usize),
+    Toggle(String),
 }
 impl Command {
     pub fn label(&self) -> &'static str {
@@ -171,7 +171,7 @@ impl App {
                 !d.selected_only && !d.loading && d.next.is_some() && d.previous.len() < 128
             }
             Command::Selected => true,
-            Command::Toggle(index) => *index < self.skill_rows().len(),
+            Command::Toggle(id) => self.skill_rows().iter().any(|row| row.id == *id),
             _ => false,
         }
     }
@@ -240,8 +240,8 @@ impl App {
             });
             return;
         }
-        if let Command::Toggle(index) = command {
-            let Some(row) = self.skill_rows().get(index).cloned() else {
+        if let Command::Toggle(id) = command {
+            let Some(row) = self.skill_rows().into_iter().find(|row| row.id == id) else {
                 return;
             };
             let target = self.skills.dialog.as_ref().unwrap().target.clone();
@@ -513,7 +513,7 @@ pub(crate) mod tests {
                 app.input(Event::Resize(30, 12));
                 frame(&mut app, 30, 12);
                 assert!(!app.skills.dialog.as_ref().unwrap().visible);
-                assert!(!app.skills_enabled(&Command::Toggle(0)));
+                assert!(!app.skills_enabled(&Command::Toggle("missing".into())));
                 app.input(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)));
                 frame(&mut app, width, height);
                 app.input(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)));

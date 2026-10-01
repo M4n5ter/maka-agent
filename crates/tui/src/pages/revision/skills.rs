@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(request.session, "source");
         page(&mut app, request, 1, false);
         frame(&mut app, 80, 26);
-        app.apply(Action::Skills(skills::Command::Toggle(0)));
+        app.apply(Action::Skills(skills::Command::Toggle("review-000".into())));
         app.apply(Action::Skills(skills::Command::Close));
         assert!(app.revision.visible);
         let saved = app.revision.checkpoint().unwrap();
@@ -130,7 +130,7 @@ mod tests {
         frame(&mut app, 52, 22);
         app.apply(Action::Skills(skills::Command::Selected));
         frame(&mut app, 52, 22);
-        app.apply(Action::Skills(skills::Command::Toggle(0)));
+        app.apply(Action::Skills(skills::Command::Toggle("review-000".into())));
         assert!(
             app.revision.checkpoint().unwrap().inputs[1]
                 .skills

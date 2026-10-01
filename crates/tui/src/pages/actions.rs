@@ -18,6 +18,7 @@
  */
 
 //! Native object menus: the same domain actions used by ordinary dialogs.
+pub(crate) mod native;
 use crate::{
     app::{Action, App, ConnectionState},
     navigation::Route,
@@ -66,6 +67,17 @@ impl CopyTarget {
             epoch: Self::epoch(app),
             session,
             message: app.chat.reader()?.selection()?,
+        })
+    }
+    fn message(app: &App, message: crate::ui::transcript::MessageKey) -> Option<Self> {
+        let Route::Session(session) = app.navigation.current() else {
+            return None;
+        };
+        Some(Self {
+            root: app.checkpoint_root().into(),
+            epoch: Self::epoch(app),
+            session,
+            message,
         })
     }
     pub(crate) fn current(&self, app: &App) -> bool {
@@ -125,6 +137,17 @@ pub(crate) fn items(
         .collect()
 }
 
+pub(crate) fn context(
+    app: &App,
+    object: &str,
+    commands: impl IntoIterator<Item = (Action, &'static str)>,
+) -> crate::ui::Menu<Action> {
+    crate::ui::Menu {
+        identity: identity(app, object),
+        items: items(app, commands),
+    }
+}
+
 pub(crate) fn menu(
     app: &App,
     key: impl Into<std::borrow::Cow<'static, str>>,
@@ -147,6 +170,21 @@ pub(crate) fn menu(
     })
     .enabled(enabled)
     .hint(app.i18n.text(label))
+}
+
+pub(crate) fn catalog_session_commands(
+    app: &App,
+    item: &maka_protocol::session::SessionCatalogProjection,
+) -> Vec<(Action, &'static str)> {
+    let mut actions = vec![(
+        Action::Visit(Route::Session(item.id.clone())),
+        "session-open",
+    )];
+    actions.extend(app.session_management_commands_for(item));
+    if app.tabs.contains(&item.id) {
+        actions.push((Action::CloseTab(item.id.clone()), "tabs-close"));
+    }
+    actions
 }
 
 pub(crate) fn session_commands(app: &App) -> Vec<(Action, &'static str)> {

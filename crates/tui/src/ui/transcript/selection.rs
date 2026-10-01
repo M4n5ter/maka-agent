@@ -279,6 +279,21 @@ impl Transcript {
             Some((up, now + Duration::from_millis(60)));
         true
     }
+    /// Context actions bind to the painted message, without selecting it or
+    /// disturbing an existing text range. Consecutive lines share one target.
+    pub(crate) fn message_regions(&self) -> Vec<(MessageKey, ratatui::layout::Rect)> {
+        let mut regions: Vec<(MessageKey, ratatui::layout::Rect)> = Vec::new();
+        for line in &self.text_selection.rows {
+            if let Some((key, area)) = regions.last_mut()
+                && *key == line.key
+            {
+                *area = area.union(line.area);
+            } else {
+                regions.push((line.key.clone(), line.area));
+            }
+        }
+        regions
+    }
     fn text_point(&self, column: u16, row: u16, clamp: bool) -> Option<Point> {
         let visible = self
             .text_selection

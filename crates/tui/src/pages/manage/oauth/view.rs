@@ -44,7 +44,15 @@ pub(super) fn row_path(index: usize) -> String {
 }
 
 fn label(app: &App, state: &State, index: usize) -> String {
-    let mut label = app.i18n.text(Command::Field(index).label());
+    let mut label = if index == 2 {
+        match state.identity.configuration_key() {
+            Some("baseUrl") => app.i18n.text("provider-base-url"),
+            Some(key) => safe(key),
+            None => app.i18n.text(Command::Field(index).label()),
+        }
+    } else {
+        app.i18n.text(Command::Field(index).label())
+    };
     if index == 3
         && let Some(field) = state.identity.authentication_field()
     {
@@ -74,24 +82,67 @@ fn label_width(app: &App) -> u16 {
 pub(in crate::pages::manage) fn sheet(app: &App) -> Sheet<Action> {
     let state = &app.management.oauth;
     if state.picker.open {
-        return state.picker.sheet(
+        let initial = state.provider.is_none();
+        let back = if initial {
+            Action::Manage(Manage::Close)
+        } else {
+            action(Command::BackProvider)
+        };
+        let mut sheet = state.picker.sheet(
             app,
             format!("oauth:{}:providers", state.generation),
             state
                 .choices
                 .iter()
                 .enumerate()
-                .map(|(index, choice)| {
-                    (
-                        choice.label(),
-                        choice.provider.identity.name.clone(),
-                        action(Command::Provider(index)),
-                    )
+                .map(|(index, choice)| crate::providers::picker::Choice {
+                    label: choice
+                        .protocol_label()
+                        .map_or_else(|| choice.label(), str::to_owned),
+                    identity: choice.provider.identity.name.clone(),
+                    group: Some(if choice.protocol_label().is_some() {
+                        (0, app.i18n.text("connection-add-custom"))
+                    } else if choice.authentication().interactive {
+                        (1, app.i18n.text("connection-add-account"))
+                    } else {
+                        (2, app.i18n.text("connection-add-key"))
+                    }),
+                    action: action(Command::Provider(index)),
                 })
                 .collect(),
-            action(Command::BackProvider),
-            app.oauth_enabled(Command::BackProvider),
+            app.i18n.text(if initial {
+                "connection-add"
+            } else {
+                "onboard-provider"
+            }),
+            back,
+            app.management
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.visible),
         );
+        if state.choices.is_empty() && (app.providers.loading() || app.providers.failed()) {
+            sheet = sheet.text(
+                "availability",
+                &app.i18n.text(if app.providers.failed() {
+                    "providers-failed"
+                } else {
+                    "providers-loading"
+                }),
+                Tone::Subtle,
+            );
+        }
+        if initial && app.oauth_enabled(Command::Anonymous) {
+            sheet = sheet.body(
+                Node::text(
+                    "anonymous",
+                    vec![(app.i18n.text("connection-add-anonymous"), Tone::Accent)],
+                )
+                .clip()
+                .on(On::Activate(action(Command::Anonymous))),
+            );
+        }
+        return sheet;
     }
     let step = if state.terminal() || state.not_found {
         "done"

@@ -73,6 +73,7 @@ pub(super) fn package(app: &App, snapshot: &Snapshot, id: &str, rows: &mut Vec<N
             .enumerate()
             .map(|(i, e)| {
                 link(
+                    app,
                     format!("instance-{i}"),
                     format!(
                         "{} · {} · {}",

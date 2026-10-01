@@ -81,14 +81,14 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                 f.providers
                     .iter()
                     .enumerate()
-                    .map(|(index, provider)| {
-                        (
-                            provider.descriptor.label.clone(),
-                            provider.identity.name.clone(),
-                            action(Command::Provider(index)),
-                        )
+                    .map(|(index, provider)| crate::providers::picker::Choice {
+                        label: provider.descriptor.label.clone(),
+                        identity: provider.identity.name.clone(),
+                        group: None,
+                        action: action(Command::Provider(index)),
                     })
                     .collect(),
+                app.i18n.text("onboard-provider"),
                 action(Command::BackProvider),
                 app.onboarding_enabled(&Command::BackProvider),
             ),

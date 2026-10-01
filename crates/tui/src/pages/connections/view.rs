@@ -102,6 +102,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 ))))
                 .submit(Action::Connection(Command::Open(row.id.clone())))
                 .follow_focus()
+                .context_menu(crate::pages::actions::context(
+                    app,
+                    &format!("connection/{}", row.id),
+                    crate::pages::actions::connection_commands(app, row),
+                ))
                 .current(selected)
                 .hint(app.i18n.text("connection-actions"))
                 .size(Size::Fill);
@@ -122,25 +127,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .collect()
     };
     let mut rows = rows;
-    if state.setup() == super::Setup::NeedsConnection {
+    if state.setup() == super::Setup::NeedsConnection
+        && let Some((action, label)) = app.oauth_commands().into_iter().next()
+    {
         rows.push(
             Node::text(
-                "add-anonymous",
-                vec![(app.i18n.text("onboard-title"), Tone::Accent)],
+                "add",
+                vec![(format!("+ {}", app.i18n.text(label)), Tone::Accent)],
             )
-            .on(On::Activate(Action::Onboard(
-                crate::pages::onboarding::Command::Open,
-            ))),
+            .on(On::Activate(action)),
         );
-        if let Some((action, _)) = app.oauth_commands().into_iter().next() {
-            rows.push(
-                Node::text(
-                    "add-authenticated",
-                    vec![(app.i18n.text("oauth-title"), Tone::Accent)],
-                )
-                .on(On::Activate(action)),
-            );
-        }
     }
     let tree = Node::scroll(
         "connections",

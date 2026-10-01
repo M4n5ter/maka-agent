@@ -180,6 +180,14 @@ fn tree(app: &App, width: u16, directory: bool) -> Node<Message> {
                         )
                         .gap(2)
                         .on(On::Activate(Message::Open(item.id.clone())))
+                        .context_menu(
+                            crate::pages::actions::context(
+                                app,
+                                &format!("session/{}", item.id),
+                                crate::pages::actions::catalog_session_commands(app, item),
+                            )
+                            .map(&|action| Message::Action(Box::new(action))),
+                        )
                         .hint(item.name.clone()),
                     );
                 }

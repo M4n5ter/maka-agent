@@ -46,6 +46,7 @@ pub(super) struct Item<M> {
     pub tab_group: Option<usize>,
     pub axis: Axis,
     pub on: On<M>,
+    pub context_menu: Option<super::node::Menu<M>>,
     pub enabled: bool,
     pub current: bool,
     pub follow_focus: bool,
@@ -59,6 +60,17 @@ pub(super) struct Item<M> {
 }
 
 impl<M> Item<M> {
+    pub(super) fn menu(&self, context: bool) -> Option<(&str, &[super::node::MenuItem<M>])> {
+        if context {
+            self.context_menu
+                .as_ref()
+                .map(|menu| (menu.identity.as_str(), menu.items.as_slice()))
+        } else if let On::Menu { identity, items } = &self.on {
+            Some((identity, items))
+        } else {
+            None
+        }
+    }
     pub(super) fn focusable(&self) -> bool {
         self.on.focusable(self.enabled)
     }
@@ -187,6 +199,7 @@ impl<'a, M> Pass<'a, M> {
         let Node {
             kind,
             on,
+            context_menu,
             enabled,
             current,
             follow_focus,
@@ -244,6 +257,7 @@ impl<'a, M> Pass<'a, M> {
                 tab_group: scope.tab_group,
                 axis: scope.axis,
                 on,
+                context_menu,
                 enabled,
                 current,
                 follow_focus,

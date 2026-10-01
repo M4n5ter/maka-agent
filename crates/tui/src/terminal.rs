@@ -55,6 +55,30 @@ pub fn copy(writer: &mut impl io::Write, text: &str) -> io::Result<()> {
     writer.flush()
 }
 
+/// Destructive edits require a confirmed native copy, never an OSC 52 request.
+/// Run off the input thread because clipboard owners can take time to respond.
+#[cfg(any(target_os = "macos", windows))]
+pub fn copy_native(text: String) -> Result<(), &'static str> {
+    use clipboard_rs::{Clipboard, ClipboardContext};
+    if text.is_empty() || text.len() > MAX_CLIPBOARD_BYTES {
+        return Err("chat-copy-failed");
+    }
+    let clipboard = ClipboardContext::new().map_err(|_| "chat-copy-failed")?;
+    clipboard
+        .set_text(text.clone())
+        .map_err(|_| "chat-copy-failed")?;
+    if clipboard.get_text().map_err(|_| "chat-copy-failed")? == text {
+        Ok(())
+    } else {
+        Err("chat-copy-failed")
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn copy_native(_: String) -> Result<(), &'static str> {
+    Err("chat-copy-failed")
+}
+
 pub type Screen = Terminal<CrosstermBackend<Stdout>>;
 
 /// Publish a whole frame together on terminals with synchronized-output support.

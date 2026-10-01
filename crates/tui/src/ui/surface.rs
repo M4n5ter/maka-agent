@@ -769,6 +769,10 @@ impl<M: Clone> Surface<M> {
                 MouseEventKind::ScrollDown if popover.menu.is_some() => {
                     self.menu_key(KeyCode::Down)
                 }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    self.popover = None;
+                    Outcome::handled(true)
+                }
                 MouseEventKind::Down(MouseButton::Left) => match index {
                     Some(index) => self.choose(index),
                     None if chooser.rect.contains(point) => Outcome::handled(false),
@@ -841,6 +845,23 @@ impl<M: Clone> Surface<M> {
                 return Outcome::handled(true);
             }
             _ => {}
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Right) {
+            let owner = committed
+                .items
+                .iter()
+                .rev()
+                .find(|item| {
+                    item.enabled
+                        && item.rect.contains(point)
+                        && (item.context_menu.is_some() || matches!(item.on, On::Menu { .. }))
+                })
+                .map(|item| item.id.clone());
+            return if let Some(owner) = owner {
+                Outcome::handled(self.open_context_menu(&owner, point))
+            } else {
+                Outcome::ignored()
+            };
         }
         let inside = committed.area.contains(point);
         let target = committed
@@ -1015,6 +1036,16 @@ impl<M: Clone> Surface<M> {
         let Some(committed) = &self.committed else {
             return Outcome::ignored();
         };
+        if key.code == KeyCode::F(10) && key.modifiers == KeyModifiers::SHIFT {
+            let owner = committed
+                .items
+                .iter()
+                .find(|item| Some(&item.id) == self.focus.as_ref())
+                .map(|item| (item.id.clone(), Position::new(item.rect.x, item.rect.y)));
+            return owner.map_or_else(Outcome::ignored, |(id, point)| {
+                Outcome::handled(self.open_context_menu(&id, point))
+            });
+        }
         // Indices into the committed items of every enabled focus stop.
         let stops: Vec<usize> = (0..committed.items.len())
             .filter(|index| committed.items[*index].focusable())

@@ -471,6 +471,14 @@ fn session(
     }
     Node::row(format!("session-{}", item.id), children)
         .on(On::Activate(Message::Open(item.id.clone())))
+        .context_menu(
+            crate::pages::actions::context(
+                app,
+                &format!("session/{}", item.id),
+                crate::pages::actions::catalog_session_commands(app, item),
+            )
+            .map(&|action| Message::Action(Box::new(action))),
+        )
         .current(current)
         .hint(item.name.clone())
 }

@@ -124,7 +124,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         frame.render_widget(nav, columns[0]);
         crate::pages::sidebar::draw(frame, app, inner);
     } else {
-        app.sidebar.surface.invalidate();
+        app.sidebar.surface.leave();
     }
 
     let page = columns[1].inner(Margin::new(1, 0));
@@ -278,6 +278,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         Rect::new(page.x, rows[2].y, page.width, 1),
         hint,
     );
+    crate::pages::actions::native::bind(frame, app);
     shell::repaint_popovers(frame, app);
     if let Some(overlay) = app.overlay() {
         crate::overlay::draw(frame, app, overlay, area, base);
@@ -514,7 +515,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::Manage(crate::pages::manage::Command::Open(
             _,
             crate::pages::manage::Kind::Register,
-        )) => ("⊕", "+"),
+        )) => ("+", "+"),
         Action::Manage(crate::pages::manage::Command::Open(
             _,
             crate::pages::manage::Kind::Rename,
@@ -530,11 +531,11 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
             if app.management.oauth.enrollment_label() == "oauth-resume" {
                 ("↻", "R")
             } else {
-                ("⊕", "+")
+                ("+", "+")
             }
         }
         Action::Manage(_) => ("⋯", "."),
-        Action::Attachment(_) => ("⊕", "+"),
+        Action::Attachment(_) => ("+", "+"),
         Action::References => ("▱", "/"),
         Action::Skills(_) => ("✧", "*"),
         Action::Recap(_) => ("≡", "="),
@@ -546,7 +547,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::Resources(_) => ("▣", "T"),
         Action::Attention(_) => ("●", "N"),
         Action::Revision(_) => ("↶", "<"),
-        Action::Onboard(_) => ("⊕", "+"),
+        Action::Onboard(_) => ("+", "+"),
         Action::Forward => ("›", ">"),
         Action::Refresh | Action::RefreshSession | Action::RefreshSessions => ("↻", "R"),
         Action::Connect => ("⏻", "C"),
@@ -558,7 +559,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::ToggleDetails => ("ⓘ", "i"),
         Action::ToggleInspector => ("◨", "]"),
         Action::ToggleTrace => ("⋯", "."),
-        Action::Compose => ("✎", "E"),
+        Action::Compose | Action::EditComposer(_) => ("✎", "E"),
         Action::BrowseTranscript => ("▤", "B"),
         Action::Search(command) => match command {
             crate::ui::transcript::search::Command::Open => ("⌕", "/"),
@@ -583,6 +584,10 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
 }
 
 pub(crate) fn action_label(app: &App, action: &Action) -> String {
+    if let Action::EditComposer(target) = action {
+        return app.i18n.text(target.label());
+    }
+
     if matches!(action, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment())
     {
         return app.i18n.text(app.management.oauth.enrollment_label());
@@ -731,6 +736,7 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
         Action::ToggleTrace if app.chat.view.trace => "command-trace-hide",
         Action::ToggleTrace => "command-trace-show",
         Action::Compose => "composer-placeholder",
+        Action::EditComposer(target) => target.label(),
         Action::BrowseTranscript => "chat-browse",
         Action::Search(command) => match command {
             crate::ui::transcript::search::Command::Open => "chat-search",

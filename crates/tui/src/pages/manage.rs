@@ -516,6 +516,16 @@ impl App {
             }
             _ => return vec![],
         };
+        self.session_management_commands_for(item)
+    }
+
+    pub(crate) fn session_management_commands_for(
+        &self,
+        item: &SessionCatalogProjection,
+    ) -> Vec<(Action, &'static str)> {
+        let ConnectionState::Connected { root_id, epoch } = &self.connection else {
+            return vec![];
+        };
         if item.native_input != maka_protocol::session::NativeInputAvailability::Ordinary {
             return vec![];
         }

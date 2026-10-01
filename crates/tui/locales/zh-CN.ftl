@@ -1508,3 +1508,26 @@ providers-search-hint = 名称、提供商 ID 或登录方式
 providers-no-matches = 没有匹配的提供商
 
 chat-model-interrupted = 模型请求中断
+
+connection-add = 添加模型连接
+connection-add-key = API Key
+connection-add-account = 订阅账号
+connection-add-anonymous = 本地服务 · 无需认证
+connection-add-custom = 自定义协议
+connection-base-url-required = 请填写服务的 Base URL。
+connection-authentication-required = 请填写认证信息后继续。
+
+session-open = 打开会话
+context-cut = 剪切
+context-cut-copied = 已复制到剪贴板
+context-copy = 复制
+context-paste = 粘贴
+context-select-all = 全选
+context-copy-selection = 复制选区
+context-copy-markdown = 复制为 Markdown
+context-expand = 展开消息
+context-collapse = 折叠消息
+
+context-open = 打开
+context-select = 选择
+context-deselect = 取消选择

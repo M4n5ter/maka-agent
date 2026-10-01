@@ -290,7 +290,12 @@ impl Connections {
 
 impl App {
     pub fn connection_actions(&self) -> Vec<Action> {
-        let mut actions = vec![Action::Onboard(super::onboarding::Command::Open)];
+        let mut actions: Vec<_> = self
+            .oauth_commands()
+            .into_iter()
+            .take(1)
+            .map(|(action, _)| action)
+            .collect();
         actions.extend(self.default_model_action());
         if let Some(action) = self.rename_connection_action() {
             actions.push(action);

@@ -104,6 +104,7 @@ pub enum Action {
     LatestMessages,
     ToggleMessage(crate::ui::transcript::MessageKey),
     Compose,
+    EditComposer(crate::pages::actions::native::EditorTarget),
     SendMessage,
     SteerMessage,
     Queue(crate::pages::queue::Command),
@@ -338,10 +339,6 @@ impl App {
             (
                 Action::Apps(crate::apps::Message::Directory),
                 "route-extensions",
-            ),
-            (
-                Action::Onboard(crate::pages::onboarding::Command::Open),
-                "onboard-title",
             ),
             (Action::Help, "command-help"),
             (Action::Inbox, "command-inbox"),
@@ -859,6 +856,13 @@ impl App {
             Action::Project(command) => return self.project_action(command),
             Action::Connection(command) => return self.connection_action(command),
             Action::Queue(command) => return self.queue_action(command),
+            Action::EditComposer(target) => {
+                if target.command == crate::pages::actions::native::Edit::SelectAll {
+                    target.apply(self);
+                } else {
+                    return Some(Action::EditComposer(target));
+                }
+            }
             Action::Copy(_)
             | Action::CopyMessage { .. }
             | Action::CopyReply { .. }
@@ -1069,6 +1073,9 @@ impl App {
         if *action == Action::ConfirmQuit {
             return matches!(self.shutdown.prompt, Some(crate::shutdown::Prompt::Busy))
                 && !self.shutdown.stopping;
+        }
+        if let Action::EditComposer(target) = action {
+            return target.current(self);
         }
         if let Action::Apps(message) = action {
             return self.apps_enabled(message);
@@ -1504,6 +1511,7 @@ impl App {
         if let Some(surface) = self.apps_surface() {
             surface.invalidate();
         }
+        self.chrome.context.invalidate();
         self.chrome.header.invalidate();
         self.chrome.footer.invalidate();
         self.chrome.feedback.invalidate();
@@ -1725,6 +1733,13 @@ impl App {
             // selection/copy precedence before dispatch reaches find below.
             return None;
         }
+        if matches!(event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Right))
+        {
+            let outcome = self.chrome.context.input(event);
+            if outcome.consumed {
+                return Some(self.surface_outcome(event, self.focus, outcome));
+            }
+        }
         if let Some(outcome) = self.shell_surface_input(event) {
             return Some(outcome);
         }
@@ -1801,6 +1816,14 @@ impl App {
     /// Local choosers and captured pointer drags keep their original owner
     /// across shell regions.
     fn captured_surface_input(&mut self, event: &Event) -> Option<(bool, Option<Action>)> {
+        if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_))
+            && self.chrome.context.captures_event(event)
+        {
+            let outcome = self.chrome.context.input(event);
+            if outcome.consumed {
+                return Some(self.surface_outcome(event, self.focus, outcome));
+            }
+        }
         if let Some(outcome) = self.captured_shell_input(event) {
             return Some(outcome);
         }
@@ -1863,7 +1886,7 @@ impl App {
             // A surface owns hover over its area; drop the shell's.
             redraw |= self.hover.take().is_some();
             self.hover_area = None;
-            if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 self.focus = focus;
             }
         }

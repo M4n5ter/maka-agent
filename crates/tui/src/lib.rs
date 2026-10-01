@@ -55,6 +55,10 @@ pub struct Options {
 }
 
 enum Completed {
+    ComposerCut(
+        pages::actions::native::EditorTarget,
+        Result<(), &'static str>,
+    ),
     Plugins(
         pages::plugins::Request,
         Result<pages::plugins::Output, maka_client::RequestFailure>,
@@ -876,6 +880,32 @@ where
                     dirty = true;
                     continue;
                 }
+                Action::EditComposer(target) => {
+                    if target.command == pages::actions::native::Edit::Cut {
+                        if let Some(text) = target.text(&app) {
+                            jobs.spawn(async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    terminal::copy_native(text)
+                                })
+                                .await
+                                .unwrap_or(Err("chat-copy-failed"));
+                                Completed::ComposerCut(target, result)
+                            });
+                        }
+                        dirty = true;
+                        continue;
+                    }
+                    let result = target.text(&app).ok_or("chat-copy-empty").and_then(|text| {
+                        terminal::copy(&mut std::io::stdout(), &text)
+                            .map_err(|_| "chat-copy-failed")
+                    });
+                    app.notice = Some(Notice::Clipboard {
+                        key: result.map_or_else(|key| key, |_| "chat-copy-requested"),
+                        until: std::time::Instant::now() + Duration::from_secs(3),
+                    });
+                    dirty = true;
+                    continue;
+                }
                 Action::CopyFile(path) => {
                     let result = terminal::copy(&mut std::io::stdout(), &path);
                     app.notice = Some(Notice::Clipboard {
@@ -1579,6 +1609,12 @@ where
                     Some(Ok(Completed::Credential(request,result)))=>app.credential_completed(request,result),
                     Some(Ok(Completed::SandboxDefaults(request,result)))=>app.sandbox_defaults_completed(request,result),
                     Some(Ok(Completed::Onboard(ticket,result)))=>app.onboarding_completed(ticket,result),
+                    Some(Ok(Completed::ComposerCut(target, result))) => {
+                        if target.cut_completed(&mut app, result)
+                            && let Some(state) = &mut state {
+                            state.changed(&mut app, state::Impact::Other);
+                        }
+                    }
                     Some(Ok(Completed::History(request, result))) => {
                         history_job = None;
                         app.chat.history_completed(request, result, &app.i18n, app.chrome.ascii);

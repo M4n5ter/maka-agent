@@ -191,6 +191,7 @@ fn welcome_visible(app: &App, id: &str) -> bool {
         && !app.completion_open()
         && !app.chrome.header.captures()
         && !app.chrome.composer.captures()
+        && !app.chrome.context.captures()
         && !app.inspector_wanted()
         && app.chat.view.search.is_none()
         && app.chat.error.is_none()

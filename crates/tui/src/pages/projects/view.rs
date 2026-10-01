@@ -73,6 +73,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     ))))
                     .submit(Action::Project(Command::Create(item.id.clone())))
                     .follow_focus()
+                    .context_menu(crate::pages::actions::context(
+                        app,
+                        &format!("project/{}", item.id),
+                        crate::pages::actions::project_commands(app, item),
+                    ))
                     .current(state.selected.as_ref() == Some(&item.id))
                     .hint(app.i18n.text("project-create-session"))
                     .size(Size::Fill);

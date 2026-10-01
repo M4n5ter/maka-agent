@@ -1508,3 +1508,26 @@ providers-search-hint = Name, provider ID or sign-in method
 providers-no-matches = No matching providers
 
 chat-model-interrupted = Model request interrupted
+
+connection-add = Add model connection
+connection-add-key = API Key
+connection-add-account = Subscription account
+connection-add-anonymous = Local service · no authentication
+connection-add-custom = Custom protocol
+connection-base-url-required = Enter the service’s Base URL.
+connection-authentication-required = Fill in the authentication field to continue.
+
+session-open = Open conversation
+context-cut = Cut
+context-cut-copied = Copied to clipboard
+context-copy = Copy
+context-paste = Paste
+context-select-all = Select all
+context-copy-selection = Copy selection
+context-copy-markdown = Copy as Markdown
+context-expand = Expand message
+context-collapse = Collapse message
+
+context-open = Open
+context-select = Select
+context-deselect = Deselect

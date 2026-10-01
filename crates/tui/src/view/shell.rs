@@ -63,11 +63,6 @@ pub(super) fn header(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         actions.retain(|action| matches!(action, Action::OpenInteraction));
         actions.push(Action::Search(crate::ui::transcript::search::Command::Open));
     }
-    if app.navigation.current() == Route::Connections {
-        actions.extend(app.oauth_commands().into_iter().filter_map(|(action, _)| {
-            matches!(&action, Action::Manage(crate::pages::manage::Command::Open(target, crate::pages::manage::Kind::Oauth)) if target.is_enrollment()).then_some(action)
-        }));
-    }
     let object_menu = match app.navigation.current() {
         Route::Session(ref id) => Some(crate::pages::actions::menu(
             app,
@@ -281,8 +276,13 @@ pub(super) fn repaint_popovers(frame: &mut Frame<'_>, app: &mut App) {
     match app.navigation.current() {
         Route::Connections => app.connections.surface.repaint_popover(frame, &context),
         Route::Projects => app.projects.surface.repaint_popover(frame, &context),
+        Route::Workspace => app.home.surface.repaint_popover(frame, &context),
+        Route::Plugins(_) => app.plugins.surface.repaint_popover(frame, &context),
+        Route::Settings => app.settings.surface.repaint_popover(frame, &context),
         _ => {}
     }
+    app.sidebar.surface.repaint_popover(frame, &context);
     app.chrome.composer.repaint_popover(frame, &context);
     app.chrome.header.repaint_popover(frame, &context);
+    app.chrome.context.repaint_popover(frame, &context);
 }

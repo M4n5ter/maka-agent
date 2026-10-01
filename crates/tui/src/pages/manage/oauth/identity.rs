@@ -27,6 +27,7 @@ pub(super) struct Identity {
     pub expanded: bool,
     pub fields: [Editor; 4],
     authentication: Authentication,
+    configuration_key: Option<(String, bool)>,
 }
 
 enum Authentication {
@@ -48,6 +49,7 @@ impl Default for Identity {
             expanded: false,
             fields,
             authentication: Authentication::Json,
+            configuration_key: None,
         }
     }
 }
@@ -81,18 +83,63 @@ impl Identity {
             }
             _ => Authentication::Json,
         };
-        self.fields[2] = Editor::bounded(64 * 1024, "oauth-field-invalid");
-        self.fields[2].insert(
-            &existing
-                .map_or(
-                    &choice.provider.descriptor.configuration_defaults,
-                    |target| &target.configuration,
-                )
-                .to_string(),
+        let configuration = existing.map_or(
+            &choice.provider.descriptor.configuration_defaults,
+            |target| &target.configuration,
         );
+        let configuration_schema = &choice.provider.descriptor.configuration_schema;
+        self.configuration_key = configuration_schema["properties"]
+            .as_object()
+            .filter(|properties| {
+                properties.len() == 1 && configuration_schema["additionalProperties"] == false
+            })
+            .and_then(|properties| properties.iter().next())
+            .filter(|(key, schema)| {
+                schema["type"] == "string"
+                    && configuration
+                        .as_object()
+                        .is_some_and(|values| values.keys().all(|name| name == *key))
+            })
+            .map(|(key, _)| {
+                (
+                    key.clone(),
+                    configuration_schema["required"]
+                        .as_array()
+                        .is_some_and(|required| required.iter().any(|v| v == key)),
+                )
+            });
+        self.fields[2] = Editor::bounded(64 * 1024, "oauth-field-invalid");
+        self.fields[2].insert(&match &self.configuration_key {
+            Some((key, _)) => configuration[key].as_str().unwrap_or_default().to_owned(),
+            None => configuration.to_string(),
+        });
         // Show a long configuration from its start, not scrolled to its end.
         self.fields[2].key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
         self.clear_authentication();
+    }
+
+    pub fn configuration_key(&self) -> Option<&str> {
+        self.configuration_key.as_ref().map(|(key, _)| key.as_str())
+    }
+
+    fn configuration(&self) -> Result<Value, &'static str> {
+        if let Some((key, required)) = &self.configuration_key {
+            let value = self.fields[2].text().trim();
+            if *required && value.is_empty() {
+                return Err(if key == "baseUrl" {
+                    "connection-base-url-required"
+                } else {
+                    "onboard-configuration-required"
+                });
+            }
+            Ok(if value.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({(key):value})
+            })
+        } else {
+            serde_json::from_str(self.fields[2].text()).map_err(|_| "oauth-field-invalid")
+        }
     }
 
     pub fn authentication_field(&self) -> Option<&str> {
@@ -110,7 +157,7 @@ impl Identity {
             Authentication::Text { key, required } => {
                 if text.is_empty() {
                     if *required {
-                        Err("oauth-field-invalid")
+                        Err("connection-authentication-required")
                     } else {
                         Ok(serde_json::json!({}))
                     }
@@ -130,8 +177,7 @@ impl Identity {
         if let Some(error) = self.error() {
             return Err(error);
         }
-        let configuration: Value =
-            serde_json::from_str(self.fields[2].text()).map_err(|_| "oauth-field-invalid")?;
+        let configuration = self.configuration()?;
         let target = if let Some(expected) = existing {
             LoginTarget::Existing {
                 expected: expected.clone(),
@@ -179,16 +225,14 @@ impl Identity {
         if !slug.is_empty() && validation::slug(slug).is_err() {
             return Some("oauth-slug-invalid");
         }
-        let configuration: Value = match serde_json::from_str(self.fields[2].text()) {
+        let configuration = match self.configuration() {
             Ok(value) => value,
-            Err(_) => return Some("oauth-field-invalid"),
+            Err(error) => return Some(error),
         };
-        if validation::provider_configuration(&configuration).is_err()
-            || self.authentication_input().is_err()
-        {
+        if validation::provider_configuration(&configuration).is_err() {
             return Some("oauth-field-invalid");
         }
-        None
+        self.authentication_input().err()
     }
 
     pub fn invalidate_geometry(&mut self) {
@@ -199,7 +243,7 @@ impl Identity {
 }
 impl State {
     pub(super) fn customizable(&self) -> bool {
-        self.attempt.is_none() && !self.choices.is_empty()
+        self.attempt.is_none() && self.provider.is_some() && !self.picker.open
     }
     pub fn invalidate_identity_geometry(&mut self) {
         self.identity.invalidate_geometry();
@@ -209,6 +253,27 @@ impl State {
 mod tests {
     use super::*;
     use crate::providers::fixtures::entry;
+
+    #[test]
+    fn optional_string_configuration_keeps_an_omitted_value_omitted() {
+        let mut choice = Choice {
+            provider: entry("optional-url", false),
+            method: 0,
+        };
+        choice.provider.descriptor.configuration_schema = serde_json::json!({
+            "type":"object", "properties":{"baseUrl":{"type":"string","minLength":1}},
+            "additionalProperties":false
+        });
+        choice.provider.descriptor.configuration_defaults = serde_json::json!({});
+        let mut form = Identity::default();
+        form.configure(&choice, None);
+        assert_eq!(form.configuration().unwrap(), serde_json::json!({}));
+        form.fields[2].insert("https://relay.example/v1");
+        assert_eq!(
+            form.configuration().unwrap(),
+            serde_json::json!({"baseUrl":"https://relay.example/v1"})
+        );
+    }
 
     #[test]
     fn provider_schema_drives_authentication_and_recovery_excludes_secrets() {
