@@ -209,7 +209,9 @@ async fn scenario() {
                 response.body["messages"]
                     .as_array()
                     .unwrap()
-                    .last()
+                    .iter()
+                    .rev()
+                    .find(|message| message["role"] == "tool" && message["tool_call_id"] == "read")
                     .unwrap()["content"]
                     .as_str()
                     .unwrap(),

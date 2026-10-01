@@ -104,7 +104,15 @@ pub(super) async fn run(fixture: &HostFixture, reopened: bool) -> (Vec<Value>, V
                 );
             }
             if (1..=5).contains(&index) || index == 7 {
-                let result = request.body["messages"].as_array().unwrap().last().unwrap();
+                let result = request.body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|message| {
+                        message["role"] == "tool" && message["tool_call_id"] == "provider:reused"
+                    })
+                    .unwrap();
                 assert_eq!(result["role"], "tool");
                 assert_eq!(result["tool_call_id"], "provider:reused");
                 if index == 7 {

@@ -533,7 +533,9 @@ async fn live_boundary(
         next.body["messages"]
             .as_array()
             .unwrap()
-            .last()
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "tool" && message["tool_call_id"] == "old-boundary")
             .unwrap()
             .to_string()
             .contains("call-denied"),
@@ -547,7 +549,9 @@ async fn live_boundary(
         next.body["messages"]
             .as_array()
             .unwrap()
-            .last()
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "tool" && message["tool_call_id"] == "new-boundary")
             .unwrap()
             .to_string()
             .contains("call-written"),

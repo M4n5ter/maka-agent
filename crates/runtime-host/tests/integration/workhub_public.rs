@@ -64,10 +64,12 @@ async fn scenario() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .rev()
-                    .find(|message| message["role"] == "user")
-                    .is_some_and(|message| {
-                        message["content"].to_string().contains("Delegated work")
+                    // Request-local plugin contexts can follow the delegated input.
+                    .any(|message| {
+                        message["role"] == "user"
+                            && message["content"]
+                                .as_str()
+                                .is_some_and(|text| text.starts_with("Delegated work"))
                     })
             {
                 long_answer_sent = true;
