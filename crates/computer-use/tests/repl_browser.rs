@@ -147,7 +147,8 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
         submitted["font"]
     );
     assert!(
-        texts(&output).contains("hello world / 你好"),
+        texts(&output).contains("hello world / 你好")
+            && texts(&output).contains("cursor arrived: true"),
         "{}",
         texts(&output)
     );
@@ -557,13 +558,23 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
             let (mut stream, _) = listener.accept().await.unwrap();
             tokio::spawn(async move {
                 let mut request = [0; 4096];
-                let _ = stream.read(&mut request).await;
-                let body = r#"<!doctype html><meta charset="utf-8"><title>Maka Cua fixture</title>
+                let length = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let body = if request.starts_with("GET /race-replacement ") {
+                    r#"<!doctype html><title>Replacement fixture</title><output id="result">Replacement document clean</output>
+<script>addEventListener('pointerdown',()=>document.getElementById('result').textContent='Unexpected input');</script>"#
+                } else if request.starts_with("GET /navigation-race ") {
+                    r#"<!doctype html><title>Navigation race fixture</title>
+<button onclick="globalThis.armed=true">Arm navigation race</button><button>Target fixture</button>
+<script>new MutationObserver(records=>{if(globalThis.armed && records.some(r=>r.target.matches('[popover][aria-hidden=true]'))) location.replace('/race-replacement');}).observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['style']});</script>"#
+                } else {
+                    r#"<!doctype html><meta charset="utf-8"><title>Maka Cua fixture</title>
 <label>Name <input aria-label="Name" id="name" value="hello hello"></label>
 <label>Message <textarea aria-label="Message" id="message"></textarea></label>
 <select aria-label="Color" id="color"><option value="red-id">Red</option><option value="blue-id">Blue</option></select>
-<button onclick="document.getElementById('result').textContent=document.getElementById('name').value+' / '+document.getElementById('message').value+' / '+document.getElementById('color').value">Submit fixture</button>
-<output id="result" aria-live="polite"></output>"#;
+<button onclick="const pointer=document.querySelector('[popover][aria-hidden=true]'); const bounds=pointer.getBoundingClientRect(); const arrived=Math.abs(bounds.x+9.685922-event.clientX)<1 && Math.abs(bounds.y+9.685922-event.clientY)<1; document.getElementById('result').textContent=document.getElementById('name').value+' / '+document.getElementById('message').value+' / '+document.getElementById('color').value+' / cursor arrived: '+arrived">Submit fixture</button>
+<output id="result" aria-live="polite"></output>"#
+                };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -661,10 +672,11 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     let message = index(&state, "textbox", "Message");
     let color = index(&state, "combobox", "Color");
     let button = index(&state, "button", "Submit fixture");
-    let (ok,output)=evaluate(&repl,bridge.clone(),format!("await tab.selectText({name}, 'hello', {{prefix:'hello '}}); await tab.moveCursor({name}); await tab.typeText(null, 'world'); await tab.setValue({message}, '你好'); await tab.setValue({color}, 'blue-id'); await tab.click({button}); await tab.getAXState({{disableDiffing:true}});")).await;
+    let (ok,output)=evaluate(&repl,bridge.clone(),format!("await cua.cursor.configure({{reducedMotion:false}}); await tab.selectText({name}, 'hello', {{prefix:'hello '}}); await tab.moveCursor({name}); await tab.typeText(null, 'world'); await tab.setValue({message}, '你好'); await tab.setValue({color}, 'blue-id'); await tab.click({button}); await tab.getAXState({{disableDiffing:true}});")).await;
     assert!(ok, "{}", texts(&output));
     assert!(
-        texts(&output).contains("hello world / 你好"),
+        texts(&output).contains("hello world / 你好")
+            && texts(&output).contains("cursor arrived: true"),
         "{}",
         texts(&output)
     );
@@ -711,6 +723,28 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     )
     .await;
     assert!(!ok, "old document reference was reused");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!(
+            "await tab.goto({}); await tab.getAXState({{disableDiffing:true}});",
+            json!(format!("{page}navigation-race"))
+        ),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let arm = index(&texts(&output), "button", "Arm navigation race");
+    let target = index(&texts(&output), "button", "Target fixture");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await tab.click({arm}); try {{ await tab.click({target}); throw Error('replacement document received input'); }} catch (error) {{ if (!String(error).includes('stale_document')) throw error; }} await tab.getAXState({{disableDiffing:true}});"),
+    ).await;
+    assert!(
+        ok && texts(&output).contains("Replacement document clean"),
+        "{}",
+        texts(&output)
+    );
     let (ok, _) = evaluate(
         &repl,
         bridge.clone(),

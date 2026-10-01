@@ -17,7 +17,7 @@
  * under the License.
  */
 
-function drawCursor(input) {
+async function drawCursor(input) {
   const registry = (globalThis.__makaCursorRegistry ??= new Map());
   const { cursor, point, action, operation, svg } = input;
   let entry = registry.get(cursor.id);
@@ -88,6 +88,16 @@ function drawCursor(input) {
   entry.host.style.setProperty('display', shown ? 'block' : 'none', 'important');
   if (shown && !entry.host.matches(':popover-open')) entry.host.showPopover();
   if (!shown && entry.host.matches(':popover-open')) entry.host.hidePopover();
+  if (shown && point) {
+    // Flush the new transform before collecting its CSS transition. A CDP
+    // acknowledgement alone does not mean the visible pointer has arrived.
+    getComputedStyle(entry.host).transform;
+    await Promise.all(
+      entry.host.getAnimations().map((animation) => animation.finished.catch(() => {})),
+    );
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  }
   if (cursor.enabled && entry.point) {
     if ((action === 'click' || action === 'key') && !reduced) {
       entry.pulse.getAnimations().forEach((animation) => animation.cancel());

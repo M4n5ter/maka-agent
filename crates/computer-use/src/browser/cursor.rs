@@ -82,7 +82,7 @@ impl Tab {
                 "Runtime.evaluate",
                 json!({
                     "expression":format!("({})({input})",include_str!("cursor.js")),
-                    "contextId":context,"returnByValue":true
+                    "contextId":context,"returnByValue":true,"awaitPromise":true
                 }),
             )
             .await?;

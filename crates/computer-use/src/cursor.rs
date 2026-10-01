@@ -216,8 +216,7 @@ pub(crate) struct Host {
 }
 struct Job {
     command: Control,
-    reply: Option<tokio::sync::oneshot::Sender<Result<RenderState, ToolError>>>,
-    queued: std::time::Instant,
+    reply: tokio::sync::oneshot::Sender<Result<RenderState, ToolError>>,
 }
 enum Control {
     Call(Request),
@@ -253,9 +252,6 @@ impl Host {
                 };
                 tokio::spawn(async move {
                     while let Some(job) = receiver.recv().await {
-                        if job.reply.is_none() && job.queued.elapsed() > Duration::from_secs(1) {
-                            continue;
-                        }
                         let stopping = matches!(job.command, Control::Stop);
                         let result = match job.command {
                             Control::Call(Request::State { id }) => Ok(transport.state(&id).await),
@@ -270,9 +266,7 @@ impl Host {
                                 Ok(RenderState::default())
                             }
                         };
-                        if let Some(reply) = job.reply {
-                            let _ = reply.send(result);
-                        }
+                        let _ = job.reply.send(result);
                         if stopping {
                             break;
                         }
@@ -293,37 +287,12 @@ impl Host {
         }
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.sender()
-            .send(Job {
-                command,
-                reply: Some(reply),
-                queued: std::time::Instant::now(),
-            })
+            .send(Job { command, reply })
             .await
             .map_err(|_| failed("cursor renderer owner closed"))?;
         receive
             .await
             .map_err(|_| failed("cursor renderer owner stopped"))?
-    }
-    pub(crate) fn cue(
-        &mut self,
-        cursor: &Spec,
-        point: [f64; 2],
-        action: cursor_overlay::CursorAction,
-        window: u64,
-    ) {
-        if !self.registered() {
-            return;
-        }
-        let _ = self.sender().try_send(Job {
-            command: Control::Call(Request::Update {
-                cursor: cursor.clone(),
-                point: Some(point),
-                action,
-                window: Some(window),
-            }),
-            reply: None,
-            queued: std::time::Instant::now(),
-        });
     }
     pub(crate) async fn update(
         &mut self,

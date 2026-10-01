@@ -10017,12 +10017,12 @@ platform-linux@0.29.1 (MIT; see upstream notice)
 platform-macos@0.29.1 (MIT; see upstream notice)
 platform-windows@0.29.1 (MIT; see upstream notice)
 
-git+https://github.com/M4n5ter/cua?rev=fdf0267a47f493085accae2a0086739fe4505f17#fdf0267a47f493085accae2a0086739fe4505f17
+git+https://github.com/M4n5ter/cua?rev=d8108304ced7a58178a485b402416d932878e23f#d8108304ced7a58178a485b402416d932878e23f
 
 Cua Driver Rust SDK and its workspace crates
 Source: https://github.com/trycua/cua
 Fork: https://github.com/M4n5ter/cua
-Revision: fdf0267a47f493085accae2a0086739fe4505f17
+Revision: d8108304ced7a58178a485b402416d932878e23f
 Based on upstream 7a0fe0b0ba6c58de586c863d79ef41976233b1e7 with an X11 cursor
 badge viewport and clipped-glyph fix.
 Linked as pinned Cargo Git dependencies. No Cua perception extension or model

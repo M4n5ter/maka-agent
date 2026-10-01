@@ -277,7 +277,11 @@ impl Session {
                 handle: Handle::App(handle),
                 action,
             } => self.action(&handle, action, session, cancellation).await,
-            command => self.browsers.invoke(command, &self.cursor).await,
+            command => {
+                self.browsers
+                    .invoke(command, &self.cursor, cancellation)
+                    .await
+            }
         }
     }
     async fn windows(
@@ -505,12 +509,18 @@ impl Session {
         if self.cursor.enabled
             && let Ok(point) = point
         {
-            self.native.lock().await.cursors.cue(
-                &self.cursor,
-                point,
-                action.cursor_action(),
-                window.window_id,
-            );
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(failed("Computer Use cancelled before input dispatch")),
+                _ = async {
+                    let _ = self.native.lock().await.cursors.update(
+                        &self.cursor,
+                        Some(point),
+                        action.cursor_action(),
+                        Some(window.window_id),
+                    ).await;
+                } => {}
+            }
         }
         if cancellation.is_cancelled() {
             return Err(failed("Computer Use cancelled before input dispatch"));

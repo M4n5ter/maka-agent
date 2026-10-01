@@ -245,6 +245,7 @@ impl Browsers {
         &mut self,
         command: Command,
         cursor: &crate::cursor::Spec,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
         match command {
             Command::ListBrowsers { .. } => {
@@ -353,7 +354,7 @@ impl Browsers {
             Command::Action {
                 handle: Handle::Tab(handle),
                 action,
-            } => self.action(&handle, action, cursor).await,
+            } => self.action(&handle, action, cursor, cancellation).await,
             _ => Err(failed("invalid browser operation")),
         }
     }
@@ -434,6 +435,7 @@ impl Browsers {
         handle: &str,
         action: Action,
         cursor: &crate::cursor::Spec,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
         let closing = matches!(&action, Action::Close);
         let moving_cursor = matches!(&action, Action::MoveCursor { .. });
@@ -442,7 +444,7 @@ impl Browsers {
             .get_mut(handle)
             .ok_or_else(|| failed("stale_tab: bind it again"))?;
         tab.verify().await?;
-        let result = tab.action(action, cursor).await;
+        let result = tab.action(action, cursor, cancellation).await;
         if !moving_cursor {
             tab.capture = None;
         }
@@ -710,10 +712,27 @@ impl Tab {
             point[1] * capture.height / capture.image_height,
         ])
     }
+    async fn before_input(
+        &mut self,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), ToolError> {
+        check_input(cancellation)?;
+        let frame = self.frame().await?;
+        check_input(cancellation)?;
+        if self.frame.as_ref() != Some(&frame) {
+            self.refs.clear();
+            self.capture = None;
+            return Err(failed(
+                "stale_document: observe after navigation before acting",
+            ));
+        }
+        Ok(())
+    }
     async fn action(
         &mut self,
         action: Action,
         cursor: &crate::cursor::Spec,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
         if !matches!(
             &action,
@@ -723,14 +742,7 @@ impl Tab {
                 | Action::Reload
                 | Action::Close
         ) {
-            let frame = self.frame().await?;
-            if self.frame.as_ref() != Some(&frame) {
-                self.refs.clear();
-                self.capture = None;
-                return Err(failed(
-                    "stale_document: observe after navigation before acting",
-                ));
-            }
+            self.before_input(cancellation).await?;
         }
         if let Action::MoveCursor { target } = &action {
             let point = self.cursor_point(target).await?;
@@ -755,6 +767,7 @@ impl Tab {
                 )
                 .await;
         }
+        check_input(cancellation)?;
         match action {
             Action::MoveCursor { .. } => unreachable!("handled before input dispatch"),
             Action::Navigate { url } => {
@@ -807,6 +820,7 @@ impl Tab {
             }
             Action::TypeText { index, text } => {
                 self.focus(index).await?;
+                self.before_input(cancellation).await?;
                 self.request("Input.insertText", json!({"text":text}))
                     .await?;
             }
@@ -822,6 +836,7 @@ impl Tab {
                     self.call_element(index,"function(html){ if(!this.isConnected || !this.isContentEditable) throw Error('HTML paste requires contenteditable'); this.focus(); if(!document.execCommand('insertHTML',false,html)) throw Error('HTML insertion not supported'); }",vec![json!(text)]).await?;
                 } else {
                     self.focus(index).await?;
+                    self.before_input(cancellation).await?;
                     self.request("Input.insertText", json!({"text":text}))
                         .await?;
                 }
@@ -874,6 +889,7 @@ impl Tab {
                         .draw_cursor(cursor, Some(point), "click", "update")
                         .await;
                 }
+                self.before_input(cancellation).await?;
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":point[0],"y":point[1],"button":button,"clickCount":count})).await;
                 self.request("Input.dispatchMouseEvent",json!({"type":"mouseReleased","x":point[0],"y":point[1],"button":button,"clickCount":count})).await.map_err(|error|ToolError::CleanupUnconfirmed(format!("mouse release was not acknowledged: {error}")))?;
                 pressed?;
@@ -881,6 +897,7 @@ impl Tab {
             Action::PressKey { index, key } => {
                 let (key, code, modifiers) = key_event(&key)?;
                 self.focus(index).await?;
+                self.before_input(cancellation).await?;
                 let mut event = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,"modifiers":modifiers});
                 if modifiers & 7 == 0 {
                     if key.len() == 1 {
@@ -928,6 +945,7 @@ impl Tab {
                         .draw_cursor(cursor, Some(point), "scroll", "update")
                         .await;
                 }
+                self.before_input(cancellation).await?;
                 self.request(
                     "Input.dispatchMouseEvent",
                     json!({"type":"mouseWheel","x":point[0],"y":point[1],"deltaX":dx,"deltaY":dy}),
@@ -940,9 +958,17 @@ impl Tab {
                 if cursor.enabled {
                     let _ = self.draw_cursor(cursor, Some(from), "drag", "update").await;
                 }
+                self.before_input(cancellation).await?;
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":from[0],"y":from[1],"button":"left","clickCount":1})).await;
                 let moved = if pressed.is_ok() {
-                    self.request("Input.dispatchMouseEvent",json!({"type":"mouseMoved","x":to[0],"y":to[1],"button":"left","buttons":1})).await
+                    if cursor.enabled {
+                        let _ = self.draw_cursor(cursor, Some(to), "drag", "update").await;
+                    }
+                    if let Err(error) = self.before_input(cancellation).await {
+                        Err(error)
+                    } else {
+                        self.request("Input.dispatchMouseEvent",json!({"type":"mouseMoved","x":to[0],"y":to[1],"button":"left","buttons":1})).await
+                    }
                 } else {
                     pressed
                 };
@@ -953,9 +979,6 @@ impl Tab {
                     ))
                 })?;
                 moved?;
-                if cursor.enabled {
-                    let _ = self.draw_cursor(cursor, Some(to), "drag", "update").await;
-                }
             }
             Action::Secondary { .. } => {
                 return Err(failed(
@@ -1020,4 +1043,12 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 }
 fn unknown(error: impl std::fmt::Display) -> ToolError {
     ToolError::OutcomeUnknown(error.to_string())
+}
+
+fn check_input(cancellation: &tokio_util::sync::CancellationToken) -> Result<(), ToolError> {
+    if cancellation.is_cancelled() {
+        Err(failed("Computer Use cancelled before input dispatch"))
+    } else {
+        Ok(())
+    }
 }

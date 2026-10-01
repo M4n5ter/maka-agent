@@ -1,7 +1,7 @@
 {
   "inputs": {
-    "Cargo.lock": "40a57527d5d3c77eb5c54849db6b4998cd6f05afccc4f7ad9b8700e36a1e940e",
-    "Cargo.toml": "9e3ac72f0b10722561f482fd1278c5b3f766ed1f9e02dad2dda0780163645881",
+    "Cargo.lock": "9199ce77b497efcf41fb891c5d8c85eb3fea84d781d1858ef5d5083a77574beb",
+    "Cargo.toml": "a3dca03bf8efb80bf4efb833df004930b0320d9e7720a3d36c418789bb95dcb4",
     "crates/acp/Cargo.toml": "ec8063c582a78f23c769b41049a7ddbbaae77c7448b61e66c27588265c9c6de9",
     "crates/agent/Cargo.toml": "3f7e5c7bf16591dee2b13be943f6df7a66961a81a615b7ed3484c0f4a0c41fbd",
     "crates/apply-patch/Cargo.toml": "ae6cee922934258aed6416316cacc7d11124fdcd2558547d11459cd5524184e2",
@@ -10,8 +10,8 @@
     "crates/cli/Cargo.toml": "a1002bc881887334453163ecfb55a016f428ce1448202fbfeef3b6f4509729d6",
     "crates/client-capability/Cargo.toml": "410fd844a1f883ad02b6dda7cf50f457186737b30054e84b1358d8a0f7ad711b",
     "crates/client/Cargo.toml": "a64f86196f71100b4c21fa3c32180105953907c22c178bb59b233ca0b72f7c7a",
-    "crates/computer-use/Cargo.toml": "07b9a40ca1df10720ed11b58169a29a7b317fcc98cfe7198b8fce85c6458edd1",
-    "crates/computer-use/THIRD_PARTY_NOTICES": "380f9f300122e65c37088c64c081c53c3757ce3071b72fdc828d1a1a142fc156",
+    "crates/computer-use/Cargo.toml": "e5ca36602f5450b0a5dac34a1f18c28cde71ce1d4fc51710131fcb7e168d3283",
+    "crates/computer-use/THIRD_PARTY_NOTICES": "f45ce846de25493c113e436efa8be075f4ef5bdb6dad75ad76f2eef36d3cbade",
     "crates/config/Cargo.toml": "0fa7ee6c33bc16f7d4b35638401141b2223d92f0816322fa914f1e8aa27a6249",
     "crates/event-log/Cargo.toml": "3d33e27ae3743ca3e7a66be0320aea9dfb32ecf2c28c8904b8ac4524e3736893",
     "crates/external-agent/Cargo.toml": "f51638e1f8b09105975b58c94f6278e77463ba91aa5884207afc85596df5387f",
@@ -70,5 +70,5 @@
     "scripts/rust/v8-prebuilts.json": "44e8700ccdbda523b1bc0a47a2cdfc26e4c6bc355572dde05a7f10474896cb89",
     "scripts/rust/v8-source.json": "c8bac739fa6361d8c3ca5f7e30021241f5d6cd9e4dc2c1183b97d96c05a59c11"
   },
-  "sha256": "1dee676ca32c4c8e76bccbc58448bccfc0afc7d9abe48ce6ea31825499a83d74"
+  "sha256": "aeee0a2592c65864fabca4a0adfbf23fcb4dd3d8f2f9e0b7c83b215d059dbd32"
 }

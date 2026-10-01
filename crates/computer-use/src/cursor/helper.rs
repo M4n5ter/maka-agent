@@ -88,6 +88,7 @@ pub(super) fn run() -> Result<(), String> {
         motion: cursor_overlay::MotionConfig {
             // Visibility belongs to the Session, not to an individual action.
             idle_hide_ms: 0.0,
+            glide_duration_ms: 250.0,
             ..Default::default()
         },
         ..Default::default()
@@ -129,6 +130,10 @@ fn serve() -> Result<(), String> {
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
     let mut entries: HashMap<String, Entry> = HashMap::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|error| error.to_string())?;
     loop {
         let mut line = String::new();
         let count = reader
@@ -184,30 +189,13 @@ fn serve() -> Result<(), String> {
                 if let Some(window) = window {
                     send(id, OverlayCommand::PinAbove(window));
                 }
-                if let Some([x, y]) = point {
-                    if fresh || cursor.reduced_motion {
-                        send(id, cursor_overlay::track_pointer_command(x, y));
-                    } else {
-                        send(
-                            id,
-                            OverlayCommand::MoveTo {
-                                x,
-                                y,
-                                end_heading_radians: std::f64::consts::FRAC_PI_4,
-                            },
-                        );
-                    }
-                }
-                send(
-                    id,
-                    OverlayCommand::BeginAction {
-                        action,
-                        delivery: None,
-                        target: None,
-                    },
-                );
-                send(id, OverlayCommand::SetEnabled(cursor.enabled));
                 let previous = entries.get(id).and_then(|e| e.point);
+                if let Some([x, y]) = point
+                    && (previous.is_none() || cursor.reduced_motion)
+                {
+                    send(id, cursor_overlay::track_pointer_command(x, y));
+                }
+                send(id, OverlayCommand::SetEnabled(cursor.enabled));
                 let id = id.clone();
                 entries.insert(
                     id.clone(),
@@ -242,6 +230,29 @@ fn serve() -> Result<(), String> {
                         std::thread::sleep(Duration::from_millis(8));
                     }
                 }
+                if let Some([x, y]) = point
+                    && entries[&id].spec.enabled
+                {
+                    // The renderer owns arrival. A queued MoveTo or a visible
+                    // cursor does not acknowledge completion of its glide.
+                    runtime.block_on(async {
+                        #[cfg(target_os = "linux")]
+                        let movement = platform::animate_cursor_to_for(id.clone(), x, y);
+                        #[cfg(not(target_os = "linux"))]
+                        let movement = platform::animate_cursor_to(id.clone(), x, y);
+                        tokio::time::timeout(Duration::from_secs(2), movement)
+                            .await
+                            .map_err(|_| "cursor renderer did not acknowledge arrival".to_owned())
+                    })?;
+                }
+                send(
+                    &id,
+                    OverlayCommand::BeginAction {
+                        action,
+                        delivery: None,
+                        target: None,
+                    },
+                );
                 status(&id, &entries)
             }
         };

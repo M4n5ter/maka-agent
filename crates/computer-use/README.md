@@ -21,7 +21,8 @@
 
 Maka owns the Computer Use object API and an isolated, persistent JavaScript REPL.
 Cua supplies native platform code, pinned to the [M4n5ter fork](https://github.com/M4n5ter/cua)
-at `fdf0267a47f493085accae2a0086739fe4505f17` for the X11 cursor badge fix
+at `d8108304ced7a58178a485b402416d932878e23f` for rendered cursor-arrival acknowledgements,
+reduced-motion movement without a spring, and the X11 cursor badge fix
 ([upstream PR](https://github.com/trycua/cua/pull/4260)).
 The fork also includes upstream's macOS recording-finalization fix from
 [PR #4238](https://github.com/trycua/cua/pull/4238).
