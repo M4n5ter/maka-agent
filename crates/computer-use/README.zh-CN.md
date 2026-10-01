@@ -96,12 +96,17 @@ macOS 在子进程主线程运行 AppKit。浏览器使用隔离 world 内不参
 
 Linux 构建需要 X11、Xi、Xtst 开发库；Windows MSVC 构建还需要对应的 Spectre CRT 库。
 当前固定 [M4n5ter 的 Cua fork](https://github.com/M4n5ter/cua) 提交
-`d8108304ced7a58178a485b402416d932878e23f`，让光标到达通知在渲染后发出，
+`2af03305efd8e713f833dcaed1f247f4f616eca5`，让光标到达通知在渲染后发出，
 关闭减弱动画模式下的回弹，并修复 X11 跨分块重复标签和字形接缝
 （[上游 PR](https://github.com/trycua/cua/pull/4260)）。
 同时包含上游 [#4238](https://github.com/trycua/cua/pull/4238) 的 macOS 录像写入完成修复。
 回归覆盖标签重叠与屏幕边缘；有／无 compositor 的原生 Xvfb 验证两个标签和独立清理。
 这些定向检查不替代 Cua 的完整桌面认证矩阵。
+
+macOS/Windows 的坐标和键盘输入使用精确窗口的前台路径；macOS 在支持时恢复此前
+应用，Linux 保留后台投递。应用菜单按进程归属校验，并在绑定窗口的上下文中操作；
+关闭的菜单不暴露内部选项。无法验证输入效果时，工具输出明确提示 agent 重新观察，
+不自动重放操作。
 
 测试包括独立 REPL/权限/取消/资源边界，以及需主动运行的真实 Chrome、AppKit 表单
 验收。验证成功的范围与完整 cua_repl 等价、性能更优是不同结论，后两者尚未宣称。

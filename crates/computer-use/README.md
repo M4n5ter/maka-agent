@@ -21,7 +21,7 @@
 
 Maka owns the Computer Use object API and an isolated, persistent JavaScript REPL.
 Cua supplies native platform code, pinned to the [M4n5ter fork](https://github.com/M4n5ter/cua)
-at `d8108304ced7a58178a485b402416d932878e23f` for rendered cursor-arrival acknowledgements,
+at `2af03305efd8e713f833dcaed1f247f4f616eca5` for rendered cursor-arrival acknowledgements,
 reduced-motion movement without a spring, and the X11 cursor badge fix
 ([upstream PR](https://github.com/trycua/cua/pull/4260)).
 The fork also includes upstream's macOS recording-finalization fix from
@@ -193,8 +193,12 @@ and selection, and waits for an observable text change before restoring the clip
 An unchanged value is reported as uncertain, not fabricated success.
 
 Native screenshot capture, typing, keys, pixel clicks, scrolling and dragging use
-Cua. macOS/Linux pixel clicks default to background delivery; Windows input and
-native drag may activate the window. There is no automatic foreground fallback.
+Cua. macOS/Windows coordinate and keyboard actions use exact-window foreground
+delivery; macOS restores the previous application where supported. Linux keeps
+background delivery. Application-menu actions validate ownership and activate the
+bound window for their context, keeping it active while the menu is open. Closed
+menus are omitted from observations until opened. Dispatches with unverified
+effects produce a visible warning; no uncertain action is automatically replayed.
 Native pixel scrolling currently uses page units, not exact pixel distances.
 Markdown paste inserts Markdown source as text. macOS name/path/bundle lookup can
 launch an app; Linux/Windows require an open window. Native text selection is macOS

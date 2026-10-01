@@ -80,8 +80,28 @@ async fn cua_bindings_survive_turns_are_session_isolated_and_reset_independently
                 assert!(tokio::time::timeout(Duration::from_millis(1200),requests.recv()).await.is_err());
                 assert_eq!(peer.rpc("interaction.answer",json!({"sessionId":session,"interactionId":id,"answer":{"kind":"client_capability","decision":"allow"}})).await["ok"],true);
             }
-            let request=requests.recv().await.unwrap();
-            let output=request.body["messages"].as_array().unwrap().iter().find(|message|message["tool_call_id"]==format!("cell-{turn}")).unwrap()["content"].as_str().unwrap();
+            let mut request=requests.recv().await.unwrap();
+            let mut output=request.body["messages"].as_array().unwrap().iter().find(|message|message["tool_call_id"]==format!("cell-{turn}")).unwrap()["content"].as_str().unwrap().to_owned();
+            // First-use API documentation may exceed the inline result budget.
+            // Follow the same durable Read continuation exposed to the model;
+            // persistence does not require every result to remain inline.
+            if let Ok(archive) = serde_json::from_str::<Value>(&output)
+                && archive["kind"] == "maka.archived_tool_result"
+            {
+                let mut page = archive["page"].clone();
+                output = page["content"].as_str().unwrap().to_owned();
+                let mut page_number = 0;
+                while !page["next"].is_null() {
+                    page_number += 1;
+                    assert!(page_number <= 16, "CUA fixture output must have bounded pages");
+                    let id = format!("page-{turn}-{page_number}");
+                    request.reply.send(call(&id, "Read", page["next"].clone())).unwrap();
+                    request = requests.recv().await.unwrap();
+                    let content = request.body["messages"].as_array().unwrap().iter().find(|message|message["tool_call_id"]==id).unwrap()["content"].as_str().unwrap();
+                    page = serde_json::from_str(content).unwrap();
+                    output.push_str(page["content"].as_str().unwrap());
+                }
+            }
             assert!(output.contains(expected),"{session}/{turn}: {output}");
             if turn == "failure" { assert!(output.contains("Cua JavaScript error: Error: boom"), "{output}"); }
             else { assert!(!output.contains("tool failed"), "{output}"); }

@@ -71,8 +71,15 @@ what to do next. Do not guess delays before observing. A successful input dispat
 is not proof of the user's requested outcome: verify the resulting state.
 Coordinates belong to the latest screenshot. Moving/resizing, navigation, scrolling
 or any action consumes/invalidates the mapping; capture again before another point.
-macOS/Linux pixel clicks default to background delivery; Windows input and native
-drag may activate the target. No automatic foreground fallback occurs.
+Native semantic actions use retained accessibility elements. Application menus
+are scoped to their owning process and the exact bound window; closed menu
+contents are omitted until the menu is opened. Menu interaction may activate the
+bound window and keeps it active while the menu is open.
+macOS/Windows coordinate and keyboard input use the exact window's foreground
+route; macOS restores the prior application after delivery where supported.
+Linux keeps background delivery. Coordinate input can move the system pointer.
+Unverified input effects are reported in the call output; observe before deciding
+on another action. There is no public `delivery_mode` option or automatic replay.
 
 `nodeRepl.write(value)` emits text/JSON. `await nodeRepl.emitImage(bytes | dataUrl |
 {bytes, mimeType})` emits an image. File/HTTP image URLs, Node, arbitrary filesystem

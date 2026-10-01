@@ -125,6 +125,16 @@ const bind = async (method, args) => {
   const action = (kind, args) =>
     invoke('action', { handle, action: { kind, ...args } }).then((result) => {
       if (result?.warning) write(result.warning);
+      if (['unverifiable', 'unchanged', 'partial', 'suspected_noop'].includes(result?.effect))
+        write({
+          effect: result.effect,
+          route: result.route,
+          delivery: result.delivery,
+          requestedChars: result.requested_chars,
+          deliveredChars: result.delivered_chars,
+          warning:
+            'The driver did not verify the requested effect. Read getAXState() or getScreenshot() before deciding what to do next; do not replay an uncertain action.',
+        });
     });
   const target = {
     getAXState: (options) => observe('ax', options),

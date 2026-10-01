@@ -284,6 +284,14 @@ impl Target {
             .get(&index)
             .ok_or_else(|| failed("stale_element: read getAXState first"))?
             .as_ptr() as AXUIElementRef;
+        if unsafe { element_window_id(element) }.is_none()
+            && unsafe { in_application_menu(self.pid, element) }
+        {
+            if unsafe { copy_bool_attr(element, "AXEnabled") } == Some(false) {
+                return Err(failed("element is disabled"));
+            }
+            return Ok(element);
+        }
         // SAFETY: `elements` retains this AX object through the whole operation.
         let facts = gather_background_facts(self.pid, self.window_id, Some(element as usize));
         if let BackgroundInputDecision::Refuse(refusal) = decide_background_input(
@@ -304,7 +312,11 @@ impl Target {
         }
         Ok(element)
     }
-    pub(crate) fn action(&mut self, action: Action) -> Result<(), ToolError> {
+    pub(crate) fn action(
+        &mut self,
+        action: Action,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), ToolError> {
         // SAFETY: each pointer comes from `element`, which rechecks the retained
         // target and ancestry; the Session serializes actions and retirement.
         unsafe {
@@ -319,6 +331,7 @@ impl Target {
                         ));
                     }
                     let element = self.element(index)?;
+                    self.prepare_menu(element)?;
                     let actions = copy_action_names(element);
                     let action = match options.mouse_button.unwrap_or(MouseButton::Left) {
                         MouseButton::Left => "AXPress",
@@ -328,8 +341,18 @@ impl Target {
                         }
                     };
                     if actions.iter().any(|a| a == action) {
+                        if cancellation.is_cancelled() {
+                            return Err(failed(
+                                "Computer Use cancelled before accessibility input dispatch",
+                            ));
+                        }
                         check(perform_action(element, action))?;
                     } else if action == "AXPress" && is_attribute_settable(element, "AXFocused") {
+                        if cancellation.is_cancelled() {
+                            return Err(failed(
+                                "Computer Use cancelled before accessibility input dispatch",
+                            ));
+                        }
                         check(set_bool_attr_true(element, "AXFocused"))?;
                     } else {
                         return Err(failed(
@@ -339,9 +362,15 @@ impl Target {
                 }
                 Action::Secondary { index, action } => {
                     let element = self.element(index)?;
+                    self.prepare_menu(element)?;
                     if !copy_action_names(element).contains(&action) {
                         return Err(failed(
                             "action_not_exposed: use an action listed in the current AX state",
+                        ));
+                    }
+                    if cancellation.is_cancelled() {
+                        return Err(failed(
+                            "Computer Use cancelled before accessibility input dispatch",
                         ));
                     }
                     check(perform_action(element, &action))?;
@@ -422,6 +451,73 @@ impl Target {
             }
         }
         Ok(())
+    }
+    fn prepare_menu(&self, element: AXUIElementRef) -> Result<(), ToolError> {
+        if unsafe { element_window_id(element) }.is_some() {
+            return Ok(());
+        }
+        // Menu commands belong to the application, but their context is this
+        // exact bound window. Keep that context active while a menu is open.
+        let focused = || {
+            platform_macos::ax::bindings::focused_window_id_of_pid(self.pid) == Some(self.window_id)
+                && platform_macos::input::skylight::front_process_matches(self.pid, self.window_id)
+                    == Some(true)
+        };
+        if !focused() {
+            if !platform_macos::input::skylight::make_exact_window_key(self.pid, self.window_id) {
+                return Err(failed("menu context could not activate the bound window"));
+            }
+            unsafe { check(perform_action(self.window.as_ptr() as _, "AXRaise"))? };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while !focused() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if !focused() {
+                return Err(failed("menu context did not become the bound window"));
+            }
+        }
+        self.verify()?;
+        if !unsafe { in_application_menu(self.pid, element) } {
+            return Err(failed(
+                "stale_element: read getAXState before using this menu",
+            ));
+        }
+        Ok(())
+    }
+}
+
+// A menu has application scope, never window scope. Compare its current
+// retained ancestry with this process's menu bar rather than accepting any
+// element that happens to have no AXWindow ancestor.
+unsafe fn in_application_menu(pid: i32, element: AXUIElementRef) -> bool {
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        let menu = copy_element_attr(app, "AXMenuBar");
+        CFRelease(app.cast());
+        let Some(menu) = menu else {
+            return false;
+        };
+        let mut current = RetainedElement::retain(element as usize);
+        let mut matched = false;
+        for _ in 0..64 {
+            let pointer = current.as_ptr() as AXUIElementRef;
+            if CFEqual(pointer.cast(), menu.cast()) != 0 {
+                matched = true;
+                break;
+            }
+            if copy_string_attr(pointer, "AXRole").as_deref() == Some("AXMenu")
+                && !element_screen_rect(pointer).is_some_and(|[_, _, w, h]| w > 0.0 && h > 0.0)
+            {
+                break;
+            }
+            let Some(parent) = copy_element_attr(pointer, "AXParent") else {
+                break;
+            };
+            current = RetainedElement::retain(parent as usize);
+            CFRelease(parent.cast());
+        }
+        CFRelease(menu.cast());
+        matched
     }
 }
 unsafe fn read_range(element: AXUIElementRef) -> Option<(isize, isize)> {

@@ -530,9 +530,12 @@ impl Session {
         if crate::macos::Target::handles(&action)
             && let Some(macos) = target.macos.clone()
         {
-            let result = tokio::task::spawn_blocking(move || macos.lock().unwrap().action(action))
-                .await
-                .map_err(|error| ToolError::CleanupUnconfirmed(error.to_string()))?;
+            let cancellation = cancellation.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                macos.lock().unwrap().action(action, &cancellation)
+            })
+            .await
+            .map_err(|error| ToolError::CleanupUnconfirmed(error.to_string()))?;
             self.targets.get_mut(handle).unwrap().capture = None;
             return result.map(|()| Value::Null);
         }
@@ -570,7 +573,7 @@ impl Session {
                 if !(1..=3).contains(&count) {
                     return Err(failed("clickCount must be between 1 and 3"));
                 }
-                let mut args = json!({"target":bound,"button":options.mouse_button.unwrap_or(MouseButton::Left).name(),"count":count,"delivery_mode":if cfg!(target_os="windows") {"foreground"} else {"background"}});
+                let mut args = json!({"target":bound,"button":options.mouse_button.unwrap_or(MouseButton::Left).name(),"count":count,"delivery_mode":native_delivery_mode()});
                 match position {
                     Position::Element(index) => {
                         args["element_token"] = json!(target.element(index)?.element_token)
@@ -616,16 +619,18 @@ impl Session {
                     json!({"pid":window.pid,"window_id":window.window_id,"element_token":element.element_token,"action":name,"delivery_mode":"background"}),
                 )
             }
-            Action::TypeText { index: None, text } => {
-                ("type_text", json!({"target":bound,"text":text}))
-            }
+            Action::TypeText { index: None, text } => (
+                "type_text",
+                json!({"target":bound,"text":text,"delivery_mode":native_delivery_mode()}),
+            ),
             Action::Paste {
                 index: None,
                 text,
                 options,
-            } if matches!(options.format, None | Some(PasteFormat::Text)) => {
-                ("type_text", json!({"target":bound,"text":text}))
-            }
+            } if matches!(options.format, None | Some(PasteFormat::Text)) => (
+                "type_text",
+                json!({"target":bound,"text":text,"delivery_mode":native_delivery_mode()}),
+            ),
             Action::PressKey { index: None, key } => {
                 let mut parts: Vec<_> = key.split('+').collect();
                 let key = parts.pop().ok_or_else(|| failed("key must not be empty"))?;
@@ -648,7 +653,7 @@ impl Session {
                     .collect();
                 (
                     "press_key",
-                    json!({"target":bound,"key":key,"modifiers":modifiers?}),
+                    json!({"target":bound,"key":key,"modifiers":modifiers?,"delivery_mode":native_delivery_mode()}),
                 )
             }
             Action::Scroll {
@@ -668,7 +673,7 @@ impl Session {
                 if amount == 0 || amount > 50 {
                     return Err(failed("scroll distance must be between 1 and 50 pages"));
                 }
-                let mut args = json!({"direction":direction.name(),"by":"page","amount":amount});
+                let mut args = json!({"direction":direction.name(),"by":"page","amount":amount,"delivery_mode":native_delivery_mode()});
                 match position {
                     Position::Point(point) => {
                         target.point(point, &window)?;
@@ -695,7 +700,7 @@ impl Session {
                 target.point(to, &window)?;
                 (
                     "drag",
-                    json!({"target":bound,"from_x":from[0],"from_y":from[1],"to_x":to[0],"to_y":to[1]}),
+                    json!({"target":bound,"from_x":from[0],"from_y":from[1],"to_x":to[0],"to_y":to[1],"delivery_mode":native_delivery_mode()}),
                 )
             }
             _ => {
@@ -819,8 +824,15 @@ impl Target {
         Ok(())
     }
 }
+fn native_delivery_mode() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "background"
+    } else {
+        "foreground"
+    }
+}
 fn window_info(window: &WindowInfo) -> Value {
-    json!({"id":window.window_id,"app":window.app_name,"title":window.title})
+    json!({"id":window.window_id,"app":window.app_name,"title":window.title,"isOnScreen":window.is_on_screen,"minimized":window.minimized,"onCurrentSpace":window.on_current_space,"zIndex":window.z_index})
 }
 fn decode<T: DeserializeOwned>(result: CallResult) -> Result<T, ToolError> {
     serde_json::from_value(

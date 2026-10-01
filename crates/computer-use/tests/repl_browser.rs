@@ -147,8 +147,7 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
         submitted["font"]
     );
     assert!(
-        texts(&output).contains("hello world / 你好")
-            && texts(&output).contains("cursor arrived: true"),
+        texts(&output).contains("hello world / 你好"),
         "{}",
         texts(&output)
     );
@@ -163,6 +162,130 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
             .iter()
             .any(|part| matches!(part, CellOutput::Media { .. }))
     );
+    let image = output
+        .iter()
+        .find_map(|part| match part {
+            CellOutput::Media { content, .. } => Some(serde_json::to_value(content).unwrap()),
+            _ => None,
+        })
+        .unwrap();
+    use base64::Engine;
+    let pixels = tiny_skia::Pixmap::decode_png(
+        &base64::engine::general_purpose::STANDARD
+            .decode(image["data"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let point: Value = serde_json::from_str(&form.command("canvas").await).unwrap();
+    let x = point["point"][0].as_f64().unwrap() * f64::from(pixels.width());
+    let y = point["point"][1].as_f64().unwrap() * f64::from(pixels.height());
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.click([{x},{y}]);"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let click: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert!(
+        (click["click"][0].as_f64().unwrap() - 50.0).abs() < 2.0
+            && (click["click"][1].as_f64().unwrap() - 20.0).abs() < 2.0,
+        "coordinate click must reach the observed canvas point: {click}"
+    );
+    let end_x = point["end"][0].as_f64().unwrap() * f64::from(pixels.width());
+    let end_y = point["end"][1].as_f64().unwrap() * f64::from(pixels.height());
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.getScreenshot(); await app.drag([{x},{y}],[{end_x},{end_y}]);"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let click: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert!((click["click"][0].as_f64().unwrap() - 50.0).abs() < 2.0);
+    let drag: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert!(
+        (drag["drag"][0].as_f64().unwrap() - 80.0).abs() < 2.0
+            && (drag["drag"][1].as_f64().unwrap() - 25.0).abs() < 2.0,
+        "drag must reach its observed endpoint: {drag}"
+    );
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.getScreenshot(); await app.scroll([{x},{y}], 'down', 1);"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let scroll: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert!(
+        scroll["scroll"].as_f64().unwrap() < 0.0,
+        "wheel input must reach the observed view: {scroll}"
+    );
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok);
+    assert!(
+        !texts(&output).contains("Menu fixture command"),
+        "closed menu contents must not be advertised: {}",
+        texts(&output)
+    );
+    let menu = index(&texts(&output), "AXMenuBarItem", "Fixture");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.click({menu}); await app.getAXState({{disableDiffing:true}});"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let command = index(&texts(&output), "AXMenuItem", "Menu fixture command");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.click({command}); await app.getAXState();"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let menu_result: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert_eq!(menu_result["menuWindow"], window_id);
+    assert_eq!(form.command("second").await, "second ready");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await app.pressKey('super+j'); await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let menu_result: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert_eq!(
+        menu_result["menuWindow"], window_id,
+        "keyboard input must retain its exact window when another window is key: {menu_result}"
+    );
+    let name = index(&texts(&output), "AXTextField", "Name");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.click({name}); await app.selectText({name}, 'hello world');"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    assert_eq!(form.command("second").await, "second ready");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await app.typeText('exact window'); await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(
+        ok && texts(&output).contains("value=\"exact window\""),
+        "typing must reach the bound window even when another window is key: {}",
+        texts(&output)
+    );
+    let (ok, _) = evaluate(&repl, bridge.clone(), "await app.getScreenshot();".into()).await;
+    assert!(ok);
     assert_eq!(form.command("move").await, "moved");
     let (ok, _) = evaluate(&repl, bridge.clone(), "await app.click([5,5]);".into()).await;
     assert!(

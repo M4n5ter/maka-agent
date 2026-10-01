@@ -42,6 +42,16 @@ impl ToolExecutor for Fixture {
                 "observe" => {
                     json!({"image":{"type":"image","mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="}})
                 }
+                "action" => match input["action"]["kind"].as_str().unwrap() {
+                    "click" => {
+                        json!({"effect":"unverifiable","route":"synthetic_events","delivery":{"mode":"foreground"}})
+                    }
+                    "setValue" => json!({"effect":"suspected_noop"}),
+                    "typeText" => {
+                        json!({"effect":"partial","requested_chars":5,"delivered_chars":2})
+                    }
+                    other => panic!("unexpected fixture action {other}"),
+                },
                 other => panic!("unexpected fixture command {other}"),
             })
         })
@@ -90,6 +100,26 @@ async fn inventory_failures_remain_visible_and_auto_explicit_screenshot_output_i
         1,
         "a later call can intentionally show the same image"
     );
+    for (code, effect) in [
+        ("nodeRepl.write(await app.click([0,0]));", "unverifiable"),
+        (
+            "nodeRepl.write(await app.setValue(1, 'value'));",
+            "suspected_noop",
+        ),
+        ("nodeRepl.write(await app.typeText('value'));", "partial"),
+    ] {
+        let output = evaluate(&repl, code).await;
+        assert!(output.iter().any(|part| matches!(part, CellOutput::Text {text} if text.contains(effect) && text.contains("getAXState()") && text.contains("do not replay"))));
+        assert!(
+            output
+                .iter()
+                .any(|part| matches!(part, CellOutput::Text {text} if text == "undefined")),
+            "actions retain the public Promise<void> contract"
+        );
+        if effect == "partial" {
+            assert!(output.iter().any(|part| matches!(part, CellOutput::Text {text} if text.contains("\"requestedChars\":5") && text.contains("\"deliveredChars\":2"))));
+        }
+    }
     repl.close().await.unwrap();
 }
 
