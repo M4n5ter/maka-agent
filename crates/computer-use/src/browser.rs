@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
+mod ax;
 mod cursor;
 
 pub(crate) fn validate_connections(connections: &[BrowserConnection]) -> Result<(), ToolError> {
@@ -84,6 +85,7 @@ struct Tab {
     socket: Option<Cdp>,
     frame: Option<String>,
     refs: HashMap<u64, u64>,
+    ax: ax::Projection,
     previous: Option<String>,
     capture: Option<Capture>,
     navigation: Option<Navigation>,
@@ -315,7 +317,7 @@ impl Browsers {
                     ));
                 }
                 let (provider, generation, tab) = matches.pop().unwrap();
-                self.bind(provider, generation, tab).await
+                self.bind(provider, generation, tab, cancellation).await
             }
             Command::CreateBrowserTab {
                 browser_id,
@@ -344,13 +346,16 @@ impl Browsers {
                 let tab = tabs.into_iter().find(|t| t.id == id).ok_or_else(|| {
                     unknown("created tab is not observable; do not create it again blindly")
                 })?;
-                self.bind(provider, generation, tab).await
+                self.bind(provider, generation, tab, cancellation).await
             }
             Command::Observe {
                 handle: Handle::Tab(handle),
                 kind,
                 options,
-            } => self.observe(&handle, kind, !options.disable_diffing).await,
+            } => {
+                self.observe(&handle, kind, !options.disable_diffing, cancellation)
+                    .await
+            }
             Command::Action {
                 handle: Handle::Tab(handle),
                 action,
@@ -376,6 +381,7 @@ impl Browsers {
         provider: BrowserConnection,
         generation: String,
         info: TabInfo,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
         if self.targets.len() >= 64 {
             return Err(failed("tab binding limit reached; reset Cua"));
@@ -391,13 +397,17 @@ impl Browsers {
                 socket: None,
                 frame: None,
                 refs: HashMap::new(),
+                ax: ax::Projection::default(),
                 previous: None,
                 capture: None,
                 navigation: None,
                 cursor_world: None,
             },
         );
-        match self.observe(&handle, ObservationKind::Ax, false).await {
+        match self
+            .observe(&handle, ObservationKind::Ax, false, cancellation)
+            .await
+        {
             Ok(value) => Ok(
                 json!({"handle":Handle::Tab(handle),"id":id,"kind":"tab","state":value["state"]}),
             ),
@@ -412,6 +422,7 @@ impl Browsers {
         handle: &str,
         kind: ObservationKind,
         diff: bool,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
         let tab = self
             .targets
@@ -421,7 +432,7 @@ impl Browsers {
         tab.capture = None;
         tab.frame = None;
         tab.verify().await?;
-        let result = tab.observe(kind, diff).await;
+        let result = tab.observe(kind, diff, cancellation).await;
         if result.is_err() {
             tab.socket = None;
             tab.refs.clear();
@@ -548,8 +559,15 @@ impl Tab {
                 .ok_or_else(|| failed("missing document generation"))?
         ))
     }
-    async fn observe(&mut self, kind: ObservationKind, diff: bool) -> Result<Value, ToolError> {
+    async fn observe(
+        &mut self,
+        kind: ObservationKind,
+        diff: bool,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<Value, ToolError> {
         self.wait_ready().await?;
+        crate::observation::settle(crate::observation::BROWSER_SETTLE, cancellation).await?;
+        self.verify().await?;
         self.request(
             "Runtime.releaseObjectGroup",
             json!({"objectGroup":"maka-cua"}),
@@ -565,29 +583,9 @@ impl Tab {
                 .as_array()
                 .ok_or_else(|| failed("browser returned no accessibility nodes"))?;
             let mut rows = vec![format!("Tab {}: {}", self.info.id, self.info.url)];
-            for (index, node) in nodes
-                .iter()
-                .filter(|node| node["ignored"] != true)
-                .take(2000)
-                .enumerate()
-            {
-                let index = index as u64;
-                let role = node["role"]["value"].as_str().unwrap_or("unknown");
-                let name = node["name"]["value"].as_str().unwrap_or("");
-                let content = node["value"]["value"].as_str().unwrap_or("");
-                rows.push(format!(
-                    "{index} {role} {}{}",
-                    json!(name),
-                    if content.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" value={}", json!(content))
-                    }
-                ));
-                if let Some(backend) = node["backendDOMNodeId"].as_u64() {
-                    self.refs.insert(index, backend);
-                }
-            }
+            let (tree, refs) = self.ax.render(&frame, nodes)?;
+            rows.push(tree);
+            self.refs = refs;
             if nodes.len() > 2000 {
                 rows.push("Accessibility tree truncated at 2000 nodes.".into());
             }

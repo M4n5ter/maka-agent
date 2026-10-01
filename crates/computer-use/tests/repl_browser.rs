@@ -127,6 +127,29 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
     .await;
     assert!(ok, "{}", texts(&output));
     let state = texts(&output);
+    assert!(
+        state
+            .lines()
+            .any(|line| line.contains("Disabled fixture") && line.contains("[disabled]")),
+        "{state}"
+    );
+    assert!(
+        state.contains("close button")
+            && (state.contains("zoom button") || state.contains("full screen button")),
+        "standard window controls must be named: {state}"
+    );
+    assert_eq!(form.command("delay350").await, "delay started");
+    let (ok, delayed) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(
+        ok && texts(&delayed).contains("Native delay ready"),
+        "first observation missed the native update: {}",
+        texts(&delayed)
+    );
     let name = index(&state, "AXTextField", "Name");
     let message = index(&state, "AXTextArea", "Message");
     let button = index(&state, "AXButton", "Submit fixture");
@@ -696,7 +719,12 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
 <label>Message <textarea aria-label="Message" id="message"></textarea></label>
 <select aria-label="Color" id="color"><option value="red-id">Red</option><option value="blue-id">Blue</option></select>
 <button onclick="const pointer=document.querySelector('[popover][aria-hidden=true]'); const bounds=pointer.getBoundingClientRect(); const arrived=Math.abs(bounds.x+9.685922-event.clientX)<1 && Math.abs(bounds.y+9.685922-event.clientY)<1; document.getElementById('result').textContent=document.getElementById('name').value+' / '+document.getElementById('message').value+' / '+document.getElementById('color').value+' / cursor arrived: '+arrived">Submit fixture</button>
-<output id="result" aria-live="polite"></output>"#
+<output id="result" aria-live="polite"></output>
+<button disabled>Disabled fixture</button>
+<button onclick="this.remove()">Remove fixture</button>
+<button onclick="document.getElementById('result').textContent='Frame pending'; requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById('result').textContent='Two frames ready'))">Two frames fixture</button>
+<button onclick="document.getElementById('result').textContent='Delay pending'; setTimeout(()=>document.getElementById('result').textContent='Delay ready',120)">Delay fixture</button>
+<style>@keyframes spin{to{transform:rotate(360deg)}} .decoration{animation:spin 1s linear infinite;pointer-events:none;width:20px;height:20px}</style><div aria-hidden="true" class="decoration">Spinner</div>"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -772,6 +800,70 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         &repl,
     )
     .await;
+    let initial = state.clone();
+    assert!(
+        initial
+            .lines()
+            .any(|line| line.contains("Disabled fixture") && line.contains("[disabled]")),
+        "{initial}"
+    );
+    assert!(!initial.contains("InlineTextBox"), "{initial}");
+    let removed = index(&initial, "button", "Remove fixture");
+    let disabled = index(&initial, "button", "Disabled fixture");
+    let (ok, _) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await tab.click({disabled});"),
+    )
+    .await;
+    assert!(!ok, "disabled input must still refuse before dispatch");
+    let (ok, output) = evaluate(&repl, bridge.clone(), format!("await tab.getAXState(); await tab.click({removed}); await tab.getAXState({{disableDiffing:true}});")).await;
+    assert!(
+        ok && !texts(&output).contains("Remove fixture"),
+        "{}",
+        texts(&output)
+    );
+    let (ok, _) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await tab.click({removed});"),
+    )
+    .await;
+    assert!(
+        !ok,
+        "a removed index must not select a different control after observation"
+    );
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await tab.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok);
+    let mut observed = texts(&output);
+    for (button, expected) in [
+        ("Two frames fixture", "Two frames ready"),
+        ("Delay fixture", "Delay ready"),
+    ] {
+        let target = index(&observed, "button", button);
+        let started = std::time::Instant::now();
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            format!("await tab.click({target}); await tab.getAXState({{disableDiffing:true}});"),
+        )
+        .await;
+        observed = texts(&output);
+        assert!(
+            ok && observed.contains(expected),
+            "first observation missed {expected}: {observed}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "continuous decoration must not block observation"
+        );
+    }
+    state = observed;
     for (text, diagnostic) in [("missing", "text_not_found"), ("hello", "ambiguous_text")] {
         let name = index(&state, "textbox", "Name");
         let (ok, output) = evaluate(&repl, bridge.clone(), format!(

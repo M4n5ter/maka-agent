@@ -79,8 +79,11 @@ final class Fixture: NSObject, NSApplicationDelegate {
         message.setAccessibilityLabel("Message")
         let button = NSButton(title: "Submit fixture", target: self, action: #selector(submit(_:)))
         button.frame = NSRect(x: 24, y: 85, width: 160, height: 32)
+        let disabled = NSButton(title: "Disabled fixture", target: nil, action: nil)
+        disabled.isEnabled = false
+        disabled.frame = NSRect(x: 200, y: 60, width: 180, height: 22)
         output.frame = NSRect(x: 24, y: 25, width: 370, height: 40)
-        for view in [name, message, button, output, canvas] { window.contentView!.addSubview(view) }
+        for view in [name, message, button, output, canvas, disabled] { window.contentView!.addSubview(view) }
         if ProcessInfo.processInfo.arguments.contains("--background") {
             window.orderBack(nil)
         } else {
@@ -131,6 +134,15 @@ final class Fixture: NSObject, NSApplicationDelegate {
                     }
                 }
                 if command == "resume" { resume.signal() }
+                if command == "delay350" {
+                    DispatchQueue.main.async { [self] in
+                        output.stringValue = "Delay pending"
+                        FileHandle.standardOutput.write(Data("delay started\n".utf8))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(350)) { [self] in
+                            output.stringValue = "Native delay ready"
+                        }
+                    }
+                }
                 if command == "edit" {
                     DispatchQueue.main.async { [self] in
                         name.stringValue = "externally edited"

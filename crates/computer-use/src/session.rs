@@ -384,7 +384,7 @@ impl Session {
         session: &str,
         cancellation: &CancellationToken,
     ) -> Result<Value, ToolError> {
-        let window = self.verify(handle, session, cancellation).await?;
+        self.verify(handle, session, cancellation).await?;
         let ax = !matches!(kind, ObservationKind::Screenshot);
         let screenshot = !matches!(kind, ObservationKind::Ax);
         // Clear old authority before attempting observation; failure cannot leave
@@ -400,6 +400,9 @@ impl Session {
         if let Some(macos) = target.macos.clone() {
             macos.lock().unwrap().clear();
         }
+        crate::observation::settle(crate::observation::NATIVE_SETTLE, cancellation).await?;
+        // The application may move or close during the settling window.
+        let window = self.verify(handle, session, cancellation).await?;
         let result = if !own_ax || screenshot {
             self.native.lock().await.invoke("get_window_state", json!({"pid":window.pid,"window_id":window.window_id,"include_accessibility_tree":ax && !own_ax,"include_screenshot":screenshot,"max_elements":1000,"max_image_dimension":1600}), session, cancellation).await?
         } else {
@@ -446,7 +449,7 @@ impl Session {
                 "Window: {:?}, App: {:?}.\n{full}",
                 window.title, window.app_name
             );
-            let mut state = if diff {
+            let mut state = if diff && cfg!(target_os = "macos") {
                 display_diff(target.previous.as_deref(), &full)
             } else {
                 full.clone()

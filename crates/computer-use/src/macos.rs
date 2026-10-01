@@ -219,6 +219,8 @@ impl Target {
         }
         let mut lines = Vec::new();
         for node in tree.nodes {
+            let subrole = node.subrole;
+            let focused = node.focused == Some(true);
             let index = if let Some(index) = node.element_index {
                 // The Cua walker transfers a retained reference for indexed
                 // nodes. Own one retain and release the transferred reference.
@@ -235,10 +237,17 @@ impl Target {
                 .title
                 .filter(|s| !s.is_empty())
                 .or(node.description)
-                .unwrap_or_default();
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| match subrole.as_deref() {
+                    Some("AXCloseButton") => "close button".into(),
+                    Some("AXZoomButton") => "zoom button".into(),
+                    Some("AXFullScreenButton") => "full screen button".into(),
+                    Some("AXMinimizeButton") => "minimize button".into(),
+                    _ => String::new(),
+                });
             let value = node.value_state.or(node.value).unwrap_or_default();
             lines.push(format!(
-                "{}{}{} {:?}{}{}",
+                "{}{}{} {:?}{}{}{}{}",
                 "  ".repeat(node.depth.min(30)),
                 index,
                 node.role,
@@ -252,7 +261,13 @@ impl Target {
                     String::new()
                 } else {
                     format!(" actions={:?}", node.actions)
-                }
+                },
+                if node.enabled == Some(false) {
+                    " [disabled]"
+                } else {
+                    ""
+                },
+                if focused { " [focused]" } else { "" }
             ));
         }
         self.verify()?;

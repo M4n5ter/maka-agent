@@ -188,6 +188,9 @@ impl Driver {
 }
 
 fn refusal(code: &str, reason: &str) -> String {
+    if code.starts_with("background_unavailable") {
+        return "Background input is unavailable for this control on the current desktop. Use an indexed accessibility action if one is exposed by app.getAXState(); otherwise this action requires a supported desktop input backend. The public Cua API cannot switch this call to foreground delivery.".into();
+    }
     let terminal = matches!(code, "session_ended" | "authorization_revoked")
         // The pinned SDK reports expiry under permission_denied, without a
         // structured subcode. Keep this adaptation at its native boundary;

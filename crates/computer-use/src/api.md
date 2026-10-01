@@ -23,7 +23,8 @@ Entry points (selection emits initial state):
   Unavailable providers, tab mentions and unsupported creation options throw.
 
 App and Tab observations:
-- `getAXState({emit?, disableDiffing?})` returns text, using a diff by default.
+- `getAXState({emit?, disableDiffing?})` returns text. Tabs and macOS apps use a diff by default;
+  Windows and Linux apps return the complete state.
 - `getScreenshot({emit?})` returns Uint8Array and emits the image.
 - `getAXStateAndScreenshot(options?)` returns `{state, screenshot}` and emits both.
 Discovery, selection and observations emit automatically. Call them directly;
@@ -31,6 +32,9 @@ wrapping `getScreenshot()` in `nodeRepl.emitImage()` or `getAXState()` in
 `nodeRepl.write()` is redundant. Use `{emit:false}` when processing the result
 yourself; inventory errors still appear. Identical images emitted within one call
 are delivered once. A later call may emit the same image again.
+Observations include a bounded settling window for brief UI updates (200 ms for
+tabs, 400 ms for apps). This does not wait for arbitrary asynchronous work;
+continuous animation does not extend the window. Refresh to observe later updates.
 Screenshot-only observation clears accessibility indices.
 If a native AX observation fails while an app is busy, refresh the same bound object
 when the app responds again. Failed observations invalidate old indices and coordinates.
