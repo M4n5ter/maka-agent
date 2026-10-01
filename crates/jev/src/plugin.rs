@@ -35,6 +35,17 @@ pub const ID: &str = "maka.jev";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Jev", "Jev", "Jev"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Evaluate structured decisions with a configured model service.",
+                "通过配置的模型服务评估结构化决策。",
+                "透過設定的模型服務評估結構化決策。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

@@ -50,8 +50,9 @@ pub(super) async fn snapshot(client: &Client) -> Result<Snapshot, RequestFailure
     'snapshot: for _ in 0..3 {
         let before = status(client).await?;
         let mut packages = vec![];
+        let mut builtins = vec![];
         let mut entries = vec![];
-        for view in [View::Packages, View::Entries] {
+        for view in [View::Packages, View::Builtins, View::Entries] {
             let mut cursor = None;
             for page_index in 0..16 {
                 let result = match query(client, view, cursor.clone()).await {
@@ -65,6 +66,10 @@ pub(super) async fn snapshot(client: &Client) -> Result<Snapshot, RequestFailure
                 let next = match result {
                     QueryResult::Packages(page) => {
                         packages.extend(page.items);
+                        page.next_cursor
+                    }
+                    QueryResult::Builtins(page) => {
+                        builtins.extend(page.items);
                         page.next_cursor
                     }
                     QueryResult::Entries(page) => {
@@ -102,8 +107,11 @@ pub(super) async fn snapshot(client: &Client) -> Result<Snapshot, RequestFailure
             && flat
                 .iter()
                 .all(|e| e.base_generation == after.authority_epoch)
+            && builtins
+                .iter()
+                .all(|p| p.base_generation == after.authority_epoch)
         {
-            if serde_json::to_vec(&(&packages, &flat))
+            if serde_json::to_vec(&(&packages, &builtins, &flat))
                 .map_err(|_| invalid("Invalid plugin snapshot"))?
                 .len()
                 > 8 * 1024 * 1024
@@ -116,6 +124,7 @@ pub(super) async fn snapshot(client: &Client) -> Result<Snapshot, RequestFailure
             return Ok(Snapshot {
                 status: after,
                 packages,
+                builtins,
                 entries: flat,
             });
         }

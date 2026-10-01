@@ -27,6 +27,7 @@ use serde_json::Value;
 pub enum View {
     Status,
     Packages,
+    Builtins,
     Entries,
     Tools,
     Commands,

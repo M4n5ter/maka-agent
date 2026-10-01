@@ -59,8 +59,8 @@ fn installed_package_export_uses_normal_pages_reviewed_bytes_and_preserves_unkno
     tui.click_text("Settings");
     tui.wait_for("Plugins");
     tui.click_page_text("Plugins");
-    tui.wait_for("Installed packages");
-    tui.click_page_text("Export board");
+    tui.wait_for("Plugin Library");
+    open_installed(&mut tui, "Export board");
     tui.wait_for("Export package");
     tui.click_page_text("Export package");
     tui.wait_for("Installed package on Host");
@@ -70,13 +70,13 @@ fn installed_package_export_uses_normal_pages_reviewed_bytes_and_preserves_unkno
         target.to_str().unwrap(),
     );
     tui.click_page_text("Export package");
-    tui.wait_for("Confirm");
+    tui.wait_for("Cancel");
     tui.send(b"\r");
-    tui.wait_until(|screen| !screen.contains("Confirm"));
+    tui.wait_until(|screen| !screen.contains("Cancel"));
     assert!(!target.exists(), "opening review defaults to cancellation");
     assert!(proxy.requests().is_empty());
     tui.click_page_text("Export package");
-    tui.wait_for("Confirm");
+    tui.wait_for("Cancel");
     let latest_digest = runtime.block_on(async {
         std::fs::write(source.join("notes.txt"), "installed replacement").unwrap();
         let preview = client
@@ -94,13 +94,13 @@ fn installed_package_export_uses_normal_pages_reviewed_bytes_and_preserves_unkno
             .unwrap();
         digest
     });
-    tui.click_last_text("Confirm");
+    tui.click_last_text("Export package");
     tui.wait_until(|screen| {
         screen.contains("OperationConflict: Installed package changed since")
             && screen
                 .lines()
                 .any(|line| line.trim_end().ends_with("review"))
-            && !screen.contains("Confirm")
+            && !screen.contains("Cancel")
     });
     assert!(
         !target.exists(),
@@ -118,8 +118,8 @@ fn installed_package_export_uses_normal_pages_reviewed_bytes_and_preserves_unkno
             && screen.contains(latest_digest.strip_prefix("sha256-").unwrap())
     });
     tui.click_page_text("Export package");
-    tui.wait_for("Confirm");
-    tui.click_last_text("Confirm");
+    tui.wait_for("Cancel");
+    tui.click_last_text("Export package");
     tui.wait_for("This export is unconfirmed.");
     tui.wait_for("connection failed");
     assert_eq!(

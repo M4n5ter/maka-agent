@@ -22,6 +22,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// Linked definitions remain discoverable after their instances are removed.
+/// Defaults are canonical composition operations, not an activation receipt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BuiltinProjection {
+    pub base_generation: u64,
+    pub extension_id: String,
+    pub description: maka_plugins::kernel::Description,
+    pub defaults: Vec<maka_plugins::composition::Operation>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageProjection {

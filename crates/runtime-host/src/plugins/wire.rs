@@ -201,6 +201,27 @@ impl Platform {
             }));
         }
         let items = match query.view {
+            View::Builtins => snapshot
+                .builtins
+                .values()
+                .map(|definition| {
+                    encode(BuiltinProjection {
+                        base_generation: snapshot.ledger.generation,
+                        extension_id: definition.id.clone(),
+                        description: definition.plugin.description().unwrap_or_else(|| {
+                            maka_plugins::kernel::Description {
+                                name: maka_runtime::display::Text::plain(&definition.id),
+                                summary: None,
+                            }
+                        }),
+                        defaults: snapshot
+                            .builtin_layers
+                            .get(&definition.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             View::Packages => snapshot
                 .packages
                 .values()

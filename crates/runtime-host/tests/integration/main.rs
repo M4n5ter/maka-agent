@@ -52,6 +52,7 @@ mod plugin_clients;
 mod plugin_commands;
 mod plugin_files;
 mod plugin_http;
+mod plugin_library;
 mod plugin_remote;
 mod projects;
 mod question_boundary;

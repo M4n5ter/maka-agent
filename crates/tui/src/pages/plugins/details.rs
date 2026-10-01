@@ -26,6 +26,10 @@ use crate::{
 use maka_protocol::plugin::EntryPhase;
 
 pub(super) fn package(app: &App, snapshot: &Snapshot, id: &str, rows: &mut Vec<Node<Command>>) {
+    if let Some(plugin) = snapshot.builtin(id) {
+        builtin(app, snapshot, plugin, rows);
+        return;
+    }
     let Some(package) = snapshot.package(id) else {
         rows.push(text(
             "missing",
@@ -116,6 +120,157 @@ pub(super) fn package(app: &App, snapshot: &Snapshot, id: &str, rows: &mut Vec<N
                 Tone::Subtle,
             ));
         }
+    }
+}
+
+pub(super) fn usage(app: &App, snapshot: &Snapshot, id: &str) -> String {
+    let entries: Vec<_> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| entry.package_id.as_deref() == Some(id))
+        .collect();
+    app.i18n.text(
+        if snapshot
+            .package(id)
+            .is_some_and(|package| !package.has_runtime)
+        {
+            "plugins-installed"
+        } else if entries.is_empty() {
+            "plugins-available"
+        } else if entries
+            .iter()
+            .any(|entry| matches!(entry.status, EntryPhase::Failed))
+        {
+            "plugins-attention"
+        } else if entries.iter().all(|entry| entry.disabled) {
+            "plugins-disabled"
+        } else if entries
+            .iter()
+            .any(|entry| matches!(entry.status, EntryPhase::Active))
+        {
+            "plugins-in-use"
+        } else if entries
+            .iter()
+            .any(|entry| matches!(entry.status, EntryPhase::Loading))
+        {
+            "plugins-loading"
+        } else if entries
+            .iter()
+            .any(|entry| matches!(entry.status, EntryPhase::Pending))
+        {
+            "plugins-pending"
+        } else if entries
+            .iter()
+            .any(|entry| matches!(entry.status, EntryPhase::Unloading))
+        {
+            "plugins-unloading"
+        } else {
+            "plugins-disposed"
+        },
+    )
+}
+
+fn builtin(
+    app: &App,
+    snapshot: &Snapshot,
+    plugin: &BuiltinProjection,
+    rows: &mut Vec<Node<Command>>,
+) {
+    let id = &plugin.extension_id;
+    let locale = app.i18n.locale().id();
+    rows.push(text(
+        "name",
+        safe(plugin.description.name.resolve(locale)),
+        Tone::Strong,
+    ));
+    rows.push(text(
+        "source",
+        app.i18n.text("plugins-builtins"),
+        Tone::Subtle,
+    ));
+    if let Some(summary) = &plugin.description.summary {
+        rows.push(text(
+            "description",
+            safe(summary.resolve(locale)),
+            Tone::Muted,
+        ));
+    }
+    rows.push(text("usage", usage(app, snapshot, id), Tone::Normal));
+    if snapshot.unused(id) {
+        if !plugin.defaults.is_empty() {
+            rows.push(text(
+                "available-note",
+                app.i18n.text("plugins-available-note"),
+                Tone::Muted,
+            ));
+            rows.push(Node::row("add-row", vec![review(app, "add", Change::Add)]));
+        }
+    } else if let Some(entry) = snapshot.single_entry(id) {
+        rows.push(
+            Node::row(
+                "plugin-actions",
+                vec![
+                    review(
+                        app,
+                        "toggle",
+                        if entry.local_disabled {
+                            Change::Enable
+                        } else {
+                            Change::Disable
+                        },
+                    ),
+                    review(app, "remove", Change::Remove),
+                ],
+            )
+            .gap(1),
+        );
+        if entry.disabled && !entry.local_disabled {
+            rows.push(text(
+                "ancestor",
+                app.i18n.text("plugins-ancestor-disabled"),
+                Tone::Warning,
+            ));
+        }
+        if let Some(diagnostic) = &entry.diagnostic {
+            rows.push(text("diagnostic", safe(diagnostic), Tone::Warning));
+        }
+        if app.plugins.details {
+            rows.push(link(
+                app,
+                "instance-details".into(),
+                app.i18n.text("plugins-instance-details"),
+                Place::Entry(EntryKey::of(entry)),
+            ));
+        }
+    } else {
+        rows.push(text(
+            "instances",
+            app.i18n.text("plugins-instances"),
+            Tone::Strong,
+        ));
+        for entry in snapshot
+            .entries
+            .iter()
+            .filter(|entry| entry.package_id.as_deref() == Some(id))
+        {
+            rows.push(link(
+                app,
+                format!("instance-{}", entry.id),
+                format!(
+                    "{} · {}",
+                    app.i18n.text(if entry.root_id == Scope::Profile {
+                        "plugins-profile"
+                    } else {
+                        "plugins-session"
+                    }),
+                    phase(app, entry.status)
+                ),
+                Place::Entry(EntryKey::of(entry)),
+            ));
+        }
+    }
+    if app.plugins.details {
+        rows.push(text("id", safe(id), Tone::Subtle));
     }
 }
 pub(super) fn instance(

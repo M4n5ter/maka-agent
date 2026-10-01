@@ -56,6 +56,17 @@ struct Web {
 }
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Web", "网络检索", "網路檢索"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Search and read information on the web.",
+                "搜索并读取网络信息。",
+                "搜尋並讀取網路資訊。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
     }

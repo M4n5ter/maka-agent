@@ -33,6 +33,17 @@ pub const ID: &str = "maka.external-agent";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Executors", "执行器", "執行器"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Connect external coding assistants and manage their sessions.",
+                "连接外部编程助手并管理执行器会话。",
+                "連接外部程式設計助手並管理執行器對話。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
     }

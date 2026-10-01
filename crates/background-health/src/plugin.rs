@@ -39,6 +39,21 @@ pub const ID: &str = "maka.background-health";
 pub const TOOL: &str = "BackgroundTaskHealth";
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Background tasks",
+                "后台任务",
+                "背景任務",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Check the state of commands running in the background.",
+                "查看后台运行命令的状态。",
+                "查看背景執行命令的狀態。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
     }

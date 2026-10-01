@@ -32,6 +32,21 @@ pub const ID: &str = "maka.session-recap";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Conversation recap",
+                "会话回顾",
+                "對話回顧",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Create a summary of a previous conversation.",
+                "为历史会话生成摘要。",
+                "為歷史對話產生摘要。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

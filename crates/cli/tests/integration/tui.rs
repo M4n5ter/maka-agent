@@ -138,7 +138,7 @@ fn real_pty_default_entry_routes_mouse_modal_resize_and_restores_terminal() {
     tui.click_text("Settings");
     tui.wait_for("Maka dark ▾");
     tui.send(b"\x10"); // Ctrl+P
-    tui.wait_for("Search commands…");
+    tui.wait_for("Search commands and sessions…");
     // Outside click closes only the modal, without activating the workspace.
     tui.send(b"\x1b[<0;3;5M\x1b[<0;3;5m");
     tui.wait_until(|screen| !screen.contains("Open workspace") && screen.contains("Maka dark ▾"));
@@ -994,10 +994,12 @@ impl Pty {
     }
     fn filter_command(&mut self, label: &str) {
         self.send(b"\x10");
-        self.wait_for("Search commands…");
+        self.wait_for("Search commands and sessions…");
         self.send(format!("\x1b[200~{}\x1b[201~", label.to_lowercase()).as_bytes());
         // Lowercase query differs from the command's title: await the filtered row.
-        self.wait_until(|screen| !screen.contains("Search commands…") && screen.contains(label));
+        self.wait_until(|screen| {
+            !screen.contains("Search commands and sessions…") && screen.contains(label)
+        });
     }
     /// Open a destination the sidebar no longer lists, via the command palette.
     fn command(&mut self, label: &str) {

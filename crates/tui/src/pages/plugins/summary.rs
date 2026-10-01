@@ -84,6 +84,9 @@ fn patch(app: &App, value: &EntryPatch, lines: &mut Vec<String>) {
     }
 }
 pub(super) fn write(app: &App, request: &Request) -> Option<String> {
+    if let Some(title) = &request.title {
+        return Some(safe(title.resolve(app.i18n.locale().id())));
+    }
     let mut lines = vec![];
     match request.mutation()? {
         io::Mutation::Export(input) => {

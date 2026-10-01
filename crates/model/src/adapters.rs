@@ -56,6 +56,21 @@ impl Builtin {
     }
 }
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Model protocols",
+                "模型协议",
+                "模型協定",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Support the protocols used by connected model services.",
+                "支持已连接模型服务使用的协议。",
+                "支援已連接模型服務使用的協定。",
+            )),
+        })
+    }
+
     fn activate(
         &self,
         _: PluginContext,

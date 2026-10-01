@@ -46,6 +46,17 @@ pub fn input_files() -> std::collections::BTreeSet<String> {
 
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Assistant", "助手", "助手"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Personalize your assistant and workspace instructions.",
+                "设置助手偏好和工作区说明。",
+                "設定助手偏好和工作區說明。",
+            )),
+        })
+    }
+
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|value| value.is_empty()) {
             Ok(())

@@ -39,6 +39,17 @@ pub const EXECUTION: &str = "maka.plan.execute";
 
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Plans", "计划", "計畫"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Prepare and follow a plan for your work.",
+                "制定并跟踪工作计划。",
+                "制定並追蹤工作計畫。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

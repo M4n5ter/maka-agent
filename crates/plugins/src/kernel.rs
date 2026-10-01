@@ -35,6 +35,11 @@ use tokio::{sync::oneshot, time::Instant};
 
 /// Statically linked Rust and loaded JS packages implement the same entrypoint.
 pub trait Plugin: Send + Sync {
+    /// Discovery metadata is available even when no instance is active.
+    fn description(&self) -> Option<Description> {
+        None
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         !matches!(scope, Scope::DesktopUi)
     }
@@ -47,6 +52,14 @@ pub trait Plugin: Send + Sync {
         context: PluginContext,
         config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>>;
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Description {
+    pub name: maka_runtime::display::Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<maka_runtime::display::Text>,
 }
 
 #[derive(Clone)]

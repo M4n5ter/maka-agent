@@ -25,10 +25,55 @@ use maka_protocol::plugin::{
 };
 
 impl State {
-    fn proposal(&self, change: Change) -> Result<Request, String> {
+    pub(super) fn proposal(&self, change: Change) -> Result<Request, String> {
         let binding = self.binding.clone().ok_or("plugins-unavailable")?;
         let snapshot = self.snapshot.as_ref().ok_or("plugins-unavailable")?;
         let (mutation, place, base) = match (&self.place, change) {
+            (Place::Package(id), Change::Enable | Change::Disable | Change::Remove) => {
+                snapshot.builtin(id).ok_or("plugins-missing")?;
+                let entry = snapshot.single_entry(id).ok_or("plugins-conflict")?;
+                let operation = if change == Change::Remove {
+                    Operation::Remove {
+                        entry_id: entry.id.clone(),
+                    }
+                } else {
+                    Operation::Update {
+                        entry_id: entry.id.clone(),
+                        patch: EntryPatch {
+                            disabled: Some(change == Change::Disable),
+                            ..Default::default()
+                        },
+                    }
+                };
+                (
+                    Mutation::Apply(Apply {
+                        base_generation: Some(entry.base_generation),
+                        operations: vec![operation],
+                    }),
+                    self.place.clone(),
+                    entry.base_generation,
+                )
+            }
+            (Place::Package(id), Change::Add) => {
+                let plugin = snapshot.builtin(id).ok_or("plugins-missing")?;
+                if !snapshot.unused(id) || plugin.defaults.is_empty() {
+                    return Err("plugins-conflict".into());
+                }
+                // Defaults come from the linked definition, never from TUI identities.
+                let operations = plugin.defaults.clone();
+                if operations.iter().any(|operation| !matches!(operation,
+                    Operation::Insert { entry, .. } if !snapshot.entries.iter().any(|existing| existing.id == entry.id))) {
+                    return Err("plugins-conflict".into());
+                }
+                (
+                    Mutation::Apply(Apply {
+                        base_generation: Some(plugin.base_generation),
+                        operations,
+                    }),
+                    self.place.clone(),
+                    plugin.base_generation,
+                )
+            }
             (Place::Export(id), Change::Export) => {
                 let package = snapshot.package(id).ok_or("plugins-missing")?;
                 let path = self.draft().ok_or("plugins-draft-limit")?.fields[0].text();
@@ -155,13 +200,27 @@ impl State {
                         base_generation: Some(base),
                         operations: vec![operation],
                     }),
-                    Place::Entry(key.clone()),
+                    if change == Change::Remove {
+                        current
+                            .package_id
+                            .clone()
+                            .map(Place::Package)
+                            .unwrap_or_else(|| Place::Entry(key.clone()))
+                    } else {
+                        Place::Entry(key.clone())
+                    },
                     base,
                 )
             }
             _ => return Err("plugins-missing".into()),
         };
-        Ok(Request::write(binding, mutation, change, place, base))
+        let mut request = Request::write(binding, mutation, change, place, base);
+        if let Place::Package(id) = &self.place
+            && let Some(plugin) = snapshot.builtin(id)
+        {
+            request.title = Some(plugin.description.name.clone());
+        }
+        Ok(request)
     }
 }
 impl App {

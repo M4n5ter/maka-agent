@@ -45,6 +45,7 @@ pub struct Request {
     pub(super) binding: Binding,
     pub(super) token: Uuid,
     body: Body,
+    pub(super) title: Option<maka_plugins::terminal_ui::Text>,
 }
 impl Request {
     pub fn needs_checkpoint(&self) -> bool {
@@ -69,6 +70,7 @@ impl Request {
                 place,
                 base,
             },
+            title: None,
         }
     }
     pub(super) fn intent(&self) -> Option<(Change, &Place, u64)> {
@@ -91,6 +93,7 @@ impl Request {
     fn same(&self, other: &Self) -> bool {
         self.token == other.token
             && self.binding == other.binding
+            && self.title == other.title
             && match (&self.body, &other.body) {
                 (Body::Read, Body::Read) => true,
                 (Body::Preview(a), Body::Preview(b)) => a == b,
@@ -163,6 +166,7 @@ impl App {
                 binding,
                 token: Uuid::new_v4(),
                 body: Body::Preview(state.path.text().to_owned()),
+                title: None,
             }
         } else if state.refresh {
             state.refresh = false;
@@ -170,6 +174,7 @@ impl App {
                 binding,
                 token: Uuid::new_v4(),
                 body: Body::Read,
+                title: None,
             }
         } else {
             return None;
@@ -216,11 +221,36 @@ impl App {
             return;
         }
         let background_read = request.background_read();
+        let destination = match (&result, request.intent(), self.navigation.current(), request.mutation()) {
+            (Ok(Output::Receipt(_)), Some((Change::Remove, place @ Place::Package(_), _)),
+                Route::Plugins(Place::Entry(key)), Some(Mutation::Apply(input)))
+                if input.operations.iter().any(|operation| matches!(operation,
+                    maka_plugins::composition::Operation::Remove { entry_id } if entry_id == &key.id)) => Some(place.clone()),
+            _ => None,
+        };
         let state = &mut self.plugins;
         state.pending = None;
         state.dispatched = false;
         match result {
             Ok(Output::Snapshot(snapshot)) => {
+                // A singleton's controls belong to its exact instance, even on
+                // a package page. Replacing it retires captured button gestures.
+                if let Place::Package(id) = &state.place
+                    && snapshot.builtin(id).is_some()
+                {
+                    let previous = state
+                        .snapshot
+                        .as_ref()
+                        .and_then(|old| old.single_entry(id))
+                        .map(|entry| (EntryKey::of(entry), entry.base_generation));
+                    let current = snapshot
+                        .single_entry(id)
+                        .map(|entry| (EntryKey::of(entry), entry.base_generation));
+                    if previous != current {
+                        state.token = Uuid::new_v4();
+                        state.invalidate_geometry();
+                    }
+                }
                 state.sync_drafts(&snapshot);
                 state.snapshot = Some(snapshot);
                 state.ensure_draft();
@@ -296,6 +326,9 @@ impl App {
         if !background_read {
             state.token = Uuid::new_v4();
             state.invalidate_geometry();
+        }
+        if let Some(place) = destination {
+            self.apply(Action::Visit(Route::Plugins(place)));
         }
     }
 }

@@ -48,6 +48,21 @@ pub const ID: &str = "maka.agent-graph";
 
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Parallel work",
+                "并行任务",
+                "平行任務",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Coordinate related tasks and their dependencies.",
+                "协调关联任务及其依赖关系。",
+                "協調關聯任務及其相依關係。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

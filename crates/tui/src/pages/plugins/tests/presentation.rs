@@ -261,3 +261,218 @@ fn preview_digest_is_opt_in_and_new_places_choose_safe_focus_while_returns_resto
         Some("plugins/scroll/body/package-actions/restart")
     );
 }
+
+#[test]
+fn linked_plugin_library_adds_with_frozen_defaults_and_keeps_unknown_writes_unreplayed() {
+    use maka_plugins::{
+        composition::{Entry, Operation},
+        kernel::Description,
+        terminal_ui::Text,
+    };
+    for locale in Locale::ALL {
+        let mut app = app(Place::Overview);
+        app.i18n.preference = LocalePreference::Explicit(locale);
+        let mut default = Entry::new("linked-default").unwrap();
+        default.package_id = Some("example.linked".into());
+        default.config = serde_json::json!({"mode":"original"});
+        let defaults = vec![Operation::Insert {
+            root_id: Some(Scope::Profile),
+            parent_id: None,
+            position: None,
+            entry: default,
+        }];
+        app.plugins
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .builtins
+            .push(BuiltinProjection {
+                base_generation: 7,
+                extension_id: "example.linked".into(),
+                description: Description {
+                    name: Text::localized("Calm tools", "轻松工具", "輕鬆工具"),
+                    summary: Some(Text::localized(
+                        "Keep your work organized.",
+                        "让工作保持有序。",
+                        "讓工作保持有序。",
+                    )),
+                },
+                defaults: defaults.clone(),
+            });
+        let name = app.plugins.snapshot.as_ref().unwrap().builtins[0]
+            .description
+            .name
+            .resolve(locale.id())
+            .to_owned();
+        for (width, height) in [(100, 40), (52, 26)] {
+            let rendered = screen(&mut app, width, height);
+            assert!(
+                rendered.replace(' ', "").contains(&name.replace(' ', "")),
+                "{locale:?} {rendered}"
+            );
+            assert!(
+                rendered
+                    .replace(' ', "")
+                    .contains(&app.i18n.text("plugins-available").replace(' ', ""))
+            );
+        }
+        app.apply(Action::Visit(Route::Plugins(Place::Package(
+            "example.linked".into(),
+        ))));
+        let rendered = screen(&mut app, 52, 26);
+        assert!(
+            rendered.replace(' ', "").contains(&name.replace(' ', "")),
+            "{locale:?} {rendered}"
+        );
+        assert!(!rendered.contains("example.linked"));
+        assert!(!rendered.contains("mode"));
+        assert!(
+            app.plugins
+                .surface
+                .rect("plugins/scroll/body/add-row/add")
+                .is_some()
+        );
+        let token = review(&mut app, Change::Add);
+        let plugin = &mut app.plugins.snapshot.as_mut().unwrap().builtins[0];
+        plugin.description.name = Text::plain("Changed after review");
+        plugin.defaults.clear();
+        let Some(Confirmation::Write(frozen)) = &app.plugins.confirmation else {
+            panic!()
+        };
+        assert_eq!(summary::write(&app, frozen).as_deref(), Some(name.as_str()));
+        screen(&mut app, 52, 26);
+        app.apply(Action::Plugins(Command::Confirm(token)));
+        let request = app.plugins_request().unwrap();
+        let Some(io::Mutation::Apply(input)) = request.mutation() else {
+            panic!()
+        };
+        assert_eq!(input.base_generation, Some(7));
+        assert_eq!(
+            serde_json::to_value(&input.operations).unwrap(),
+            serde_json::to_value(&defaults).unwrap()
+        );
+        assert!(app.plugins_after_checkpoint(&request, &Ok(())));
+        app.plugins_completed(request, Err(RequestFailure::Unknown(ClientError::Timeout)));
+        let mut restored = State::default();
+        restored.restore(app.plugins.checkpoint());
+        assert_eq!(restored.unknown.len(), 1);
+        assert!(restored.queued.is_none() && restored.pending.is_none());
+    }
+}
+
+#[test]
+fn linked_plugin_controls_target_the_current_instance_and_preserve_the_library_after_removal() {
+    use maka_plugins::{
+        composition::{Entry, Operation},
+        kernel::Description,
+        terminal_ui::Text,
+    };
+    let mut app = app(Place::Package("example.linked".into()));
+    let mut default = Entry::new("linked-default").unwrap();
+    default.package_id = Some("example.linked".into());
+    app.plugins
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .builtins
+        .push(BuiltinProjection {
+            base_generation: 7,
+            extension_id: "example.linked".into(),
+            description: Description {
+                name: Text::plain("Linked tools"),
+                summary: None,
+            },
+            defaults: vec![Operation::Insert {
+                root_id: Some(Scope::Profile),
+                parent_id: None,
+                position: None,
+                entry: default,
+            }],
+        });
+    let mut current = entry();
+    current.id = "chosen-instance".into();
+    current.package_id = Some("example.linked".into());
+    app.plugins
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .entries
+        .push(current.clone());
+    let rendered = screen(&mut app, 52, 26);
+    assert!(rendered.contains("Linked tools"));
+    assert!(
+        app.plugins
+            .surface
+            .rect("plugins/scroll/body/plugin-actions/toggle")
+            .is_some()
+    );
+    assert!(!app.plugins_enabled(&Command::Review(app.plugins.token, Change::Add)));
+    let captured = Command::Review(app.plugins.token, Change::Remove);
+    app.plugins.changed();
+    let read = app.plugins_request().unwrap();
+    let mut refreshed = app.plugins.snapshot.as_ref().unwrap().clone();
+    refreshed
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "chosen-instance")
+        .unwrap()
+        .id = "replacement-instance".into();
+    app.plugins_completed(read, Ok(Output::Snapshot(refreshed)));
+    screen(&mut app, 52, 26);
+    assert!(!app.plugins_enabled(&captured));
+    app.apply(Action::Plugins(captured));
+    assert!(app.plugins.confirmation.is_none());
+    // Removing and re-adding a default can reuse the same ID. An authority
+    // change still retires controls captured against its former revision.
+    let captured = Command::Review(app.plugins.token, Change::Remove);
+    app.plugins.changed();
+    let read = app.plugins_request().unwrap();
+    let mut refreshed = app.plugins.snapshot.as_ref().unwrap().clone();
+    refreshed.status.authority_epoch += 1;
+    for entry in &mut refreshed.entries {
+        entry.base_generation = refreshed.status.authority_epoch;
+    }
+    app.plugins_completed(read, Ok(Output::Snapshot(refreshed)));
+    screen(&mut app, 52, 26);
+    assert!(!app.plugins_enabled(&captured));
+    app.apply(Action::Plugins(captured));
+    assert!(app.plugins.confirmation.is_none());
+    let request = confirm(&mut app, Change::Disable);
+    let Some(io::Mutation::Apply(input)) = request.mutation() else {
+        panic!()
+    };
+    assert!(
+        matches!(&input.operations[0],Operation::Update { entry_id, patch } if entry_id == "replacement-instance" && patch.disabled == Some(true))
+    );
+    assert!(app.plugins_after_checkpoint(&request, &Ok(())));
+    app.plugins_completed(request, Ok(Output::Receipt(receipt())));
+    let read = app.plugins_request().unwrap();
+    let mut refreshed = app.plugins.snapshot.as_ref().unwrap().clone();
+    let disabled = refreshed
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "replacement-instance")
+        .unwrap();
+    disabled.local_disabled = true;
+    disabled.disabled = true;
+    disabled.status = EntryPhase::Disabled;
+    app.plugins_completed(read, Ok(Output::Snapshot(refreshed)));
+    let removed = confirm(&mut app, Change::Remove);
+    let Some(io::Mutation::Apply(input)) = removed.mutation() else {
+        panic!()
+    };
+    assert!(
+        matches!(&input.operations[0],Operation::Remove {entry_id} if entry_id == "replacement-instance")
+    );
+    assert!(app.plugins_after_checkpoint(&removed, &Ok(())));
+    app.plugins_completed(removed, Ok(Output::Receipt(receipt())));
+    let read = app.plugins_request().unwrap();
+    let mut refreshed = app.plugins.snapshot.as_ref().unwrap().clone();
+    refreshed
+        .entries
+        .retain(|entry| entry.id != "replacement-instance");
+    app.plugins_completed(read, Ok(Output::Snapshot(refreshed)));
+    screen(&mut app, 52, 26);
+    assert!(app.plugins_enabled(&Command::Review(app.plugins.token, Change::Add)));
+    assert!(!app.plugins_enabled(&Command::Review(Uuid::new_v4(), Change::Add)));
+}

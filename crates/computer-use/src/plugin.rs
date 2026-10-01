@@ -49,6 +49,21 @@ struct Settings {
 }
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Computer use",
+                "电脑操作",
+                "電腦操作",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Interact with apps and browser tabs.",
+                "操作应用和浏览器标签页。",
+                "操作應用程式與瀏覽器分頁。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
     }

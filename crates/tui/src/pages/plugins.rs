@@ -42,7 +42,9 @@ use crate::{
 pub(crate) use confirm::sheet;
 pub use io::{Output, Request, execute};
 use maka_plugins::composition::Scope;
-use maka_protocol::plugin::{EntryProjection, PackagePreview, PackageProjection, Receipt, Status};
+use maka_protocol::plugin::{
+    BuiltinProjection, EntryProjection, PackagePreview, PackageProjection, Receipt, Status,
+};
 pub use saved::Checkpoint;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -117,6 +119,7 @@ pub enum Change {
     Configure,
     Services,
     Create,
+    Add,
 }
 impl Change {
     fn label(self) -> &'static str {
@@ -130,6 +133,7 @@ impl Change {
             Self::Remove => "plugins-remove-instance",
             Self::Configure | Self::Services => "plugins-save",
             Self::Create => "plugins-create",
+            Self::Add => "plugins-add",
         }
     }
 }
@@ -161,6 +165,7 @@ struct Binding {
 pub struct Snapshot {
     status: Status,
     packages: Vec<PackageProjection>,
+    builtins: Vec<BuiltinProjection>,
     entries: Vec<EntryProjection>,
 }
 impl Snapshot {
@@ -169,6 +174,23 @@ impl Snapshot {
     }
     fn package(&self, id: &str) -> Option<&PackageProjection> {
         self.packages.iter().find(|p| p.extension_id == id)
+    }
+    fn builtin(&self, id: &str) -> Option<&BuiltinProjection> {
+        self.builtins.iter().find(|p| p.extension_id == id)
+    }
+    fn unused(&self, id: &str) -> bool {
+        !self
+            .entries
+            .iter()
+            .any(|entry| entry.package_id.as_deref() == Some(id))
+    }
+    fn single_entry(&self, id: &str) -> Option<&EntryProjection> {
+        let mut entries = self
+            .entries
+            .iter()
+            .filter(|entry| entry.package_id.as_deref() == Some(id));
+        let entry = entries.next()?;
+        entries.next().is_none().then_some(entry)
     }
 }
 
@@ -415,6 +437,11 @@ impl App {
                     && state.binding.is_some()
                     && state.binding == self.plugins_binding()
                     && match command {
+                        Command::Review(token, Change::Add) => {
+                            *token == state.token
+                                && state.unknown.len() < LIMIT
+                                && state.proposal(Change::Add).is_ok()
+                        }
                         Command::Review(token, _) | Command::Rebase(token) => {
                             *token == state.token && state.unknown.len() < LIMIT
                         }

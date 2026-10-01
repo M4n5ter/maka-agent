@@ -41,6 +41,17 @@ const MAX_CONTENT_CHARS: usize = 200;
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Tasks", "待办事项", "待辦事項"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Keep track of work in the current conversation.",
+                "跟踪当前会话中的待办事项。",
+                "追蹤目前對話中的待辦事項。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

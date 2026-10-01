@@ -268,6 +268,8 @@ impl Owner {
             ledger: self.ledger.clone(),
             desired: self.desired.clone(),
             packages: self.packages.clone(),
+            builtins: self.builtins.clone(),
+            builtin_layers: self.builtin_layers.clone(),
             required_services: self.required_services.clone(),
             runtime: self.kernel.status(),
             fence: self.fence.clone(),

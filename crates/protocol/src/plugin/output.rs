@@ -18,8 +18,8 @@
  */
 
 use super::{
-    CommandProjection, EntryProjection, ExecutorProjection, Failure, InputResourceProjection,
-    PackageProjection, TerminalViewProjection, ToolProjection,
+    BuiltinProjection, CommandProjection, EntryProjection, ExecutorProjection, Failure,
+    InputResourceProjection, PackageProjection, TerminalViewProjection, ToolProjection,
 };
 use crate::{Operation, ProtocolError, Result, codec};
 use serde::{Deserialize, Serialize};
@@ -118,6 +118,7 @@ pub struct Page<T> {
 pub enum QueryResult {
     Status(Status),
     Packages(Page<PackageProjection>),
+    Builtins(Page<BuiltinProjection>),
     Entries(Page<EntryProjection>),
     Tools(Page<ToolProjection>),
     Commands(Page<CommandProjection>),
@@ -175,6 +176,24 @@ pub fn decode_output(operation: Operation, value: &Value) -> Result<Value> {
                     0
                 }
                 QueryResult::Packages(page) => page.items.len(),
+                QueryResult::Builtins(page) => {
+                    for item in &page.items {
+                        super::client::identity(&item.extension_id)?;
+                        item.description
+                            .name
+                            .validate()
+                            .map_err(ProtocolError::invalid)?;
+                        if let Some(summary) = &item.description.summary {
+                            summary.validate().map_err(ProtocolError::invalid)?;
+                        }
+                        for operation in &item.defaults {
+                            operation
+                                .validate()
+                                .map_err(|error| ProtocolError::invalid(error.to_string()))?;
+                        }
+                    }
+                    page.items.len()
+                }
                 QueryResult::Entries(page) => page.items.len(),
                 QueryResult::Tools(page) => page.items.len(),
                 QueryResult::Commands(page) => {

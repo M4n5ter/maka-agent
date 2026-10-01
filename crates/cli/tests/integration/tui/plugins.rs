@@ -73,36 +73,52 @@ fn open_manager(tui: &mut Pty) {
     tui.click_text("Settings");
     tui.wait_for("Plugins");
     tui.click_page_text("Plugins");
-    tui.wait_for("Installed packages");
+    tui.wait_for("Library");
+    library_top(tui);
+    tui.wait_for("Plugin Library");
+}
+fn library_top(tui: &mut Pty) {
+    // The library preserves its reading position between visits. This point
+    // lies in its scroll body at both fixture viewport sizes.
+    for _ in 0..32 {
+        tui.send(b"\x1b[<64;80;12M");
+    }
+}
+fn open_installed(tui: &mut Pty, title: &str) {
+    tui.click_page_text("Library");
+    library_top(tui);
+    tui.wait_for("Built into Maka");
+    tui.wheel_at("Built into Maka", true, 32);
+    tui.wait_for("Installed plugins");
+    tui.wait_for(title);
+    tui.click_page_text(title);
 }
 fn install(tui: &mut Pty, path: &std::path::Path, title: &str) {
     open_manager(tui);
-    tui.wait_for("Installed packages");
+    tui.wait_for("Plugin Library");
     tui.click_page_text("Install package");
     tui.wait_for("Package path on Host");
     field(tui, "Package path on Host", path.to_str().unwrap());
     tui.click_page_text("Preview package");
     tui.wait_for(title);
     tui.click_page_text("Install package");
-    tui.wait_for("Confirm");
-    tui.click_last_text("Confirm");
+    tui.wait_for("Cancel");
+    tui.click_last_text("Install package");
     settled(tui);
-    tui.click_page_text("All plugins");
-    tui.wait_until(|screen| screen.contains("Installed packages") && screen.contains(title));
-    tui.click_page_text(title);
+    open_installed(tui, title);
     tui.wait_for("Create instance");
 }
-fn create(tui: &mut Pty, id: &str, config: &str) {
+fn create(tui: &mut Pty, title: &str, id: &str, config: &str) {
     tui.click_page_text("Create instance");
     tui.wait_for("Instance identifier");
     field(tui, "Instance identifier", id);
     field(tui, "Advanced configuration (JSON)", config);
     tui.click_page_text("Create instance");
-    tui.wait_for("Confirm");
-    tui.click_last_text("Confirm");
+    tui.wait_for("Cancel");
+    tui.click_last_text("Create instance");
     settled(tui);
-    tui.click_page_text("All plugins");
-    tui.wait_until(|screen| screen.contains("Installed packages") && screen.contains(id));
+    open_installed(tui, title);
+    tui.wait_for(id);
     tui.click_page_text(id);
     wait_active(tui, id);
 }
@@ -113,19 +129,17 @@ fn create(tui: &mut Pty, id: &str, config: &str) {
 fn settled(tui: &mut Pty) {
     tui.wait_until(|screen| {
         screen.contains("Changes saved")
-            && !screen.contains("Confirm")
+            && !screen.contains("Cancel")
             && !screen.contains("Contacting Host…")
     });
 }
 fn change(tui: &mut Pty, label: &str) {
     tui.wait_until(|screen| {
-        screen.contains(label)
-            && !screen.contains("Contacting Host…")
-            && !screen.contains("Confirm")
+        screen.contains(label) && !screen.contains("Contacting Host…") && !screen.contains("Cancel")
     });
     tui.click_page_text(label);
-    tui.wait_for("Confirm");
-    tui.click_last_text("Confirm");
+    tui.wait_for("Cancel");
+    tui.click_last_text(label);
     settled(tui);
 }
 
@@ -221,7 +235,7 @@ fn local_plugin_management_installs_board_and_owns_instance_lifecycle_through_th
     tui.resize(170, 48);
     tui.wait_for("Maka");
     install(&mut tui, &path, "Managed Board");
-    create(&mut tui, "aa-managed-board", "null");
+    create(&mut tui, "Managed Board", "aa-managed-board", "null");
     let initial = current(&runtime, &client, "aa-managed-board");
     assert!(!initial.local_disabled);
     assert!(matches!(
@@ -235,36 +249,34 @@ fn local_plugin_management_installs_board_and_owns_instance_lifecycle_through_th
     tui.send(b"\x1b[200~Keep this board draft\x1b[201~");
     tui.wait_for("Keep this board draft");
     open_manager(&mut tui);
+    open_installed(&mut tui, "Managed Board");
     tui.wait_for("aa-managed-board");
     tui.click_page_text("aa-managed-board");
-    tui.wait_for("Disable instance");
-    change(&mut tui, "Disable instance");
-    tui.wait_for("Enable instance");
+    tui.wait_for("Disable");
+    change(&mut tui, "Disable");
+    tui.wait_for("Enable");
     assert!(current(&runtime, &client, "aa-managed-board").local_disabled);
-    change(&mut tui, "Enable instance");
+    change(&mut tui, "Enable");
     wait_active(&mut tui, "aa-managed-board");
     assert!(!current(&runtime, &client, "aa-managed-board").local_disabled);
     open_app(&mut tui, "Board");
     tui.wait_for("Keep this board draft");
     open_manager(&mut tui);
-    tui.wait_for("Managed Board");
-    tui.click_page_text("Managed Board");
+    open_installed(&mut tui, "Managed Board");
     tui.wait_for("Restart plugin");
     change(&mut tui, "Restart plugin");
     tui.wait_for("aa-managed-board");
     tui.click_page_text("aa-managed-board");
     wait_active(&mut tui, "aa-managed-board");
-    tui.wait_for("Remove instance");
-    change(&mut tui, "Remove instance");
+    tui.wait_for("Remove");
+    change(&mut tui, "Remove");
     assert!(
         runtime
             .block_on(entries(&client))
             .iter()
             .all(|e| e.id != "aa-managed-board")
     );
-    tui.click_page_text("All plugins");
-    tui.wait_for("Managed Board");
-    tui.click_page_text("Managed Board");
+    open_installed(&mut tui, "Managed Board");
     tui.wait_for("Remove package");
     change(&mut tui, "Remove package");
     let QueryResult::Packages(packages) = runtime
@@ -311,6 +323,7 @@ fn plugin_config_draft_survives_conflict_and_changes_real_plugin_behavior_after_
     install(&mut tui, &path, "Configured greeting");
     create(
         &mut tui,
+        "Configured greeting",
         "aa-configured",
         r#"{"greeting":"Before configuration"}"#,
     );
@@ -323,6 +336,7 @@ fn plugin_config_draft_survives_conflict_and_changes_real_plugin_behavior_after_
     open_app(&mut tui, "Greeting");
     tui.wait_for("Before configuration");
     open_manager(&mut tui);
+    open_installed(&mut tui, "Configured greeting");
     tui.wait_for("aa-configured");
     tui.click_page_text("aa-configured");
     tui.wait_for("Advanced configuration (JSON)");
@@ -365,7 +379,7 @@ fn plugin_config_draft_survives_conflict_and_changes_real_plugin_behavior_after_
     tui.wait_until(|screen| {
         screen.contains("My reviewed greeting")
             && !screen.contains("Advanced configuration (JSON)")
-            && !screen.contains("All plugins")
+            && !screen.contains("Plugin Library")
     });
     tui.close_terminal();
     tui.finish();

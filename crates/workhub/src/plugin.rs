@@ -40,6 +40,17 @@ use tokio::sync::Notify;
 pub const ID: &str = "maka.workhub";
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("WorkHub", "任务协作", "任務協作"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Delegate work and follow results across conversations.",
+                "委派工作并跟踪不同会话的结果。",
+                "委派工作並追蹤不同對話的結果。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

@@ -32,6 +32,8 @@ Maka has one Rust Runtime Host. The CLI and TUI connect through the public clien
 
 The TUI is a client shell: it owns navigation, rendering and local drafts. Business pages, settings, commands, input selectors and workspace launch buttons come from activation-owned plugin contributions. Removing a contribution revokes its entry points and action authority together. Executor providers can publish their own views or use the standard forms in `maka_plugins::executor::terminal`; the Host still authorizes canonical session creation and configuration. Assistant preferences and session recaps follow the same public Remote boundary. Captured `views` expose observations; captured `controls` admit canonical writes under the initiating client's grants. Provider labels and connection categories come from provider descriptors.
 
+The plugin library discovers linked definitions independently of active instances. Each plugin owns its localizable description; the Host publishes its registered defaults. Adding a linked plugin applies those defaults through the existing revision-checked composition operation. Removing an instance preserves discovery and plugin data; installed package files remain a separate resource.
+
 The npm package in `packages/cli` only chooses and launches a matching executable. It does not add a second runtime, configuration store or tool implementation.
 
 See the owning crate READMEs for detailed contracts, and [the SDK](packages/plugin-sdk/README.md) for JavaScript plugin authoring.

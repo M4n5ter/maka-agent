@@ -76,6 +76,7 @@ fn snapshot() -> Snapshot {
             has_client: false,
             has_composition: false,
         }],
+        builtins: vec![],
         entries: vec![entry()],
     }
 }

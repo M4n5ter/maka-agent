@@ -61,6 +61,17 @@ struct Recall {
     workers: Arc<Semaphore>,
 }
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Recall", "历史检索", "歷史檢索"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Find useful information from earlier conversations.",
+                "查找历史会话中的相关信息。",
+                "尋找歷史對話中的相關資訊。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         matches!(scope, Scope::Profile | Scope::Session(_))
     }

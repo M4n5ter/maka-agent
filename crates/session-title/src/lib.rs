@@ -37,6 +37,21 @@ pub const ID: &str = "maka.session-title";
 
 pub struct Builtin;
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Conversation titles",
+                "会话标题",
+                "對話標題",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Give conversations names that are easy to find.",
+                "为会话生成便于查找的标题。",
+                "為對話產生便於尋找的標題。",
+            )),
+        })
+    }
+
     fn validate(&self, _: &Scope, config: &Value) -> Result<(), maka_plugins::Error> {
         if config.is_null() || config.as_object().is_some_and(|value| value.is_empty()) {
             Ok(())

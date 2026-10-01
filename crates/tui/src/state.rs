@@ -377,6 +377,59 @@ mod tests {
         (directory, state, app)
     }
 
+    #[test]
+    fn startup_restores_plugin_language_and_respects_explicit_override() {
+        use maka_plugins::terminal_ui::{Context, Placement, Text};
+        use maka_protocol::plugin::Page;
+        let (_, _, mut source) = fixture();
+        source.set_locale(LocalePreference::Explicit(Locale::ZhCn));
+        let saved = serde_json::to_value(Snapshot::capture(&source, ROOT)).unwrap();
+        for (keep_locale, expected) in [(false, Locale::ZhCn), (true, Locale::ZhTw)] {
+            let (_, _, mut reopened) = fixture();
+            if keep_locale {
+                reopened.set_locale(LocalePreference::Explicit(Locale::ZhTw));
+            }
+            serde_json::from_value::<Snapshot>(saved.clone())
+                .unwrap()
+                .restore(&mut reopened, keep_locale)
+                .unwrap();
+            assert_eq!(reopened.i18n.locale(), expected);
+            let mut entry = crate::apps::tests::app().apps.directory[0].clone();
+            entry.descriptor.context = Context::Application;
+            entry.descriptor.placement = Placement::Settings;
+            entry.descriptor.title = Text::localized("Executors", "执行器", "執行器");
+            let request = reopened.apps_requests().pop().unwrap();
+            reopened.apps_complete(
+                request,
+                Ok(crate::apps::Output::Directory(Page {
+                    items: vec![entry],
+                    next_cursor: None,
+                })),
+            );
+            let (key, title) = reopened.apps.settings_views().pop().unwrap();
+            assert_eq!(
+                title,
+                if expected == Locale::ZhCn {
+                    "执行器"
+                } else {
+                    "執行器"
+                }
+            );
+            reopened.apply(Action::Visit(Route::Settings));
+            reopened.apply(Action::Settings(crate::pages::settings::Message::Pane(key)));
+            let request = reopened.apps_requests().pop().unwrap();
+            match request.work {
+                crate::apps::Work::Call {
+                    input: maka_plugins::terminal_ui::view::Request::Read { locale, .. },
+                    ..
+                } => {
+                    assert_eq!(locale, expected.id());
+                }
+                _ => panic!("expected the first plugin read"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn attachment_checkpoint_precedes_upload_and_reopen_requires_explicit_resume() {
         use crate::pages::attachments::{Command, Manifest, Prepared, Read, io::Listing};

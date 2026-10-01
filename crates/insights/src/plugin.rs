@@ -35,6 +35,21 @@ pub const ID: &str = "maka.insights";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Usage insights",
+                "使用统计",
+                "使用統計",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Review model usage and costs.",
+                "查看模型用量和费用。",
+                "查看模型用量與費用。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

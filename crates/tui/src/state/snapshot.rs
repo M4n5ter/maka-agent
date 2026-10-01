@@ -393,7 +393,7 @@ impl Snapshot {
         app.sidebar.pending_only = self.pending_only;
         app.chrome.session_fullscreen = self.fullscreen;
         if !keep_locale {
-            app.i18n.preference = self.locale;
+            app.set_locale(self.locale);
         }
         app.apply(Action::Visit(self.navigation.current()));
         app.navigation = self.navigation;

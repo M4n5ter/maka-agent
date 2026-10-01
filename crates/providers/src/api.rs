@@ -57,6 +57,21 @@ impl ApiProviders {
     }
 }
 impl Plugin for ApiProviders {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "API connections",
+                "API 连接",
+                "API 連線",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Connect API providers and custom model services.",
+                "连接 API 提供方和自定义模型服务。",
+                "連接 API 提供者與自訂模型服務。",
+            )),
+        })
+    }
+
     fn activate(&self, _: PluginContext, _: Value) -> BoxFuture<'static, Result<Staged, String>> {
         let result = self.stage();
         Box::pin(async { result })

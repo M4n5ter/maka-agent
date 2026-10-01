@@ -148,6 +148,7 @@ impl Client {
         let actual = match &result {
             QueryResult::Status(_) => View::Status,
             QueryResult::Packages(_) => View::Packages,
+            QueryResult::Builtins(_) => View::Builtins,
             QueryResult::Entries(_) => View::Entries,
             QueryResult::Tools(_) => View::Tools,
             QueryResult::Commands(_) => View::Commands,

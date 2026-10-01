@@ -26,6 +26,20 @@ use crate::{
 pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     let confirmation = app.plugins.confirmation.as_ref()?;
     let token = confirmation.token();
+    let (confirm_label, confirm_role) = match confirmation {
+        Confirmation::Write(request) => {
+            let (change, _, _) = request.intent()?;
+            (
+                change.label(),
+                if matches!(change, Change::Remove | Change::Uninstall) {
+                    Role::Destructive
+                } else {
+                    Role::Primary
+                },
+            )
+        }
+        _ => ("plugins-confirm", Role::Primary),
+    };
     let (title, note, summary, technical, confirm) = match confirmation {
         Confirmation::Exit { token, .. } => (
             app.i18n.text("plugins-leave"),
@@ -44,6 +58,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                 Change::Enable | Change::Disable => "plugins-toggle-impact",
                 Change::Remove => "plugins-remove-impact",
                 Change::Create => "plugins-create-impact",
+                Change::Add => "plugins-add-impact",
                 _ => "plugins-save-impact",
             };
             (
@@ -153,8 +168,8 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             )
             .button(
                 "confirm",
-                app.i18n.text("plugins-confirm"),
-                Role::Primary,
+                app.i18n.text(confirm_label),
+                confirm_role,
                 Action::Plugins(confirm.clone()),
                 app.plugins_enabled(&confirm),
             )

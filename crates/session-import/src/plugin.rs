@@ -31,6 +31,21 @@ pub const ID: &str = "maka.session-import";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Conversation import",
+                "导入会话",
+                "匯入對話",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Bring conversations from other coding assistants into Maka.",
+                "将其他编程助手的会话导入 Maka。",
+                "將其他程式設計助手的對話匯入 Maka。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

@@ -72,6 +72,21 @@ impl Config {
     }
 }
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized(
+                "Scheduled tasks",
+                "定时任务",
+                "排程任務",
+            ),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Run tasks at the times you choose.",
+                "按设定的时间执行任务。",
+                "依設定的時間執行任務。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

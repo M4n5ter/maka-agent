@@ -33,6 +33,17 @@ pub const ID: &str = "maka.goal";
 pub struct Builtin;
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Goals", "持续任务", "持續任務"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Keep working toward a goal across execution turns.",
+                "跨执行轮次持续推进目标。",
+                "跨執行回合持續推進目標。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

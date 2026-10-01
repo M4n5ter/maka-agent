@@ -98,6 +98,17 @@ struct Basis {
 }
 
 impl Plugin for Builtin {
+    fn description(&self) -> Option<maka_plugins::kernel::Description> {
+        Some(maka_plugins::kernel::Description {
+            name: maka_plugins::terminal_ui::Text::localized("Skills", "技能", "技能"),
+            summary: Some(maka_plugins::terminal_ui::Text::localized(
+                "Discover and use local skills.",
+                "发现并使用本地技能。",
+                "探索並使用本機技能。",
+            )),
+        })
+    }
+
     fn supports_scope(&self, scope: &Scope) -> bool {
         *scope == Scope::Profile
     }

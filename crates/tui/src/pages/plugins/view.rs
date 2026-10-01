@@ -62,7 +62,9 @@ pub(super) fn review(app: &App, key: &'static str, change: Change) -> Node<Comma
         key,
         change.label(),
         Command::Review(app.plugins.token, change),
-        if matches!(change, Change::Remove | Change::Uninstall) {
+        if matches!(change, Change::Add) {
+            Role::Primary
+        } else if matches!(change, Change::Remove | Change::Uninstall) {
             Role::Destructive
         } else {
             Role::Normal
@@ -73,8 +75,16 @@ pub(super) fn link(app: &App, key: String, title: String, place: Place) -> Node<
     let mut commands = vec![(Command::Visit(place.clone()), "context-open")];
     match &place {
         Place::Package(id) => {
-            commands.push((Command::Visit(Place::New(id.clone())), "plugins-create"));
-            commands.push((Command::Visit(Place::Export(id.clone())), "plugins-export"));
+            if app
+                .plugins
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.package(id))
+                .is_some()
+            {
+                commands.push((Command::Visit(Place::New(id.clone())), "plugins-create"));
+                commands.push((Command::Visit(Place::Export(id.clone())), "plugins-export"));
+            }
         }
         Place::Entry(key) => {
             commands.push((
@@ -312,6 +322,16 @@ fn tree(app: &App, width: u16) -> Node<Command> {
     .gap(1)
 }
 fn overview(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
+    rows.push(text(
+        "library-title",
+        app.i18n.text("plugins-library"),
+        Tone::Strong,
+    ));
+    rows.push(text(
+        "library-note",
+        app.i18n.text("plugins-library-note"),
+        Tone::Muted,
+    ));
     rows.push(button_row(
         app,
         "install",
@@ -319,6 +339,25 @@ fn overview(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
         Command::Visit(Place::Install),
         Role::Primary,
     ));
+    if !snapshot.builtins.is_empty() {
+        rows.push(text(
+            "builtins",
+            app.i18n.text("plugins-builtins"),
+            Tone::Strong,
+        ));
+        for plugin in &snapshot.builtins {
+            rows.push(link(
+                app,
+                format!("builtin-{}", plugin.extension_id),
+                format!(
+                    "{} · {}",
+                    safe(plugin.description.name.resolve(app.i18n.locale().id())),
+                    super::details::usage(app, snapshot, &plugin.extension_id)
+                ),
+                Place::Package(plugin.extension_id.clone()),
+            ));
+        }
+    }
     rows.push(text(
         "packages",
         app.i18n.text("plugins-packages"),
@@ -335,28 +374,34 @@ fn overview(app: &App, snapshot: &Snapshot, rows: &mut Vec<Node<Command>>) {
         link(
             app,
             format!("package-{i}"),
-            safe(&p.display_name),
+            format!(
+                "{} · {}",
+                safe(&p.display_name),
+                super::details::usage(app, snapshot, &p.extension_id)
+            ),
             Place::Package(p.extension_id.clone()),
         )
     }));
-    rows.push(text(
-        "instances",
-        app.i18n.text("plugins-instances"),
-        Tone::Strong,
-    ));
-    rows.extend(snapshot.entries.iter().enumerate().map(|(i, e)| {
-        link(
-            app,
-            format!("entry-{i}"),
-            format!(
-                "{} · {} · {}",
-                safe(&e.id),
-                String::from(e.root_id.clone()),
-                super::details::phase(app, e.status)
-            ),
-            Place::Entry(EntryKey::of(e)),
-        )
-    }));
+    if app.plugins.details {
+        rows.push(text(
+            "instances",
+            app.i18n.text("plugins-instances"),
+            Tone::Strong,
+        ));
+        rows.extend(snapshot.entries.iter().enumerate().map(|(i, e)| {
+            link(
+                app,
+                format!("entry-{i}"),
+                format!(
+                    "{} · {} · {}",
+                    safe(&e.id),
+                    String::from(e.root_id.clone()),
+                    super::details::phase(app, e.status)
+                ),
+                Place::Entry(EntryKey::of(e)),
+            )
+        }));
+    }
     if let Some(diagnostic) = &snapshot.status.fence_diagnostic {
         rows.push(text("fence", safe(diagnostic), Tone::Warning));
     }
