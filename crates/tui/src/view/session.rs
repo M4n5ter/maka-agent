@@ -134,6 +134,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
             if app.chat.view.reading_changes() != reading {
                 app.checkpoint_changed(crate::state::Impact::Other);
             }
+            if welcome_visible(app, id) {
+                app.chrome.welcome.draw(
+                    body,
+                    frame.buffer_mut(),
+                    app.theme.colors(),
+                    &mut app.chrome.animation,
+                );
+            }
         }
         search::draw(
             frame,
@@ -162,6 +170,33 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
     super::queue::draw(frame, app, parts[1]);
     composer::feedback(frame, app, parts[2]);
     composer::draw(frame, app, parts[3], id, editor_height, extras);
+}
+
+/// Only local, untouched drafts are a welcome screen. An absent remote
+/// transcript can instead mean loading, failure, or an in-flight submission.
+fn welcome_visible(app: &App, id: &str) -> bool {
+    app.pending_new.contains_key(id)
+        && !app.sending.contains_key(id)
+        && app
+            .drafts
+            .get(id)
+            .is_some_and(|editor| editor.text().is_empty() && editor.marks().is_empty())
+        && !app.attachments.has(id)
+        && !app.has_directories(id)
+        && !app.has_skills(id)
+        && !app.chrome.ascii
+        && !app.chrome.details
+        && !app.closing
+        && app.overlay().is_none()
+        && !app.completion_open()
+        && !app.chrome.header.captures()
+        && !app.chrome.composer.captures()
+        && !app.inspector_wanted()
+        && app.chat.view.search.is_none()
+        && app.chat.error.is_none()
+        && !app.chat.removed
+        && !app.chat.view.text_selection.active()
+        && !app.chat.view.text_selection.dragging()
 }
 
 fn activity(app: &App) -> String {

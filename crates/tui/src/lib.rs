@@ -35,6 +35,7 @@ mod terminal;
 mod theme;
 mod ui;
 mod view;
+mod welcome;
 
 use app::{Action, App, ConnectionState, Notice};
 use crossterm::event::EventStream;

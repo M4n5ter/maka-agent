@@ -100,6 +100,17 @@ impl Motion {
         let at = self.now + duration;
         self.next = Some(self.next.map_or(at, |old| old.min(at)));
     }
+    /// A normalized repeating phase on the shared clock. Only a visible
+    /// caller requests frames; disabled decorative motion owns no deadline.
+    pub fn cycle(&mut self, period_ms: u64, frame_ms: u64) -> Option<f32> {
+        if !self.enabled {
+            return None;
+        }
+        let period = u128::from(period_ms.max(1));
+        let frame = u128::from(frame_ms.max(1));
+        self.request((frame - self.elapsed() % frame) as u64);
+        Some((self.elapsed() % period) as f32 / period as f32)
+    }
     pub fn frame(&mut self, kind: Loop, ascii: bool) -> &'static str {
         let frames = match (kind, ascii) {
             (Loop::Familiar, _) => FAMILIAR,
