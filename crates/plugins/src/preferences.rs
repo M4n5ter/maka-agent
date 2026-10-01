@@ -36,3 +36,19 @@ pub struct Snapshot {
 pub trait Preferences: Send + Sync {
     fn read(&self) -> BoxFuture<'_, Result<Snapshot, crate::Error>>;
 }
+
+/// User-facing preference edits are admitted by the captured Remote caller.
+/// This contract cannot change privacy, sandbox, credentials or execution policy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Mutation {
+    Personalization { value: Personalization },
+    WorkspaceInstructions { enabled: bool },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Update {
+    pub expected_revision: u64,
+    pub mutation: Mutation,
+}
+pub use maka_runtime::configuration::policy::RuntimePolicyMutationResult as Updated;

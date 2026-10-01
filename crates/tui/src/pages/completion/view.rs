@@ -32,7 +32,7 @@ use tree::tree;
 pub(super) fn origin(app: &App, origin: &Origin) -> String {
     match origin {
         Origin::Workspace => app.i18n.text("completion-workspace"),
-        Origin::Skill => app.i18n.text("skills-title"),
+        Origin::Skill => app.i18n.text("completion-plugins"),
         Origin::Session { name } => name.clone(),
         Origin::Plugin { title, package } => format!("{title} · {package}"),
     }

@@ -24,7 +24,7 @@ pub(super) fn tree(app: &App, width: u16, height: u16) -> Node<Command> {
     let popup = app.completion.popup.as_ref().unwrap();
     let current = popup.source.category();
     let categories = if popup.context.token.kind == Kind::Command {
-        vec![Category::Commands, Category::Skills, Category::Added]
+        vec![Category::Commands, Category::Plugins, Category::Added]
     } else {
         vec![
             Category::Workspace,
@@ -159,11 +159,7 @@ pub(super) fn tree(app: &App, width: u16, height: u16) -> Node<Command> {
             );
         } else if !matches!(
             candidate.pick,
-            Pick::Native(_)
-                | Pick::Command(_)
-                | Pick::Session { .. }
-                | Pick::Provider(_)
-                | Pick::Skill { .. }
+            Pick::Native(_) | Pick::Command(_) | Pick::Session { .. } | Pick::Provider(_)
         ) {
             controls.push(
                 Node::text(

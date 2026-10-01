@@ -69,16 +69,6 @@ enum Completed {
         Result<maka_protocol::configuration::policy::RuntimePolicySnapshot, String>,
     ),
     Extension(Box<apps::Request>, Result<apps::Output, apps::io::Failure>),
-    Skills(
-        pages::skills::Request,
-        Result<
-            (
-                maka_protocol::plugin::RemoteResult,
-                maka_skills::api::InvocableResult,
-            ),
-            String,
-        >,
-    ),
     Preferences(
         pages::manage::preferences::Ticket,
         Result<pages::manage::preferences::Response, maka_client::RequestFailure>,
@@ -102,10 +92,6 @@ enum Completed {
     Bundle(
         pages::bundle::Request,
         Result<pages::bundle::Output, maka_client::RequestFailure>,
-    ),
-    Recap(
-        pages::recap::Request,
-        Result<Option<pages::recap::Receipt>, maka_client::RequestFailure>,
     ),
     Resumed(
         pages::resume::Request,
@@ -386,25 +372,6 @@ where
                     jobs.spawn(async move {
                         let result = pages::revision::execute(&client, &request).await;
                         Completed::Revised(request, result)
-                    });
-                }
-                dirty = true;
-            }
-            if let Some(request) = app.recap_request() {
-                if request.needs_checkpoint() {
-                    if let Some(state) = &mut state {
-                        state.submit_recap(request, &mut app);
-                    } else {
-                        app.recap_after_checkpoint(
-                            &request,
-                            &Err("TUI checkpoint unavailable".into()),
-                        );
-                    }
-                } else {
-                    let client = client.clone();
-                    jobs.spawn(async move {
-                        let result = pages::recap::execute(&client, &request).await;
-                        Completed::Recap(request, result)
                     });
                 }
                 dirty = true;
@@ -726,13 +693,6 @@ where
                 }
                 dirty = true;
             }
-            if let Some(request) = app.skills_request() {
-                let client = client.clone();
-                jobs.spawn(async move {
-                    let result = pages::skills::execute(&client, &request).await;
-                    Completed::Skills(request, result)
-                });
-            }
             if let Some(request) = app.directory_request() {
                 let client = client.clone();
                 jobs.spawn(async move {
@@ -984,7 +944,6 @@ where
                     app.shutdown = shutdown::State::default();
                     flushed = false;
                     app.attachments.disconnect();
-                    app.skills.disconnect();
                     app.apps.disconnect();
                     watches.stop();
                     transcript_runner.stop();
@@ -992,7 +951,6 @@ where
                     app.resources.disconnect();
                     app.completion.disconnect();
                     app.attention.disconnect();
-                    app.recap.disconnect();
                     app.bundle.disconnect();
                     app.session_controls.disconnect();
                     app.plugins.disconnect();
@@ -1027,7 +985,6 @@ where
                     app.abandon_interaction();
                     app.abandon_pending_submissions();
                     app.attachments.disconnect();
-                    app.skills.disconnect();
                     app.apps.disconnect();
                     watches.stop();
                     transcript_runner.stop();
@@ -1035,7 +992,6 @@ where
                     app.resources.disconnect();
                     app.completion.disconnect();
                     app.attention.disconnect();
-                    app.recap.disconnect();
                     app.bundle.disconnect();
                     app.session_controls.disconnect();
                     app.plugins.disconnect();
@@ -1142,7 +1098,7 @@ where
                             .is_some_and(|draft| draft.text().is_empty())
                         && !app.attachments.has(&id)
                         && !app.has_directories(&id)
-                        && !app.has_skills(&id)
+                        && !app.has_selections(&id)
                         && !app.completion_requires_idle(&id)
                     {
                         app.creating = false;
@@ -1319,7 +1275,7 @@ where
                 // its capture plus any field deltas typed while it was writing.
                 if written.requests.is_empty() && written.apps.is_empty()
                     && written.oauth.is_none() && written.branch.is_none()
-                    && written.recap.is_none() && written.bundle.is_none() && written.session_controls.is_none() && written.resources.is_none() && written.plugins.is_none()
+                    && written.bundle.is_none() && written.session_controls.is_none() && written.resources.is_none() && written.plugins.is_none()
                     && written.resume.is_none() && written.revision.is_none()
                     && written.attachment.is_none() {
                     checkpoint_impact = state::Impact::Reading;
@@ -1328,14 +1284,6 @@ where
                     && app.plugins_after_checkpoint(&request, &written.result)
                     && let Some(client) = client.clone() {
                     jobs.spawn(async move { let result = pages::plugins::execute(&client, &request).await; Completed::Plugins(request, result) });
-                }
-                if let Some(request) = written.recap
-                    && app.recap_after_checkpoint(&request, &written.result)
-                    && let Some(client) = client.clone() {
-                    jobs.spawn(async move {
-                        let result=pages::recap::execute(&client,&request).await;
-                        Completed::Recap(request,result)
-                    });
                 }
                 if let Some(request) = written.bundle
                     && app.bundle_after_checkpoint(&request, &written.result)
@@ -1580,10 +1528,6 @@ where
                         app.bundle_completed(request, result);
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                     }
-                    Some(Ok(Completed::Recap(request,result))) => {
-                        app.recap_completed(request,result);
-                        if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
-                    }
                     Some(Ok(Completed::Resumed(request, result))) => {
                         app.resume_completed(request, result);
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
@@ -1601,7 +1545,6 @@ where
                         app.apps_complete(*request, result);
                         if let Some(state) = &mut state { state.changed(&mut app, state::Impact::Other); }
                     }
-                    Some(Ok(Completed::Skills(request, result))) => app.skills_completed(request, result),
                     Some(Ok(Completed::ChooseProject(request, result))) => app.choose_project_completed(request, result),
                     Some(Ok(Completed::Locations(request,result))) => app.locations_completed(request,result),
                     Some(Ok(Completed::Models(request,result)))=>app.models_completed(request,result),
@@ -1882,7 +1825,6 @@ where
                 app.abandon_interaction();
                 app.abandon_pending_submissions();
                 app.attachments.disconnect();
-                app.skills.disconnect();
                 app.apps.disconnect();
                 watches.stop();
                     transcript_runner.stop();
@@ -1890,7 +1832,6 @@ where
                     app.resources.disconnect();
                     app.completion.disconnect();
                     app.attention.disconnect();
-                app.recap.disconnect();
                 app.bundle.disconnect();
                 app.session_controls.disconnect();
                     app.plugins.disconnect();
@@ -1934,7 +1875,6 @@ where
         app.checkpoint_changed(checkpoint_impact);
     }
     app.attachments.disconnect();
-    app.skills.disconnect();
     app.apps.disconnect();
     watches.stop();
     app.resources.disconnect();
@@ -1943,7 +1883,6 @@ where
     let resources_settled = resource_runner.shutdown().await;
     let _ = transcript_runner.shutdown().await;
     let _ = watches.shutdown().await;
-    app.recap.disconnect();
     app.bundle.disconnect();
     app.session_controls.disconnect();
     app.plugins.disconnect();

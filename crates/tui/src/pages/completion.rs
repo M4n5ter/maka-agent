@@ -54,6 +54,7 @@ use state::initial;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Open(Kind),
+    Resources,
     Category(Category),
     Choose { generation: u64, id: String },
     Preview { generation: u64, id: String },
@@ -71,6 +72,7 @@ pub enum Command {
 impl Command {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::Resources => "completion-plugins",
             Self::Open(Kind::Command) => "completion-commands",
             Self::Open(Kind::Reference) => "completion-context",
             Self::Category(category) => category.label(),
@@ -236,7 +238,7 @@ impl App {
             return None;
         }
         let session = if draft.input.is_some() {
-            self.revision.skills_source()?.to_owned()
+            self.revision.selections_source()?.to_owned()
         } else {
             draft.session.clone()
         };

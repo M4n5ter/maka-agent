@@ -18,6 +18,7 @@
  */
 
 pub mod anchor;
+mod legacy;
 mod view;
 mod work;
 use crate::{
@@ -26,27 +27,17 @@ use crate::{
     navigation::Route,
 };
 use maka_client::RequestFailure;
-use maka_protocol::{
-    configuration::policy::{
-        EnabledPolicy, Personalization, RuntimePolicyMutation, RuntimePolicyMutationInput,
-        RuntimePolicySnapshot,
-    },
-    session::*,
-};
-use maka_runtime::execution::WorkspaceTarget;
+use maka_protocol::session::*;
 use serde::{Deserialize, Serialize};
 pub(crate) use view::{draw_fields, input, sheet};
 pub use work::{Checkpoint, Output, Request, execute};
-use work::{Mutation, Work};
+use work::{CurrentCheckpoint, Mutation, Work};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Page {
     #[default]
-    Preferences,
     Metadata,
-    Executor,
-    NewExecutor,
     Compact,
     MarkRead,
     Interrupt,
@@ -56,10 +47,7 @@ pub enum Page {
 impl Page {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Preferences => "controls-preferences",
             Self::Metadata => "controls-metadata",
-            Self::Executor => "controls-executor",
-            Self::NewExecutor => "controls-new-executor",
             Self::Compact => "controls-compact",
             Self::MarkRead => "controls-mark-read",
             Self::Interrupt => "controls-interrupt",
@@ -73,9 +61,6 @@ impl Page {
             Self::Compact | Self::MarkRead | Self::Interrupt | Self::RetractQueue
         )
     }
-    fn executor(self) -> bool {
-        matches!(self, Self::Executor | Self::NewExecutor)
-    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,8 +72,6 @@ pub struct Target {
     revision: u64,
     read_message: Option<String>,
     run: Option<(String, String)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workspace: Option<WorkspaceTarget>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -97,13 +80,7 @@ pub enum Command {
     Close,
     Refresh,
     Save,
-    Workspace(bool),
     Flag(bool),
-    Executor(String),
-    Thinking(Option<ThinkingLevel>),
-    SearchExecutors,
-    NextExecutors,
-    PreviousExecutors,
     NextTurns,
     PreviousTurns,
     Landmarks(String),
@@ -111,7 +88,6 @@ pub enum Command {
     Forget,
     Keep,
     ConfirmForget,
-    OpenCreated,
 }
 impl Command {
     pub fn label(&self) -> &'static str {
@@ -121,18 +97,13 @@ impl Command {
             Self::Close | Self::Keep => "session-cancel",
             Self::Refresh => "extensions-refresh",
             Self::Save => "controls-save",
-            Self::Workspace(_) => "controls-workspace-instructions",
             Self::Flag(_) => "controls-flag",
-            Self::Executor(_) => "controls-executor",
-            Self::Thinking(_) => "session-thinking",
-            Self::SearchExecutors => "controls-search-executors",
-            Self::NextTurns | Self::NextExecutors => "sessions-next",
-            Self::PreviousTurns | Self::PreviousExecutors => "sessions-previous",
+            Self::NextTurns => "sessions-next",
+            Self::PreviousTurns => "sessions-previous",
             Self::Landmarks(_) => "controls-landmarks",
             Self::Jump(_, _) => "controls-open-turn",
             Self::Forget => "controls-forget",
             Self::ConfirmForget => "controls-confirm-forget",
-            Self::OpenCreated => "controls-open-created",
         }
     }
 }
@@ -146,12 +117,6 @@ pub struct State {
     fields: Vec<(&'static str, Editor)>,
     flag: bool,
     labels_truncated: bool,
-    policy: Option<RuntimePolicySnapshot>,
-    executors: Option<maka_client::controls::ExecutorChoices>,
-    executor: Option<String>,
-    executor_cursor: Option<maka_client::controls::ExecutorCursor>,
-    executor_previous: Vec<Option<maka_client::controls::ExecutorCursor>>,
-    thinking: Option<ThinkingLevel>,
     turns: Option<maka_protocol::navigation::TurnsResult>,
     landmarks: Option<maka_protocol::navigation::LandmarksResult>,
     positions: Vec<u64>,
@@ -164,16 +129,14 @@ pub struct State {
     forgetting: bool,
     error: Option<String>,
     note: Option<&'static str>,
-    origin: Option<Route>,
-    created: Option<String>,
 }
 impl State {
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         self.saved.clone()
     }
     pub fn restore(&mut self, saved: Checkpoint) {
-        self.target = Some(saved.target.clone());
-        self.page = saved.page;
+        self.target = Some(saved.target());
+        self.page = saved.page();
         self.saved = Some(saved);
     }
     pub fn disconnect(&mut self) {
@@ -224,46 +187,30 @@ impl State {
                 16 * 1024,
             );
         }
-        if self.page == Page::Executor {
-            self.field("query", "", 512);
-            self.field(
-                "model",
-                item.executor_settings
-                    .as_ref()
-                    .and_then(|s| s.model.as_deref())
-                    .unwrap_or(""),
-                512,
-            );
-            self.executor = item.executor_id.as_ref().map(|id| id.as_str().to_owned());
-            self.thinking = item
-                .executor_settings
-                .as_ref()
-                .and_then(|s| s.thinking_level);
-        }
+
         if let Some(target) = &mut self.target {
             target.revision = item.revision;
             target.name = item.name.clone();
         }
     }
     fn initial_read(&self) -> Option<Work> {
+        if matches!(self.saved, Some(Checkpoint::Legacy(_))) {
+            return None;
+        }
         match self.page {
-            Page::Preferences => Some(Work::Policy),
             Page::Metadata => Some(Work::Session),
-            Page::NewExecutor if self.saved.is_some() || self.created.is_some() => {
-                Some(Work::CreationStatus)
-            }
-            Page::Executor | Page::NewExecutor => Some(Work::Executors {
-                query: self.text("query").into(),
-                cursor: None,
-            }),
             Page::History => Some(Work::Turns {
                 position: self.position,
                 through: self.turns.as_ref().and_then(|p| p.through_sequence),
             }),
-            Page::Compact => self.saved.as_ref().and_then(|saved| match &saved.mutation {
-                Mutation::Compact(input) => Some(Work::CompactStatus(input.clone())),
-                _ => None,
-            }),
+            Page::Compact => self
+                .saved
+                .as_ref()
+                .and_then(Checkpoint::current)
+                .and_then(|saved| match &saved.mutation {
+                    Mutation::Compact(input) => Some(Work::CompactStatus(input.clone())),
+                    _ => None,
+                }),
             _ => None,
         }
     }
@@ -273,24 +220,7 @@ impl App {
         let ConnectionState::Connected { root_id, epoch } = &self.connection else {
             return None;
         };
-        if matches!(page, Page::Preferences | Page::NewExecutor) {
-            return Some(Target {
-                root: root_id.clone(),
-                epoch: epoch.clone(),
-                session: String::new(),
-                name: String::new(),
-                revision: 0,
-                read_message: None,
-                run: None,
-                workspace: if page == Page::NewExecutor {
-                    Some(WorkspaceTarget::HostPath {
-                        path: std::env::current_dir().ok()?.to_str()?.to_owned(),
-                    })
-                } else {
-                    None
-                },
-            });
-        }
+
         let Route::Session(id) = self.navigation.current() else {
             return None;
         };
@@ -321,7 +251,6 @@ impl App {
             revision: item.revision,
             read_message,
             run,
-            workspace: None,
         })
     }
     pub fn session_control_commands(&self) -> Vec<(Action, &'static str)> {
@@ -333,7 +262,6 @@ impl App {
         }
         [
             Page::Metadata,
-            Page::Executor,
             Page::Compact,
             Page::MarkRead,
             Page::Interrupt,
@@ -351,37 +279,6 @@ impl App {
         })
         .collect()
     }
-    pub fn personal_preferences_action(&self) -> Option<Action> {
-        self.controls_target(Page::Preferences)
-            .map(|target| Action::SessionControls(Command::Open(target, Page::Preferences)))
-    }
-    pub fn new_executor_session_action(&self) -> Option<Action> {
-        if self.session_controls.saved.is_some() {
-            return Some(Action::SessionControls(Command::Reopen));
-        }
-        self.controls_target(Page::NewExecutor)
-            .map(|target| Action::SessionControls(Command::Open(target, Page::NewExecutor)))
-    }
-    fn project_executor_target(&self, id: &str) -> Option<Target> {
-        if self.navigation.current() != Route::Projects || !self.projects.ready() {
-            return None;
-        }
-        let project = self
-            .projects
-            .items
-            .iter()
-            .find(|item| item.id == id && item.usable())?;
-        let mut target = self.controls_target(Page::Preferences)?;
-        target.name = project.name.clone();
-        target.workspace = Some(WorkspaceTarget::Project {
-            project_id: project.id.clone(),
-        });
-        Some(target)
-    }
-    pub fn new_project_executor_session_action(&self, id: &str) -> Option<Action> {
-        self.project_executor_target(id)
-            .map(|target| Action::SessionControls(Command::Open(target, Page::NewExecutor)))
-    }
     pub fn session_controls_enabled(&self, command: &Command) -> bool {
         self.session_controls_offered(command)
             && (matches!(
@@ -396,30 +293,14 @@ impl App {
         let ready =
             state.visible && connected && state.pending.is_none() && state.requested.is_none();
         match command {
-            Command::Open(target, page) => !state.visible && state.saved.is_none() && state.pending.is_none()
-                && (*page != Page::NewExecutor || self.enabled(&Action::CreateSession))
-                && (if *page == Page::NewExecutor && let Some(WorkspaceTarget::Project { project_id }) = &target.workspace {
-                    self.project_executor_target(project_id)
-                } else { self.controls_target(*page) }).as_ref() == Some(target),
-            Command::Reopen => !state.visible && state.saved.as_ref().is_some_and(|saved| matches!(&self.connection, ConnectionState::Connected { root_id, .. } if root_id == &saved.target.root)),
+            Command::Open(target, page) => !state.visible && state.saved.is_none() && state.pending.is_none() && self.controls_target(*page).as_ref() == Some(target),
+            Command::Reopen => !state.visible && state.saved.as_ref().is_some_and(|saved| matches!(&self.connection, ConnectionState::Connected { root_id, .. } if root_id == &saved.target().root)),
             Command::Close => state.visible,
             Command::Forget => ready && state.saved.is_some() && !state.forgetting,
             Command::Keep | Command::ConfirmForget => ready && state.forgetting,
             Command::Refresh => ready && !state.forgetting && state.initial_read().is_some(),
-            Command::Save => ready && state.saved.is_none() && state.created.is_none() && !state.forgetting && (!state.page.confirmation() || state.note.is_none()) && match state.page {
-                Page::Preferences => state.policy.is_some(),
-                Page::Executor | Page::NewExecutor => (state.page != Page::NewExecutor || self.enabled(&Action::CreateSession))
-                    && state.executor.as_ref().is_some_and(|id| state.executors.as_ref().is_some_and(|v| v.executors.iter().any(|e| &e.id == id))),
-                Page::History => false, _ => true,
-            },
-            Command::Workspace(_) => ready && state.saved.is_none() && state.page == Page::Preferences && state.policy.is_some(),
+            Command::Save => ready && state.saved.is_none() && !state.forgetting && (!state.page.confirmation() || state.note.is_none()) && !matches!(state.page, Page::History),
             Command::Flag(_) => ready && state.saved.is_none() && state.page == Page::Metadata,
-            Command::Executor(id) => ready && state.saved.is_none() && state.created.is_none() && state.page.executor() && state.executors.as_ref().is_some_and(|v| v.executors.iter().any(|e| &e.id == id)),
-            Command::Thinking(_) => ready && state.saved.is_none() && state.created.is_none() && state.page.executor(),
-            Command::SearchExecutors => ready && state.page.executor() && (state.page != Page::NewExecutor || state.saved.is_none() && state.created.is_none()),
-            Command::NextExecutors => ready && state.page.executor() && state.created.is_none() && state.saved.is_none() && state.executors.as_ref().and_then(|page| page.next_cursor.as_ref()).is_some(),
-            Command::PreviousExecutors => ready && state.page.executor() && state.created.is_none() && state.saved.is_none() && !state.executor_previous.is_empty(),
-            Command::OpenCreated => ready && state.created.is_some(),
             Command::NextTurns => ready && state.turns.as_ref().and_then(|v| v.next_position).is_some(),
             Command::PreviousTurns => ready && !state.positions.is_empty(),
             Command::Landmarks(turn) => ready && state.turns.as_ref().is_some_and(|v| v.contributions.iter().any(|c| &c.turn_id == turn)),
@@ -436,41 +317,27 @@ impl App {
             self.session_controls.visible = false;
             return self.open_session_anchor(session, Some(turn), None, sequence);
         }
-        if command == Command::OpenCreated {
-            let session = self.session_controls.created.clone()?;
-            self.session_controls.visible = false;
-            return self.apply(Action::Visit(Route::Session(session)));
-        }
+
         let state = &mut self.session_controls;
         match command {
-            Command::Open(mut target, page) => {
-                if page == Page::NewExecutor {
-                    target.session = uuid::Uuid::new_v4().to_string();
-                }
+            Command::Open(target, page) => {
                 let sequence = state.sequence;
                 *state = State {
                     target: Some(target),
                     page,
                     visible: true,
                     sequence,
-                    origin: Some(self.navigation.current()),
                     ..State::default()
                 };
-                if page == Page::NewExecutor {
-                    state.field("name", "", 1024);
-                    state.field("query", "", 512);
-                    state.field("model", "", 512);
-                } else if let super::sessions::Detail::Ready(item) = &self.sessions.detail
-                    && page != Page::Preferences
-                {
+                if let super::sessions::Detail::Ready(item) = &self.sessions.detail {
                     state.load_session(item);
                 }
                 state.requested = state.initial_read();
             }
             Command::Reopen => {
                 let saved = state.saved.as_ref()?;
-                state.target = Some(saved.target.clone());
-                state.page = saved.page;
+                state.target = Some(saved.target());
+                state.page = saved.page();
                 // Reads may use the new connection; the original mutation epoch stays frozen in the checkpoint.
                 if let ConnectionState::Connected { epoch, .. } = &self.connection {
                     state.target.as_mut()?.epoch = epoch.clone();
@@ -485,54 +352,10 @@ impl App {
             }
             Command::Refresh => {
                 state.error = None;
-                if state.page.executor() {
-                    state.executor_previous.clear();
-                }
+
                 state.requested = state.initial_read();
             }
             Command::Flag(flag) => state.flag = flag,
-            Command::Executor(id) => {
-                if state.executor.as_ref() != Some(&id) {
-                    if let Some((_, model)) =
-                        state.fields.iter_mut().find(|(key, _)| *key == "model")
-                    {
-                        *model = Editor::bounded(512, "controls-field-limit");
-                    }
-                    state.thinking = None;
-                }
-                state.executor = Some(id);
-            }
-            Command::Thinking(level) => state.thinking = level,
-            Command::SearchExecutors => {
-                state.executor_previous.clear();
-                state.requested = Some(Work::Executors {
-                    query: state.text("query").into(),
-                    cursor: None,
-                });
-            }
-            Command::NextExecutors => {
-                let cursor = state.executors.as_ref()?.next_cursor.clone()?;
-                state.executor_previous.push(state.executor_cursor.clone());
-                state.requested = Some(Work::Executors {
-                    query: cursor.query.clone(),
-                    cursor: Some(cursor),
-                });
-            }
-            Command::PreviousExecutors => {
-                let query = state.executor_cursor.as_ref()?.query.clone();
-                let cursor = state.executor_previous.pop()?;
-                state.requested = Some(Work::Executors { query, cursor });
-            }
-            Command::Workspace(enabled) => {
-                let policy = state.policy.as_ref()?;
-                let mutation = Mutation::Policy(RuntimePolicyMutationInput {
-                    expected_revision: policy.revision,
-                    operation: RuntimePolicyMutation::SetWorkspaceInstructions {
-                        value: EnabledPolicy { enabled },
-                    },
-                });
-                state.queue_mutation(mutation);
-            }
             Command::Save => match state.mutation() {
                 Ok(mutation) => state.queue_mutation(mutation),
                 Err(error) => state.error = Some(error),
@@ -558,7 +381,7 @@ impl App {
                 state.visible = false;
                 state.note = None;
             }
-            Command::Jump(_, _) | Command::OpenCreated => unreachable!(),
+            Command::Jump(_, _) => unreachable!(),
         }
         None
     }
@@ -609,7 +432,6 @@ impl App {
         request: Request,
         result: Result<Output, RequestFailure>,
     ) {
-        let mut visit = None;
         let state = &mut self.session_controls;
         if !state.pending.as_ref().is_some_and(|p| p.same(&request)) {
             return;
@@ -627,85 +449,82 @@ impl App {
                 }
                 state.error = None;
                 match output {
-                    Output::Created(item) => {
-                        state.created = Some(item.id.clone());
-                        if state.visible && state.origin.as_ref() == Some(&self.navigation.current()) {
-                            visit = Some(item.id.clone());
-                            state.visible = false;
+                    Output::Session(item) => {
+                        if !request.needs_checkpoint() {
+                            state.load_session(&item);
                         }
                         self.sessions.updated(item);
                         self.inbox.refresh();
                     }
-                    Output::CreationStatus(item) => {
-                        // A current object does not prove which request created it.
-                        state.created = item.as_ref().map(|item| item.id.clone());
-                        state.note = Some(if item.is_some() { "controls-create-found" } else { "controls-create-missing" });
-                        if let Some(item) = item { self.sessions.updated(item); }
-                    }
-                    Output::Policy(snapshot) => {
-                        // Updating the independent workspace switch must not erase a
-                        // personalization draft that has not been submitted yet.
-                        if state.fields.is_empty() {
-                            state.field("display-name", &snapshot.policy.personalization.display_name, 1024);
-                            state.field("tone", &snapshot.policy.personalization.assistant_tone, 16 * 1024);
-                        }
-                        state.policy = Some(*snapshot);
-                    }
-                    Output::Session(item) => {
-                        if !request.needs_checkpoint() { state.load_session(&item); }
-                        self.sessions.updated(item); self.inbox.refresh();
-                    }
                     Output::SessionChange(change) => match *change {
-                        SessionUpdateResult::Committed { session } => { state.load_session(&session); self.sessions.updated(session); self.inbox.refresh(); }
-                        SessionUpdateResult::RevisionConflict { .. } => { state.note = None; state.error = Some(self.i18n.text("controls-conflict")); },
-                    },
-                    Output::PolicyChange(change) => match change {
-                        maka_protocol::configuration::policy::RuntimePolicyMutationResult::Committed { .. } => state.requested = Some(Work::Policy),
-                        maka_protocol::configuration::policy::RuntimePolicyMutationResult::RevisionConflict { .. } => { state.note = None; state.error = Some(self.i18n.text("controls-conflict")); },
-                    },
-                    Output::Executors(result) => match result {
-                        maka_client::controls::ExecutorSearchResult::Page { page } => {
-                            if let Work::Executors { cursor, .. } = request.work {
-                                state.executor_cursor = cursor;
-                            }
-                            state.executors = Some(page);
+                        SessionUpdateResult::Committed { session } => {
+                            state.load_session(&session);
+                            self.sessions.updated(session);
+                            self.inbox.refresh();
                         }
-                        maka_client::controls::ExecutorSearchResult::Stale => {
-                            state.executors = None;
-                            state.executor_cursor = None;
-                            state.executor_previous.clear();
-                            state.error = Some(self.i18n.text("controls-executors-stale"));
+                        SessionUpdateResult::RevisionConflict { .. } => {
+                            state.note = None;
+                            state.error = Some(self.i18n.text("controls-conflict"));
                         }
                     },
-                    Output::Turns(turns) => state.turns = Some(turns), Output::Landmarks(landmarks) => state.landmarks = Some(landmarks),
+                    Output::Turns(turns) => state.turns = Some(turns),
+                    Output::Landmarks(landmarks) => state.landmarks = Some(landmarks),
                     Output::Compact(result) => {
-                        use maka_protocol::{context::ContextCompactResult, turn::ContextCompactionOutcome};
+                        use maka_protocol::{
+                            context::ContextCompactResult, turn::ContextCompactionOutcome,
+                        };
                         state.note = Some(match *result {
                             ContextCompactResult::Started { .. } => "controls-compact-started",
                             ContextCompactResult::Finished { outcome, .. } => match outcome {
-                                ContextCompactionOutcome::Compacted { .. } => "controls-compact-finished",
-                                ContextCompactionOutcome::Unchanged { reason } => { state.error = Some(reason); "controls-compact-unchanged" }
-                                ContextCompactionOutcome::Failed { reason } => { state.error = Some(reason); "controls-compact-failed" }
-                            }
+                                ContextCompactionOutcome::Compacted { .. } => {
+                                    "controls-compact-finished"
+                                }
+                                ContextCompactionOutcome::Unchanged { reason } => {
+                                    state.error = Some(reason);
+                                    "controls-compact-unchanged"
+                                }
+                                ContextCompactionOutcome::Failed { reason } => {
+                                    state.error = Some(reason);
+                                    "controls-compact-failed"
+                                }
+                            },
                         });
                         self.sessions.refresh_detail();
                     }
                     Output::CompactStatus(turn) => {
                         use maka_protocol::turn::TurnState;
-                        let matching = state.saved.as_ref().is_some_and(|saved| matches!(&saved.mutation,
+                        let matching = state.saved.as_ref().and_then(Checkpoint::current).is_some_and(|saved| matches!(&saved.mutation,
                             Mutation::Compact(input) if input.session_id == turn.session_id && input.turn_id == turn.turn_id));
                         if matching {
                             state.saved = None;
                             state.note = Some(match &turn.state {
-                                TurnState::Admitted(_) | TurnState::Created(_) | TurnState::Running(_) | TurnState::WaitingForUser(_) => "controls-compact-started",
-                                TurnState::Completed { context_compaction_outcome: Some(maka_protocol::turn::ContextCompactionOutcome::Compacted { .. }), .. } => "controls-compact-finished",
-                                TurnState::Completed { context_compaction_outcome: Some(maka_protocol::turn::ContextCompactionOutcome::Unchanged { .. }), .. } => "controls-compact-unchanged",
+                                TurnState::Admitted(_)
+                                | TurnState::Created(_)
+                                | TurnState::Running(_)
+                                | TurnState::WaitingForUser(_) => "controls-compact-started",
+                                TurnState::Completed {
+                                    context_compaction_outcome:
+                                        Some(maka_protocol::turn::ContextCompactionOutcome::Compacted {
+                                            ..
+                                        }),
+                                    ..
+                                } => "controls-compact-finished",
+                                TurnState::Completed {
+                                    context_compaction_outcome:
+                                        Some(maka_protocol::turn::ContextCompactionOutcome::Unchanged {
+                                            ..
+                                        }),
+                                    ..
+                                } => "controls-compact-unchanged",
                                 _ => "controls-compact-failed",
                             });
                             self.sessions.refresh_detail();
                         }
                     }
-                    Output::Queue => { self.sessions.refresh_detail(); self.inbox.refresh(); }
+                    Output::Queue => {
+                        self.sessions.refresh_detail();
+                        self.inbox.refresh();
+                    }
                 }
             }
             Err(error) => {
@@ -716,9 +535,6 @@ impl App {
                 state.error = Some(error.to_string());
             }
         }
-        if let Some(id) = visit {
-            self.apply(Action::Visit(Route::Session(id)));
-        }
     }
 }
 impl State {
@@ -726,11 +542,11 @@ impl State {
         let Some(target) = self.target.clone() else {
             return;
         };
-        self.saved = Some(Checkpoint {
+        self.saved = Some(Checkpoint::Current(CurrentCheckpoint {
             target,
             page: self.page,
             mutation: mutation.clone(),
-        });
+        }));
         self.requested = Some(Work::Write(mutation));
         self.error = None;
         self.note = None;
@@ -742,19 +558,6 @@ impl State {
             .ok_or("Missing session control target")?;
         let session = target.session.clone();
         let mutation = match self.page {
-            Page::Preferences => Mutation::Policy(RuntimePolicyMutationInput {
-                expected_revision: self
-                    .policy
-                    .as_ref()
-                    .ok_or("Preferences are loading")?
-                    .revision,
-                operation: RuntimePolicyMutation::SetPersonalization {
-                    value: Personalization {
-                        display_name: self.text("display-name").into(),
-                        assistant_tone: self.text("tone").into(),
-                    },
-                },
-            }),
             Page::Metadata => Mutation::Metadata(SessionMetadataUpdateInput {
                 session_id: session,
                 expected_revision: target.revision,
@@ -771,36 +574,6 @@ impl State {
                     is_flagged: Some(self.flag),
                 },
             }),
-            Page::Executor => {
-                let id = self.executor.as_ref().ok_or("Choose an executor")?;
-                let input = serde_json::json!({"sessionId":session,"expectedRevision":target.revision,"patch":{"executorTarget":{"executorId":id,"settings":{"model":(!self.text("model").trim().is_empty()).then(|| self.text("model").trim()),"thinkingLevel":self.thinking}}}});
-                // Optional settings are omitted, not serialized as null.
-                let mut input = input;
-                input["patch"]["executorTarget"]["settings"]
-                    .as_object_mut()
-                    .unwrap()
-                    .retain(|_, v| !v.is_null());
-                Mutation::Executor(
-                    decode_session_configuration_update_input(&input).map_err(|e| e.to_string())?,
-                )
-            }
-            Page::NewExecutor => {
-                let id = self.executor.as_ref().ok_or("Choose an executor")?;
-                let settings = maka_runtime::executor::Settings {
-                    model: (!self.text("model").trim().is_empty())
-                        .then(|| self.text("model").trim().to_owned()),
-                    thinking_level: self.thinking,
-                };
-                let mut input = serde_json::json!({
-                    "sessionId":session,
-                    "workspace":target.workspace.as_ref().ok_or("Missing creation workspace")?,
-                    "executorId":id,"executorSettings":settings,
-                });
-                if !self.text("name").trim().is_empty() {
-                    input["name"] = self.text("name").trim().into();
-                }
-                Mutation::Create(decode_session_create_input(&input).map_err(|e| e.to_string())?)
-            }
             Page::Compact => Mutation::Compact(maka_protocol::context::ContextCompactInput {
                 session_id: session,
                 turn_id: uuid::Uuid::new_v4().to_string(),
@@ -859,9 +632,8 @@ mod tests {
             revision: 1,
             read_message: None,
             run: None,
-            workspace: None,
         };
-        let saved = Checkpoint {
+        let saved = Checkpoint::Current(CurrentCheckpoint {
             target: target.clone(),
             page: Page::Metadata,
             mutation: Mutation::Metadata(SessionMetadataUpdateInput {
@@ -873,7 +645,7 @@ mod tests {
                     is_flagged: Some(true),
                 },
             }),
-        };
+        });
         app.session_controls.restore(saved.clone());
         let request = Request {
             target,
@@ -910,12 +682,6 @@ mod tests {
         };
         app.chrome.motion = false;
         app
-    }
-    fn choices() -> maka_client::controls::ExecutorChoices {
-        serde_json::from_value(serde_json::json!({
-            "revision":1,"complete":true,"nextCursor":null,
-            "executors":[{"id":"executor","displayName":"Public executor","capabilities":{"thinking":true,"toolActivity":false,"attachments":false,"historyCopy":false}}]
-        })).unwrap()
     }
     fn draw(
         app: &mut App,
@@ -957,17 +723,12 @@ mod tests {
                 revision: 1,
                 read_message: Some("message".into()),
                 run: Some(("turn".into(), "run".into())),
-                workspace: None,
             }),
             page,
             visible: true,
             ..State::default()
         };
         app.session_controls.load_session(&item);
-        if page == Page::Executor {
-            app.session_controls.executors = Some(choices());
-            app.session_controls.executor = Some("executor".into());
-        }
         app
     }
     #[test]
@@ -977,7 +738,6 @@ mod tests {
             for (width, height) in [(30, 18), (40, 24), (80, 24)] {
                 for page in [
                     Page::Metadata,
-                    Page::Executor,
                     Page::History,
                     Page::Compact,
                     Page::MarkRead,
@@ -999,13 +759,6 @@ mod tests {
                         press(&mut app, KeyCode::Enter);
                         assert!(!app.session_controls.visible);
                         assert!(app.session_controls.checkpoint().is_none());
-                    } else if page == Page::Executor {
-                        let save = app.layer.rect("footer/save").unwrap();
-                        click(&mut app, save);
-                        assert!(matches!(
-                            app.session_controls.checkpoint().unwrap().mutation,
-                            Mutation::Executor(_)
-                        ));
                     } else {
                         let close = app.layer.rect("footer/close").unwrap();
                         click(&mut app, close);
@@ -1049,190 +802,5 @@ mod tests {
                 through: Some(10)
             })
         ));
-    }
-    #[test]
-    fn home_executor_creation_freezes_identity_and_recovers_without_replay() {
-        use crossterm::event::KeyCode;
-        let mut app = connected(crate::Locale::En);
-        draw(&mut app, 80, 30);
-        let entry = app
-            .home
-            .surface
-            .rect("home/center/content/new-executor")
-            .expect("ordinary Home entry");
-        click(&mut app, entry);
-        let original = app.session_controls.target.clone().unwrap();
-        assert!(!original.session.is_empty());
-        assert!(original.workspace.is_some());
-        let request = app.session_controls_request().unwrap();
-        assert!(matches!(request.work, Work::Executors { .. }));
-        assert_eq!(request.target.session, original.session);
-        app.session_controls_completed(
-            request,
-            Ok(Output::Executors(
-                maka_client::controls::ExecutorSearchResult::Page { page: choices() },
-            )),
-        );
-        for _ in 0..16 {
-            draw(&mut app, 80, 30);
-            if app.layer.focused_path() == Some("content/rows/executor-executor") {
-                break;
-            }
-            press(&mut app, KeyCode::Tab);
-        }
-        assert_eq!(
-            app.layer.focused_path(),
-            Some("content/rows/executor-executor")
-        );
-        press(&mut app, KeyCode::Enter);
-        draw(&mut app, 80, 30);
-        let create = app.layer.rect("footer/save").unwrap();
-        click(&mut app, create);
-        let saved = app.session_controls.checkpoint().unwrap();
-        assert!(saved.validate("root").is_ok());
-        assert!(saved.validate("other").is_err());
-        let Mutation::Create(input) = &saved.mutation else {
-            panic!("expected executor creation")
-        };
-        assert_eq!(input.session_id, original.session);
-        assert_eq!(Some(&input.workspace), original.workspace.as_ref());
-        assert!(matches!(input.target, SessionCreateTarget::Executor { .. }));
-        let mut tampered = saved.clone();
-        tampered.target.workspace = Some(WorkspaceTarget::HostPath {
-            path: "/elsewhere".into(),
-        });
-        assert!(tampered.validate("root").is_err());
-        let wire = serde_json::to_value(&saved).unwrap();
-        assert!(wire["mutation"]["input"].get("modelTarget").is_none());
-        assert_eq!(wire["mutation"]["input"]["executorId"], "executor");
-        let write = app.session_controls_request().unwrap();
-        assert!(write.needs_checkpoint());
-        assert!(app.session_controls_after_checkpoint(&write, &Ok(())));
-        app.session_controls_completed(
-            write,
-            Err(RequestFailure::Unknown(ClientError::Protocol(
-                "response lost".into(),
-            ))),
-        );
-        assert!(app.session_controls.checkpoint().is_some());
-        app.session_controls.disconnect();
-        let mut restored = connected(crate::Locale::En);
-        restored.connection = ConnectionState::Connected {
-            root_id: "root".into(),
-            epoch: "next-epoch".into(),
-        };
-        restored
-            .session_controls
-            .restore(serde_json::from_value(wire).unwrap());
-        assert!(restored.session_controls_request().is_none());
-        restored.session_controls_action(Command::Reopen);
-        assert_eq!(
-            restored.session_controls.target.as_ref().unwrap().session,
-            original.session
-        );
-        assert_eq!(
-            restored.session_controls.checkpoint().unwrap().target.epoch,
-            "epoch"
-        );
-        draw(&mut restored, 80, 30);
-        restored.session_controls_action(Command::Refresh);
-        let read = restored.session_controls_request().unwrap();
-        assert!(matches!(read.work, Work::CreationStatus));
-        assert!(!read.needs_checkpoint());
-        assert_eq!(read.target.session, original.session);
-        restored.session_controls_completed(read, Ok(Output::CreationStatus(None)));
-        assert!(restored.session_controls.checkpoint().is_some());
-        assert!(!restored.session_controls_offered(&Command::Save));
-        draw(&mut restored, 80, 30);
-        restored.session_controls_action(Command::Refresh);
-        let read = restored.session_controls_request().unwrap();
-        restored.session_controls_completed(
-            read,
-            Ok(Output::CreationStatus(Some(Box::new(
-                super::super::sessions::tests::item(&original.session),
-            )))),
-        );
-        assert!(
-            restored.session_controls.checkpoint().is_some(),
-            "current state cannot settle a historical creation"
-        );
-        assert_eq!(restored.navigation.current(), Route::Workspace);
-        draw(&mut restored, 80, 30);
-        restored.session_controls_action(Command::OpenCreated);
-        assert_eq!(
-            restored.navigation.current(),
-            Route::Session(original.session)
-        );
-        assert!(restored.session_controls.checkpoint().is_some());
-    }
-    #[test]
-    fn project_executor_menu_keeps_the_clicked_project_after_selection_changes() {
-        use crossterm::event::KeyCode;
-        let mut app = connected(crate::Locale::En);
-        app.apply(Action::Visit(Route::Projects));
-        app.projects.query().unwrap();
-        app.projects.loading = false;
-        app.projects.loaded = true;
-        app.projects.items = ["project-a", "project-b"]
-            .map(|id| super::super::projects::Item {
-                id: id.into(),
-                name: id.into(),
-                archived: false,
-                available: true,
-            })
-            .into();
-        app.projects.selected = Some("project-a".into());
-        let global = app.new_executor_session_action().unwrap();
-        assert!(matches!(
-            global,
-            Action::SessionControls(Command::Open(
-                Target {
-                    workspace: Some(WorkspaceTarget::HostPath { .. }),
-                    ..
-                },
-                Page::NewExecutor
-            ))
-        ));
-        draw(&mut app, 80, 30);
-        let menu = app
-            .projects
-            .surface
-            .rect("projects/rows/project-a/actions")
-            .unwrap();
-        click(&mut app, menu);
-        draw(&mut app, 80, 30);
-        app.projects.selected = Some("project-b".into());
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.session_controls.page, Page::NewExecutor);
-        assert_eq!(
-            app.session_controls.target.as_ref().unwrap().workspace,
-            Some(WorkspaceTarget::Project {
-                project_id: "project-a".into()
-            })
-        );
-        let request = app.session_controls_request().unwrap();
-        app.session_controls_completed(
-            request,
-            Ok(Output::Executors(
-                maka_client::controls::ExecutorSearchResult::Page { page: choices() },
-            )),
-        );
-        draw(&mut app, 80, 30);
-        app.session_controls_action(Command::Executor("executor".into()));
-        draw(&mut app, 80, 30);
-        let save = app.layer.rect("footer/save").unwrap();
-        click(&mut app, save);
-        let saved = app.session_controls.checkpoint().unwrap();
-        assert!(saved.validate("root").is_ok());
-        let Mutation::Create(input) = saved.mutation else {
-            panic!("creation expected")
-        };
-        assert_eq!(
-            input.workspace,
-            WorkspaceTarget::Project {
-                project_id: "project-a".into()
-            }
-        );
     }
 }

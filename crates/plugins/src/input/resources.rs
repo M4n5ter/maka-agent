@@ -37,6 +37,8 @@ use uuid::Uuid;
 pub struct Context {
     pub session_id: String,
     pub workspace: crate::filesystem::ReadDirectory,
+    pub cwd: String,
+    pub tools: std::collections::HashSet<String>,
     pub cancellation: CancellationToken,
 }
 pub trait Provider: Send + Sync {

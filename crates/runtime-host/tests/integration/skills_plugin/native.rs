@@ -17,6 +17,7 @@
  * under the License.
  */
 
+mod resources;
 mod terminal;
 
 use super::{Host, HostFixture, LocalListener, Peer, Provider, configure, converged, disabled};
@@ -150,6 +151,7 @@ async fn native_candidates_page_by_session_and_reject_changed_catalog_and_retire
         MAX_ITEMS + 1
     );
     assert!(ids.contains("maka-plugin-authoring"));
+    let resource_call = resources::exercise(&client, "candidates", document).await;
     terminal::exercise(&client, "candidates").await;
     // A real file change invalidates a cursor; no automatic restart hides the change.
     std::fs::write(
@@ -166,8 +168,14 @@ async fn native_candidates_page_by_session_and_reject_changed_catalog_and_retire
     };
     assert_eq!(expected_revision, revision);
     assert_ne!(actual_revision, revision);
+    assert!(
+        client.plugin_remote(resource_call.clone()).await.is_err(),
+        "generic selector cursor detects changed Skills"
+    );
     // Even a later reactivation cannot make the captured target refer to replacement code.
     disabled(&mut peer, true).await;
+    resources::absent(&client, "candidates").await;
+    assert!(client.plugin_remote(resource_call).await.is_err());
     disabled(&mut peer, false).await;
     assert!(
         matches!(client.plugin_remote(call(serde_json::Value::Null)).await,

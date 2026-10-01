@@ -85,6 +85,10 @@ pub struct Descriptor {
     /// Lower first among views of the same placement.
     #[serde(default)]
     pub order: u16,
+    /// Also offer this application page where a workspace can be selected.
+    /// Opening supplies an inert `workspace` route value, never filesystem authority.
+    #[serde(default)]
+    pub launch: bool,
     /// Inert slash metadata; only Page placements can be opened independently.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<Command>,
@@ -99,6 +103,7 @@ impl Descriptor {
             icon: None,
             changes: None,
             order: 0,
+            launch: false,
             commands: Vec::new(),
         }
     }
@@ -121,6 +126,10 @@ impl Descriptor {
         self.order = order;
         self
     }
+    pub fn launch(mut self) -> Self {
+        self.launch = true;
+        self
+    }
     pub fn command(mut self, command: Command) -> Self {
         self.commands.push(command);
         self
@@ -134,6 +143,11 @@ impl Descriptor {
             .validate()
             .map_err(|reason| Error::Invalid(reason.into()))?;
         if !self.commands.is_empty() && self.placement != Placement::Page {
+            return Err(invalid());
+        }
+        if self.launch
+            && (self.context != Context::Application || self.placement != Placement::Page)
+        {
             return Err(invalid());
         }
         let mut names = std::collections::BTreeSet::new();

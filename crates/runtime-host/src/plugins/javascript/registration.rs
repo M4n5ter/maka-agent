@@ -96,6 +96,8 @@ pub(super) enum Registration {
     Executor {
         name: maka_runtime::executor::ExecutorId,
         display_name: String,
+        #[serde(default = "default_session_views")]
+        session_views: bool,
         #[serde(default)]
         capabilities: maka_plugins::executor::Capabilities,
         callback: u32,
@@ -194,6 +196,10 @@ impl Tool {
     }
 }
 
+pub(super) struct Activation<'a> {
+    pub lifecycle: &'a maka_plugins::fiber::Context,
+    pub storage: &'a Arc<dyn maka_plugins::storage::Store>,
+}
 pub(super) fn stage(
     value: Value,
     module: &Module,
@@ -201,7 +207,7 @@ pub(super) fn stage(
     model_calls: &Arc<super::model::Calls>,
     calls: &Arc<super::invocation::Calls>,
     source: &super::remote::Source,
-    lifecycle: &maka_plugins::fiber::Context,
+    activation: Activation<'_>,
 ) -> Result<Staged, String> {
     let registrations: Vec<Registration> = serde_json::from_value(value).map_err(super::message)?;
     stage_entries(
@@ -211,7 +217,7 @@ pub(super) fn stage(
         model_calls,
         calls,
         source,
-        lifecycle,
+        activation,
     )
 }
 pub(super) fn stage_entries(
@@ -221,8 +227,9 @@ pub(super) fn stage_entries(
     model_calls: &Arc<super::model::Calls>,
     calls: &Arc<super::invocation::Calls>,
     source: &super::remote::Source,
-    lifecycle: &maka_plugins::fiber::Context,
+    activation: Activation<'_>,
 ) -> Result<Staged, String> {
+    let Activation { lifecycle, storage } = activation;
     let mut staged = Staged::default();
     terminal::stage(
         &mut registrations,
@@ -363,6 +370,7 @@ pub(super) fn stage_entries(
             Registration::Executor {
                 name,
                 display_name,
+                session_views,
                 capabilities,
                 callback,
             } => {
@@ -370,24 +378,32 @@ pub(super) fn stage_entries(
                 if display_name.is_empty() || display_name.len() > 256 {
                     return Err("invalid executor display name".into());
                 }
-                staged
-                    .insert(
-                        name.as_str(),
-                        maka_plugins::executor::Executor {
-                            id: name.clone(),
-                            display_name,
-                            capabilities,
-                            provider: Arc::new(super::executor::Executor {
-                                callback: Arc::new(callbacks::Callback {
-                                    module: module.clone(),
-                                    id: callback,
-                                    calls: calls.clone(),
-                                }),
-                                outputs: outputs.clone(),
-                            }),
-                        },
+                let executor = maka_plugins::executor::Executor {
+                    id: name.clone(),
+                    display_name,
+                    capabilities,
+                    provider: Arc::new(super::executor::Executor {
+                        callback: Arc::new(callbacks::Callback {
+                            module: module.clone(),
+                            id: callback,
+                            calls: calls.clone(),
+                        }),
+                        outputs: outputs.clone(),
+                    }),
+                };
+                if session_views {
+                    maka_plugins::executor::terminal::stage(
+                        &mut staged,
+                        lifecycle,
+                        executor,
+                        Some(storage.clone()),
                     )
                     .map_err(super::message)?;
+                } else {
+                    staged
+                        .insert(name.as_str(), executor)
+                        .map_err(super::message)?;
+                }
             }
             Registration::Tool {
                 definition,
@@ -524,7 +540,7 @@ pub(super) fn withdraw(
                     .collect::<Result<Vec<_>, _>>()?,
             )
         }
-        Kind::Executor => publisher.withdraw_many::<maka_plugins::executor::Executor>(names),
+        Kind::Executor => maka_plugins::executor::terminal::withdraw(publisher, context, names),
         Kind::Tool => publisher.withdraw_many::<PluginTool>(names),
         Kind::Section => publisher.withdraw_many::<prompt::Section>(names),
         Kind::Variable => publisher.withdraw_many::<prompt::Variable>(names),
@@ -551,4 +567,8 @@ fn validate_callback(callback: u32) -> Result<(), String> {
     } else {
         Err("invalid JS callback identity".into())
     }
+}
+
+fn default_session_views() -> bool {
+    true
 }

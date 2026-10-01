@@ -95,6 +95,7 @@ pub(crate) mod fixtures {
             },
             descriptor: Descriptor {
                 label: name.into(),
+                custom_endpoint: false,
                 configuration_schema: json!({"type":"object"}),
                 configuration_defaults: json!({"baseUrl":"https://fixture.example/v1"}),
                 authentication: vec![Method {

@@ -6565,7 +6565,6 @@ dependencies = [
  "maka-protocol",
  "maka-runtime",
  "maka-sandbox",
- "maka-skills",
  "pulldown-cmark",
  "ratatui",
  "serde",

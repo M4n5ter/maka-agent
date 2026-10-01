@@ -17,6 +17,7 @@
  * under the License.
  */
 
+pub mod terminal;
 use crate::{contributions::Contribution, fiber::CallGuard};
 use futures_util::future::BoxFuture;
 use maka_runtime::{

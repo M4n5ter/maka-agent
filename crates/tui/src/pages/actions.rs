@@ -112,7 +112,15 @@ pub(crate) fn items(
         .filter_map(|(action, label)| {
             // A semantic operation within the explicitly bound object. The surface
             // freezes the Action itself; its label is never used as domain authority.
-            let key = label.to_owned();
+            let key = if let Action::Apps(crate::apps::Message::Open(key)) = &action {
+                use sha2::{Digest, Sha256};
+                format!(
+                    "app-{:x}",
+                    Sha256::digest(serde_json::to_vec(key).expect("View address is serializable"))
+                )
+            } else {
+                label.to_owned()
+            };
             if !seen.insert(key.clone()) {
                 return None;
             }
@@ -128,7 +136,11 @@ pub(crate) fn items(
             };
             Some(MenuItem {
                 key,
-                label: app.i18n.text(label),
+                label: if matches!(action, Action::Apps(_)) {
+                    crate::view::action_label(app, &action)
+                } else {
+                    app.i18n.text(label)
+                },
                 enabled: app.enabled(&action),
                 action,
                 role,
@@ -206,7 +218,6 @@ pub(crate) fn session_commands(app: &App) -> Vec<(Action, &'static str)> {
         commands.push((action, "resources-title"));
     }
     commands.extend(app.revision_commands());
-    commands.extend(app.recap_commands());
     commands.extend(app.resume_commands());
     commands.extend(app.bundle_commands());
     for mode in [
@@ -272,8 +283,14 @@ pub(crate) fn project_commands(
         Action::Project(super::projects::Command::Create(project.id.clone())),
         "project-create-session",
     )];
-    if let Some(action) = app.new_project_executor_session_action(&project.id) {
-        commands.push((action, "controls-new-executor"));
+    if project.usable() {
+        commands.extend(
+            app.workspace_launches(maka_runtime::execution::WorkspaceTarget::Project {
+                project_id: project.id.clone(),
+            })
+            .into_iter()
+            .map(|action| (action, "route-extensions")),
+        );
     }
     commands.extend(app.project_management_commands_for(project));
     commands
@@ -286,7 +303,10 @@ pub(crate) fn composer_add() -> Vec<(Action, &'static str)> {
             "attachments-add",
         ),
         (Action::References, "references-title"),
-        (Action::Skills(super::skills::Command::Open), "skills-title"),
+        (
+            Action::Completion(super::completion::Command::Resources),
+            "completion-plugins",
+        ),
         (
             Action::Completion(super::completion::Command::Open(
                 crate::editor::completion::Kind::Reference,

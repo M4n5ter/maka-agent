@@ -91,7 +91,7 @@ fn request() -> Request {
             token: Editor::default().insertion_token(Kind::Reference),
         },
         locale: "en".into(),
-        job: Job::Skills { page: None },
+        job: Job::Providers { cursor: None },
         cancel: Cancellation::default(),
     }
 }

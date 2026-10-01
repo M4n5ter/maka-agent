@@ -170,7 +170,14 @@ impl Plugin for JavaScript {
                 bridge.model_calls(),
                 bridge.calls(),
                 &remote,
-                &context.lifecycle,
+                registration::Activation {
+                    lifecycle: &context.lifecycle,
+                    storage: &context
+                        .host
+                        .as_ref()
+                        .ok_or("Host storage unavailable")?
+                        .storage,
+                },
             )?;
             let business = module.clone();
             let owner = context.lifecycle.clone();

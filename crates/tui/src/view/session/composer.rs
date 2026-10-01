@@ -51,8 +51,8 @@ pub(super) fn draw(
     if app.has_directories(id) {
         content.push(crate::pages::references::chips(app, id));
     }
-    if app.has_skills(id) {
-        content.push(crate::pages::skills::chips(app, id));
+    if app.has_selections(id) {
+        content.push(crate::pages::selections::chips(app, id));
     }
     if let Some(chip) = crate::pages::completion::chips(app, id) {
         content.push(chip);

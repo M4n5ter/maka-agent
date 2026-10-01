@@ -25,7 +25,7 @@ mod editing;
 mod request;
 mod resources;
 mod saved;
-mod skills;
+mod selections;
 mod view;
 
 use super::branch::Basis;
@@ -65,7 +65,7 @@ pub enum Command {
     Resources,
     Attachments,
     Directories,
-    Skills,
+    PluginInputs,
     Content,
     ToggleResource(resources::Resource),
 }
@@ -88,7 +88,7 @@ impl Command {
             Self::Content => "revision-content",
             Self::Attachments => "inputs-add",
             Self::Directories => "references-title",
-            Self::Skills => "skills-title",
+            Self::PluginInputs => "completion-plugins",
         }
     }
 }
@@ -230,7 +230,7 @@ impl App {
                     (self.tabs.contains(&s.copy.target_session_id) || self.tabs.entries.len() < crate::navigation::tabs::LIMIT)
                     && (self.drafts.contains_key(&s.copy.target_session_id) || self.drafts.len() < crate::navigation::tabs::LIMIT)
                 }),
-            Command::Directories | Command::Skills => available && state.phase == Phase::Editing && !state.confirm_discard,
+            Command::Directories | Command::PluginInputs => available && state.phase == Phase::Editing && !state.confirm_discard,
             Command::Attachments => available && !state.confirm_discard && state.saved.is_some()
                 && matches!(state.phase, Phase::Editing | Phase::Uploading | Phase::Ready),
             Command::Select(index) => available && matches!(state.phase, Phase::Editing | Phase::Uploading | Phase::Ready) && !state.confirm_discard
@@ -249,8 +249,8 @@ impl App {
         if !self.revision_enabled(&command) {
             return None;
         }
-        if command == Command::Skills {
-            self.skills_action(crate::pages::skills::Command::Open);
+        if command == Command::PluginInputs {
+            self.completion_action(crate::pages::completion::Command::Resources);
             return None;
         }
         if command == Command::Directories {
@@ -286,7 +286,7 @@ impl App {
         }
         let state = &mut self.revision;
         match command {
-            Command::Attachments | Command::Directories | Command::Skills => unreachable!(),
+            Command::Attachments | Command::Directories | Command::PluginInputs => unreachable!(),
             Command::Open(basis) => {
                 state.clear_editors();
                 state.requested = Some(Job::Load {

@@ -537,8 +537,7 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
         Action::Manage(_) => ("⋯", "."),
         Action::Attachment(_) => ("+", "+"),
         Action::References => ("▱", "/"),
-        Action::Skills(_) => ("✧", "*"),
-        Action::Recap(_) => ("≡", "="),
+        Action::Selections(_) => ("✧", "*"),
         Action::Resume(_) => ("↻", "R"),
         Action::Branch(_) => ("↳", "+"),
         Action::Bundle(_) => ("⇄", "<>"),
@@ -584,6 +583,15 @@ pub(crate) fn icon(app: &App, action: &Action) -> &'static str {
 }
 
 pub(crate) fn action_label(app: &App, action: &Action) -> String {
+    if let Action::Apps(crate::apps::Message::Open(key)) = action
+        && let Some(entry) = app.apps.entry(key)
+    {
+        return entry
+            .descriptor
+            .title
+            .resolve(app.i18n.locale().id())
+            .to_owned();
+    }
     if let Action::EditComposer(target) = action {
         return app.i18n.text(target.label());
     }
@@ -664,7 +672,7 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
     let key = match action {
         Action::Attachment(command) => command.label(),
         Action::References => "references-title",
-        Action::Skills(command) => command.label(),
+        Action::Selections(command) => command.label(),
         Action::Apps(message) => message.label(),
         Action::NextTab => "tabs-next",
         Action::PreviousTab => "tabs-previous",
@@ -702,7 +710,6 @@ pub(crate) fn action_label(app: &App, action: &Action) -> String {
         Action::Resources(command) => command.label(),
         Action::Completion(command) => command.label(),
         Action::Attention(command) => command.label(),
-        Action::Recap(command) => command.label(),
         Action::Resume(command) => command.label(),
         Action::Revision(command) => command.label(),
         Action::Onboard(command) => command.label(),

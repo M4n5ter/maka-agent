@@ -1104,6 +1104,8 @@
                       sessionId: call.sessionId,
                       workspace: call.workspace,
                       signal: call.signal,
+                      cwd: call.cwd,
+                      tools: Object.freeze(call.tools ?? []),
                     }),
                   );
                 }
@@ -1334,6 +1336,14 @@
           context.workspace = readDirectory('view', call.readView);
         }
         if (call?.remoteAuthority) {
+          context.controls = Object.freeze({
+            updatePreferences: (input) =>
+              host('remote.updatePreferences', { authority: call.remoteAuthority, input }),
+            createExecutorSession: (input) =>
+              host('remote.createExecutorSession', { authority: call.remoteAuthority, input }),
+            configureExecutorSession: (input) =>
+              host('remote.configureExecutorSession', { authority: call.remoteAuthority, input }),
+          });
           context.views = Object.freeze({
             authorize: (request, callback) =>
               authorized(
@@ -1354,6 +1364,11 @@
             },
             queryDatabase: (input) =>
               host('remote.queryDatabase', { authority: call.remoteAuthority, input }),
+            preferences: () => host('remote.preferences', { authority: call.remoteAuthority }),
+            executorSession: (input) =>
+              host('remote.executorSession', { authority: call.remoteAuthority, input }),
+            executorCreation: (input) =>
+              host('remote.executorCreation', { authority: call.remoteAuthority, input }),
             projects: (input) =>
               host('remote.projects', { authority: call.remoteAuthority, input }),
           });

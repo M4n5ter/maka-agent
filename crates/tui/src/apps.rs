@@ -241,7 +241,7 @@ impl Apps {
         Action::Apps(Message::Instance(key.clone(), command))
     }
     /// The entry serving `key`, if the directory has one.
-    pub(super) fn entry(&self, key: &Key) -> Option<&TerminalViewProjection> {
+    pub(crate) fn entry(&self, key: &Key) -> Option<&TerminalViewProjection> {
         self.directory.iter().find(|entry| key.serves(entry))
     }
     /// Pages the sidebar offers: application views placed as pages.
@@ -1578,6 +1578,42 @@ fn asks(instance: &Instance, id: &str) -> bool {
         .is_some_and(|action| action.confirm.is_some())
 }
 
+impl App {
+    /// One directory owns workspace launch buttons, pages and their retirement.
+    pub(crate) fn workspace_launches(
+        &self,
+        workspace: maka_runtime::execution::WorkspaceTarget,
+    ) -> Vec<Action> {
+        if !matches!(self.connection, ConnectionState::Connected { .. })
+            || !self.apps.loaded
+            || self.apps.failed
+        {
+            return vec![];
+        }
+        self.apps
+            .directory
+            .iter()
+            .filter(|entry| entry.descriptor.launch)
+            .filter_map(|entry| Key::of(entry, None))
+            .map(|key| {
+                Action::Apps(Message::Open(
+                    key.at(serde_json::json!({"workspace":workspace})),
+                ))
+            })
+            .filter(|action| self.enabled(action))
+            .collect()
+    }
+    pub(crate) fn current_workspace_launches(&self) -> Vec<Action> {
+        let Some(path) = std::env::current_dir()
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_owned))
+        else {
+            return vec![];
+        };
+        self.workspace_launches(maka_runtime::execution::WorkspaceTarget::HostPath { path })
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1744,6 +1780,36 @@ pub(crate) mod tests {
         app.apps_complete(request, Ok(Output::Reply(Reply::View { view: form() })));
         app.focus = Focus::Page;
         app
+    }
+    #[test]
+    fn workspace_launches_follow_contributions_and_freeze_the_project() {
+        let mut app = app();
+        let mut entry = app.apps.directory[0].clone();
+        entry.descriptor.context = maka_plugins::terminal_ui::Context::Application;
+        entry.descriptor.launch = true;
+        let mut second = entry.clone();
+        second.method = "another-launch".into();
+        app.apps.directory = vec![entry, second];
+        app.apps.loaded = true;
+        let project = maka_runtime::execution::WorkspaceTarget::Project {
+            project_id: "chosen-project".into(),
+        };
+        let launches = app.workspace_launches(project.clone());
+        assert_eq!(launches.len(), 2);
+        for action in &launches {
+            let Action::Apps(Message::Open(key)) = action else {
+                panic!("plugin page action")
+            };
+            assert_eq!(key.route, json!({"workspace":project}));
+            assert!(key.session.is_none());
+            assert!(app.enabled(action));
+        }
+        app.apps.directory.clear();
+        assert!(app.workspace_launches(project).is_empty());
+        assert!(
+            launches.iter().all(|action| !app.enabled(action)),
+            "captured buttons cannot open retired entries"
+        );
     }
     #[test]
     fn public_split_adjusts_locally_during_reads_and_survives_reflow() {

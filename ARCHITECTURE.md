@@ -30,6 +30,8 @@ Maka has one Rust Runtime Host. The CLI and TUI connect through the public clien
 - **Computer Use:** `crates/computer-use` owns its own REPL and session lifetime. It works independently of Code Mode and supports native application and browser surfaces.
 - **Presentation:** `crates/client` implements the client protocol. `crates/tui` renders native terminal views, while the plugin SDK describes capabilities and declarative views without owning host state.
 
+The TUI is a client shell: it owns navigation, rendering and local drafts. Business pages, settings, commands, input selectors and workspace launch buttons come from activation-owned plugin contributions. Removing a contribution revokes its entry points and action authority together. Executor providers can publish their own views or use the standard forms in `maka_plugins::executor::terminal`; the Host still authorizes canonical session creation and configuration. Assistant preferences and session recaps follow the same public Remote boundary. Captured `views` expose observations; captured `controls` admit canonical writes under the initiating client's grants. Provider labels and connection categories come from provider descriptors.
+
 The npm package in `packages/cli` only chooses and launches a matching executable. It does not add a second runtime, configuration store or tool implementation.
 
 See the owning crate READMEs for detailed contracts, and [the SDK](packages/plugin-sdk/README.md) for JavaScript plugin authoring.

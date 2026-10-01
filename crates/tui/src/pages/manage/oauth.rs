@@ -45,21 +45,9 @@ impl Choice {
     fn label(&self) -> String {
         format!(
             "{} · {}",
-            self.protocol_label()
-                .unwrap_or(&self.provider.descriptor.label),
+            self.provider.descriptor.label,
             self.authentication().label
         )
-    }
-    fn protocol_label(&self) -> Option<&'static str> {
-        if self.provider.identity.package_id != "maka.providers" {
-            return None;
-        }
-        match self.provider.identity.name.as_str() {
-            "openai-compatible" => Some("Chat Completions"),
-            "openai-responses-compatible" => Some("Responses"),
-            "anthropic-compatible" => Some("Anthropic Messages"),
-            _ => None,
-        }
     }
     fn authentication(&self) -> &maka_protocol::model_provider::Method {
         &self.provider.descriptor.authentication[self.method]
@@ -896,10 +884,12 @@ mod tests {
                 epoch: "epoch".into(),
             };
             app.apply(Action::Visit(Route::Connections));
-            let mut entries: Vec<_> = protocols.iter().map(|(name, _)| {
+            let mut entries: Vec<_> = protocols.iter().map(|(name, label)| {
                 let mut entry = crate::providers::fixtures::entry(name, false);
-                entry.identity.package_id = "maka.providers".into();
-                entry.identity.entry_id = "maka.providers".into();
+                entry.identity.package_id = "example.provider".into();
+                entry.identity.entry_id = "example.provider".into();
+                entry.descriptor.custom_endpoint = true;
+                entry.descriptor.label = (*label).into();
                 entry.descriptor.anonymous = false;
                 entry.descriptor.configuration_schema = serde_json::json!({"type":"object","properties":{"baseUrl":{"type":"string","minLength":1}},"required":["baseUrl"],"additionalProperties":false});
                 entry.descriptor.configuration_defaults = serde_json::json!({});

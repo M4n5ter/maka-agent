@@ -122,10 +122,10 @@ fn tree(app: &App, width: u16, directory: bool) -> Node<Message> {
                     Message::New,
                 )),
             }
-            if let Some(action) = app.new_executor_session_action() {
+            for (index, action) in app.current_workspace_launches().into_iter().enumerate() {
                 content.push(
                     button(
-                        "new-executor",
+                        format!("launch-{index}"),
                         crate::view::action_label(app, &action),
                         "",
                         Message::Action(Box::new(action.clone())),
@@ -266,12 +266,17 @@ fn tree(app: &App, width: u16, directory: bool) -> Node<Message> {
 }
 
 /// A centered action row; its whole width is the hit target.
-fn button(key: &'static str, label: String, shortcut: &str, message: Message) -> Node<Message> {
+fn button(
+    key: impl Into<String>,
+    label: String,
+    shortcut: &str,
+    message: Message,
+) -> Node<Message> {
     let mut spans = vec![(label, Tone::Accent)];
     if !shortcut.is_empty() {
         spans.push((format!("   {shortcut}"), Tone::Subtle));
     }
-    Node::text(key, spans)
+    Node::text(key.into(), spans)
         .align(Align::Center)
         .on(On::Activate(message))
 }

@@ -30,6 +30,8 @@ export interface InputSelectionSource {
   readonly sessionId: string;
 }
 export interface InputResourceContext {
+  readonly cwd: string;
+  readonly tools: readonly string[];
   readonly sessionId: string;
   readonly workspace: ReadDirectory;
   readonly signal: Cancellation;

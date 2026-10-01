@@ -20,6 +20,7 @@ mod instructions;
 pub mod plan;
 mod prompt;
 pub mod recall;
+mod terminal;
 pub mod todo;
 
 use futures_util::future::BoxFuture;
@@ -65,13 +66,16 @@ impl Plugin for Builtin {
         let Some(host) = context.host else {
             return Box::pin(async { Err("Assistant requires Host preferences".into()) });
         };
+        let identity = context.lifecycle.identity();
         let assistant = Arc::new(Assistant {
             preferences: host.preferences,
             inputs: host.inputs,
             owner: context.lifecycle,
         });
         Box::pin(async move {
+            let identity = identity.map_err(|e| e.to_string())?;
             let mut staged = Staged::default();
+            terminal::publish(&identity.package_id, &mut staged)?;
             staged
                 .insert("default", SessionBehavior::new(assistant.clone()))
                 .map_err(|e| e.to_string())?;

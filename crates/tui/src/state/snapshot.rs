@@ -43,7 +43,8 @@ pub struct Snapshot {
     pending_new: BTreeMap<String, maka_protocol::session::SessionCreateInput>,
     attachments: BTreeMap<String, Vec<crate::pages::attachments::Saved>>,
     directories: BTreeMap<String, Vec<maka_protocol::turn::DirectoryReference>>,
-    skills: BTreeMap<String, Vec<crate::pages::skills::Picked>>,
+    #[serde(alias = "skills")]
+    selections: BTreeMap<String, Vec<crate::pages::selections::Picked>>,
     #[serde(default)]
     completion: Option<crate::pages::completion::Checkpoint>,
     unresolved: Vec<Submission>,
@@ -59,7 +60,8 @@ pub struct Snapshot {
     pages: Vec<(Location, crate::navigation::state::Saved)>,
     oauth: Option<crate::pages::manage::oauth::saved::Checkpoint>,
     branch: Option<crate::pages::branch::Checkpoint>,
-    recap: Option<crate::pages::recap::Checkpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recap: Option<LegacyRecap>,
     #[serde(default)]
     bundle: Option<crate::pages::bundle::Checkpoint>,
     #[serde(default)]
@@ -103,7 +105,7 @@ impl Snapshot {
             version: 24,
             attachments: app.attachments.saved.clone(),
             directories: app.directories.clone(),
-            skills: app.skills.saved.clone(),
+            selections: app.selections.saved.clone(),
             root: root.into(),
             tabs: app.tabs.entries.iter().map(|tab| tab.id.clone()).collect(),
             drafts: app
@@ -130,7 +132,7 @@ impl Snapshot {
             pages: app.saved_pages(),
             oauth: app.management.oauth.checkpoint(),
             branch: app.branch.checkpoint(),
-            recap: app.recap.checkpoint(),
+            recap: None,
             bundle: app.bundle.checkpoint(),
             session_controls: app.session_controls.checkpoint(),
             resources: app.resources.checkpoint(),
@@ -191,14 +193,14 @@ impl Snapshot {
         {
             return Err("Invalid saved navigation".into());
         }
-        if self.skills.len() > LIMIT {
-            return Err("Too many Skills drafts".into());
+        if self.selections.len() > LIMIT {
+            return Err("Too many input selection drafts".into());
         }
-        for (session, items) in &self.skills {
+        for (session, items) in &self.selections {
             if !self.drafts.contains_key(session) {
-                return Err("Invalid Skills draft destination".into());
+                return Err("Invalid input selection draft destination".into());
             }
-            crate::pages::skills::validate(items)?;
+            crate::pages::selections::validate(items)?;
         }
         if self.directories.len() > LIMIT {
             return Err("Too many directory drafts".into());
@@ -349,9 +351,6 @@ impl Snapshot {
         }
         app.apps.restore(self.apps)?;
         app.plugins.restore(self.plugins);
-        if let Some(recap) = self.recap {
-            app.recap.restore(recap);
-        }
         if let Some(bundle) = self.bundle {
             app.bundle.restore(bundle);
         }
@@ -369,7 +368,7 @@ impl Snapshot {
         }
         app.attachments.saved = self.attachments;
         app.directories = self.directories;
-        app.skills.saved = self.skills;
+        app.selections.saved = self.selections;
         app.pending_new = self.pending_new.into_iter().collect();
         for (id, saved) in self.drafts {
             app.drafts.insert(id, Editor::restore(saved)?);
@@ -398,6 +397,17 @@ impl Snapshot {
         }
         app.apply(Action::Visit(self.navigation.current()));
         app.navigation = self.navigation;
+        if let Some(recap) = self.recap {
+            // Upgrade an unresolved native operation to a read-only plugin route.
+            app.navigation.visit(Route::App(crate::apps::Key {
+                package: "maka.session-recap".into(),
+                method: "terminal".into(),
+                session: Some(recap.session),
+                route: serde_json::json!({"operation":recap.operation}),
+                ..Default::default()
+            }));
+        }
+
         app.page_states = self
             .pages
             .into_iter()
@@ -427,6 +437,74 @@ mod tests {
             epoch: "old-epoch".into(),
         };
         app
+    }
+    #[test]
+    fn legacy_business_checkpoints_preserve_drafts_and_never_dispatch() {
+        use serde_json::json;
+        let mut original = app();
+        original.apply(Action::Visit(Route::Session("draft".into())));
+        original
+            .drafts
+            .get_mut("draft")
+            .unwrap()
+            .insert("keep this draft");
+        let base = serde_json::to_value(Snapshot::capture(&original, "root")).unwrap();
+        let mut target = json!({"root":"root", "epoch":"old-epoch", "session":"created-session", "name":"Original", "revision":0, "read_message":null, "run":null, "workspace":{"kind":"host_path", "path":"/original"}});
+        let creating = json!({"target":target,"page":"new_executor","mutation":{"kind":"create","input":{"sessionId":"created-session","workspace":{"kind":"host_path","path":"/original"},"executorId":"external","executorSettings":{"model":"frozen-model"}}}});
+        target["session"] = json!("draft");
+        target["revision"] = json!(3);
+        target.as_object_mut().unwrap().remove("workspace");
+        let configuring = json!({"target":target,"page":"executor","mutation":{"kind":"executor","input":{"sessionId":"draft","expectedRevision":3,"patch":{"executorTarget":{"executorId":"external","settings":{}}}}}});
+        target["session"] = json!("");
+        let preferences = json!({"target":target,"page":"preferences","mutation":{"kind":"policy","input":{"expectedRevision":3,"operation":{"kind":"set_personalization","value":{"displayName":"Original","assistantTone":"Brief"}}}}});
+        for pending in [creating, configuring, preferences] {
+            let mut encoded = base.clone();
+            encoded["session_controls"] = pending.clone();
+            // v24 saved selections had no provider field.
+            encoded.as_object_mut().unwrap().remove("selections");
+            encoded["skills"] = json!({"draft":[{"id":"review","name":"Review"}]});
+            let mut restored = app();
+            serde_json::from_value::<Snapshot>(encoded)
+                .unwrap()
+                .restore(&mut restored, false)
+                .unwrap();
+            assert_eq!(restored.drafts["draft"].text(), "keep this draft");
+            assert_eq!(
+                restored.selections.saved["draft"][0].provider,
+                "maka.skills"
+            );
+            restored.apply(Action::SessionControls(
+                crate::pages::session_controls::Command::Reopen,
+            ));
+            assert!(restored.session_controls_request().is_none());
+            assert!(!restored.enabled(&Action::SessionControls(
+                crate::pages::session_controls::Command::Save
+            )));
+            let saved = Snapshot::capture(&restored, "root");
+            saved.validate("root").unwrap();
+            assert_eq!(
+                serde_json::to_value(saved).unwrap()["session_controls"],
+                pending
+            );
+        }
+        let operation = uuid::Uuid::new_v4();
+        let mut encoded = base;
+        encoded["recap"] = json!({"root":"root","session":"draft","operation":operation});
+        let mut restored = app();
+        serde_json::from_value::<Snapshot>(encoded)
+            .unwrap()
+            .restore(&mut restored, false)
+            .unwrap();
+        let Route::App(key) = restored.navigation.current() else {
+            panic!("legacy recap is a read-only plugin route")
+        };
+        assert_eq!(key.route, json!({"operation":operation}));
+        assert!(
+            restored
+                .apps_requests()
+                .iter()
+                .all(|request| !request.needs_checkpoint())
+        );
     }
     #[test]
     fn pending_session_and_first_message_identity_survive_checkpoint() {
@@ -484,9 +562,10 @@ mod tests {
         let mut original = app();
         original.apply(Action::Visit(Route::Session("a".into())));
         original.drafts.get_mut("a").unwrap().insert("中文🦀");
-        original.skills.saved.insert(
+        original.selections.saved.insert(
             "a".into(),
-            vec![crate::pages::skills::Picked {
+            vec![crate::pages::selections::Picked {
+                provider: "example.inputs".into(),
                 id: "review".into(),
                 name: "Review".into(),
             }],
@@ -539,10 +618,9 @@ mod tests {
         );
         assert_eq!(restored.sending["a"].request.input(), request.input());
         assert_eq!(
-            crate::pages::skills::selections(&restored.skills.saved["a"]),
+            crate::pages::selections::selections(&restored.selections.saved["a"]),
             request.input_selections
         );
-        assert!(restored.skills.dialog.is_none());
         assert!(matches!(
             restored.sending["a"].delivery,
             Delivery::Unknown(None)
@@ -622,7 +700,7 @@ mod tests {
         })).unwrap();
         request
             .input_selections
-            .insert("skills".into(), vec!["review".into()]);
+            .insert("selections".into(), vec!["review".into()]);
         request.turn_orchestration =
             Some(serde_json::from_value(json!({"mode":"code","source":"slash_command"})).unwrap());
         request.input().validate().unwrap();
@@ -881,5 +959,26 @@ mod tests {
         Snapshot::capture(&restored, "root")
             .validate("root")
             .unwrap();
+    }
+}
+
+/// Read-only upgrade of checkpoints written before recap became a plugin view.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyRecap {
+    root: String,
+    session: String,
+    operation: uuid::Uuid,
+}
+impl LegacyRecap {
+    fn validate(&self, root: &str) -> Result<(), String> {
+        if self.root != root
+            || self.session.is_empty()
+            || self.session.len() > 256
+            || self.session.chars().any(char::is_control)
+        {
+            return Err("Invalid legacy recap checkpoint".into());
+        }
+        Ok(())
     }
 }

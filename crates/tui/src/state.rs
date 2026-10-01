@@ -23,8 +23,7 @@ mod store;
 use crate::{
     app::App,
     pages::{
-        branch, bundle, manage::oauth, recap, resume, revision, sending::Submission,
-        session_controls,
+        branch, bundle, manage::oauth, resume, revision, sending::Submission, session_controls,
     },
 };
 use maka_client::Error;
@@ -44,7 +43,6 @@ pub struct State {
     requests: Vec<Submission>,
     oauth: Option<oauth::Request>,
     branch: Option<branch::Request>,
-    recap: Option<recap::Request>,
     bundle: Option<bundle::Request>,
     session_controls: Option<session_controls::Request>,
     resources: Option<crate::pages::resources::Request>,
@@ -62,7 +60,6 @@ struct Writing {
     requests: Vec<Submission>,
     oauth: Option<oauth::Request>,
     branch: Option<branch::Request>,
-    recap: Option<recap::Request>,
     bundle: Option<bundle::Request>,
     session_controls: Option<session_controls::Request>,
     resources: Option<crate::pages::resources::Request>,
@@ -79,7 +76,6 @@ pub struct Written {
     pub requests: Vec<Submission>,
     pub oauth: Option<oauth::Request>,
     pub branch: Option<branch::Request>,
-    pub recap: Option<recap::Request>,
     pub bundle: Option<bundle::Request>,
     pub session_controls: Option<session_controls::Request>,
     pub resources: Option<crate::pages::resources::Request>,
@@ -120,7 +116,6 @@ impl State {
                     requests: Vec::new(),
                     oauth: None,
                     branch: None,
-                    recap: None,
                     bundle: None,
                     session_controls: None,
                     resources: None,
@@ -165,7 +160,6 @@ impl State {
     pub fn cancel_requests(&mut self) -> Vec<Submission> {
         self.oauth = None;
         self.branch = None;
-        self.recap = None;
         self.bundle = None;
         self.session_controls = None;
         self.resources = None;
@@ -189,10 +183,6 @@ impl State {
     }
     pub fn submit_plugins(&mut self, request: crate::pages::plugins::Request, app: &mut App) {
         self.plugins = Some(request);
-        self.force(app);
-    }
-    pub fn submit_recap(&mut self, request: recap::Request, app: &mut App) {
-        self.recap = Some(request);
         self.force(app);
     }
     pub fn submit_bundle(&mut self, request: bundle::Request, app: &mut App) {
@@ -251,7 +241,6 @@ impl State {
             requests,
             oauth: self.oauth.take(),
             branch: self.branch.take(),
-            recap: self.recap.take(),
             bundle: self.bundle.take(),
             session_controls: self.session_controls.take(),
             resources: self.resources.take(),
@@ -301,11 +290,6 @@ impl State {
             },
             revision: if job.generation == self.generation {
                 job.revision
-            } else {
-                None
-            },
-            recap: if job.generation == self.generation {
-                job.recap
             } else {
                 None
             },
@@ -370,7 +354,6 @@ mod tests {
             requests: vec![],
             oauth: None,
             branch: None,
-            recap: None,
             bundle: None,
             session_controls: None,
             resources: None,
@@ -598,7 +581,7 @@ mod tests {
             "copy":{"sourceSessionId":"a","targetSessionId":"revised","expectedSourceRevision":1,
                 "purpose":{"kind":"revision","turnId":"old-turn"}},
             "turn_id":"new-turn","inputs":[
-                {"original":{"messageId":"one","content":{"text":"original"}},"content":{"text":"edited"},"excluded":[],"files":[],"directories":[],"skills":[]}
+                {"original":{"messageId":"one","content":{"text":"original"}},"content":{"text":"edited"},"excluded":[],"files":[],"directories":[],"selections":[]}
             ],"stage":"draft","batch":null,"mapped":null,"view":{"selected":0,"display":false,"positions":[{"input":0,"display":false,"cursor":{"cursor":0,"anchor":null,"upstream":false}}]}
         })).unwrap();
         saved.validate(ROOT).unwrap();
@@ -854,38 +837,6 @@ mod tests {
         state.finish(&mut app).await.unwrap();
         assert_eq!(read(&directory)["unresolved"][0]["id"], request.id);
         assert!(state.idle());
-    }
-
-    #[tokio::test]
-    async fn recap_dispatch_waits_for_saved_identity_and_restore_never_replays_it() {
-        use crate::pages::recap::Command;
-        let (directory, mut state, mut app) = fixture();
-        app.apply(Action::Visit(Route::Session("recap-session".into())));
-        let action = app.recap_commands()[0].0.clone();
-        app.apply(action);
-        let query = app.recap_request().unwrap();
-        app.recap_completed(query, Ok(None));
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35))
-            .unwrap()
-            .draw(|frame| crate::view::draw(frame, &mut app))
-            .unwrap();
-        app.apply(Action::Recap(Command::Generate));
-        let request = app.recap_request().unwrap();
-        let checkpoint = app.recap.checkpoint().unwrap();
-        state.submit_recap(request.clone(), &mut app);
-        state.start(&mut app);
-        let written = state.completed().await;
-        assert!(written.result.is_ok());
-        assert_eq!(written.recap, Some(request.clone()));
-        let saved: Snapshot = serde_json::from_value(read(&directory)).unwrap();
-        let mut reopened = App::new(
-            "/unused".into(),
-            I18n::new(LocalePreference::Auto, Locale::En),
-        );
-        saved.restore(&mut reopened, false).unwrap();
-        assert_eq!(reopened.recap.checkpoint(), Some(checkpoint));
-        assert!(reopened.recap_request().is_none());
-        assert!(app.recap_after_checkpoint(&request, &written.result));
     }
 
     #[tokio::test]

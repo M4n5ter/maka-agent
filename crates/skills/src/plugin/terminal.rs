@@ -56,7 +56,18 @@ pub(super) fn publish(skills: &Skills, staged: &mut Staged) -> Result<(), String
             Descriptor::new(title(), Context::Session)
                 .icon("✦", "K")
                 .changes("changes")
-                .order(10),
+                .order(10)
+                .command(maka_plugins::terminal_ui::Command {
+                    name: "skills".into(),
+                    aliases: vec![],
+                    title: title(),
+                    description: Text::localized(
+                        "Browse and manage Skills",
+                        "查看和管理技能",
+                        "查看與管理技能",
+                    ),
+                    route: Value::Null,
+                }),
         )
         .map_err(|e| e.to_string())?;
     staged

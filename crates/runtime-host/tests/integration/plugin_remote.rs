@@ -39,6 +39,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod catalog;
+mod controls;
 mod fixture;
 mod import;
 mod javascript;
@@ -120,6 +121,8 @@ async fn scenario() {
     let binding = json!({"client":client,"method":"echo","sessionId":null});
     let target = rpc(&mut peer, json!({"kind":"bind","binding":binding})).await["target"].clone();
     let document = rpc(&mut peer, json!({"kind":"open_document"})).await["document"].clone();
+    controls::verify(&mut peer, &client, &document, &fixture.workspace).await;
+    let form_recovery = controls::create_with_form(&mut peer, &document, &fixture.workspace).await;
     // A native plugin consumes the same Host-path capability as external JS.
     // Keep the writer open: the selected OpenCode rows live in a real WAL.
     let database_path = fixture.workspace.join("opencode.sqlite");
@@ -252,6 +255,10 @@ async fn scenario() {
             .await,
         Err(maka_plugins::remote::Error::Cancelled)
     ));
+    assert!(matches!(
+        old_views.preferences().await,
+        Err(maka_plugins::remote::Error::Cancelled)
+    ));
     success(peer.rpc("plugin.composition.apply", json!({"operations":[{"type":"update","entryId":"remote-host","patch":{"config":{"changed":true}}}]})).await);
     ready(&mut peer).await;
     assert_eq!(
@@ -259,6 +266,7 @@ async fn scenario() {
         "operation_conflict"
     );
     assert_eq!(state.calls.load(Ordering::SeqCst), 1);
+    controls::recover_form(&mut peer, &document, &form_recovery).await;
 
     let binding = json!({"client":client,"method":"events","sessionId":null});
     let target = rpc(&mut peer, json!({"kind":"bind","binding":binding})).await["target"].clone();

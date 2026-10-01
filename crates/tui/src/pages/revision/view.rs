@@ -306,7 +306,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     })
 }
 
-/// What the input carries, each with its picker: Host directories, Skills
+/// What the input carries, each with its picker: Host directories, plugin selections
 /// and files, and the switch between its text and its resources.
 fn tools(app: &App, input: &super::draft::Input, sheet: Sheet<Action>) -> Sheet<Action> {
     let state = &app.revision;
@@ -331,9 +331,9 @@ fn tools(app: &App, input: &super::draft::Input, sheet: Sheet<Action>) -> Sheet<
             Command::Directories,
         ));
         tools.push(button(
-            "skills",
-            counted(app.chrome.symbol("✧", "*"), input.skills.len()),
-            Command::Skills,
+            "selections",
+            counted(app.chrome.symbol("✧", "*"), input.selections.len()),
+            Command::PluginInputs,
         ));
     }
     if matches!(

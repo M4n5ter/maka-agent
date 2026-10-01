@@ -19,9 +19,7 @@
 
 use super::{Page, Target};
 use maka_client::{Client, ClientError, RequestFailure};
-use maka_protocol::{
-    Operation, configuration::policy::*, context::*, message, navigation, session::*,
-};
+use maka_protocol::{Operation, context::*, message, navigation, session::*};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,10 +30,7 @@ use serde::{Deserialize, Serialize};
     deny_unknown_fields
 )]
 pub(super) enum Mutation {
-    Policy(RuntimePolicyMutationInput),
     Metadata(SessionMetadataUpdateInput),
-    Executor(SessionConfigurationUpdateInput),
-    Create(SessionCreateInput),
     Read(SessionReadMarkerSetInput),
     Compact(ContextCompactInput),
     Interrupt(message::InterruptInput),
@@ -44,25 +39,8 @@ pub(super) enum Mutation {
 impl Mutation {
     pub(super) fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Policy(input) => {
-                if !matches!(
-                    input.operation,
-                    RuntimePolicyMutation::SetPersonalization { .. }
-                        | RuntimePolicyMutation::SetWorkspaceInstructions { .. }
-                ) {
-                    return Err("Unsupported preference mutation".into());
-                }
-                maka_protocol::runtime_policy::decode_mutation_input(&serde_json::json!(input))
-                    .map(|_| ())
-            }
             Self::Metadata(input) => {
                 decode_session_metadata_update_input(&serde_json::json!(input)).map(|_| ())
-            }
-            Self::Executor(input) => {
-                decode_session_configuration_update_input(&serde_json::json!(input)).map(|_| ())
-            }
-            Self::Create(input) => {
-                decode_session_create_input(&serde_json::json!(input)).map(|_| ())
             }
             Self::Read(input) => {
                 decode_session_read_marker_set_input(&serde_json::json!(input)).map(|_| ())
@@ -83,10 +61,7 @@ impl Mutation {
     }
     fn session(&self) -> Option<&str> {
         match self {
-            Self::Policy(_) => None,
             Self::Metadata(i) => Some(&i.session_id),
-            Self::Executor(i) => Some(&i.session_id),
-            Self::Create(i) => Some(&i.session_id),
             Self::Read(i) => Some(&i.session_id),
             Self::Compact(i) => Some(&i.session_id),
             Self::Interrupt(i) => Some(&i.session_id),
@@ -96,12 +71,12 @@ impl Mutation {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Checkpoint {
+pub struct CurrentCheckpoint {
     pub(super) target: Target,
     pub(super) page: Page,
     pub(super) mutation: Mutation,
 }
-impl Checkpoint {
+impl CurrentCheckpoint {
     pub fn validate(&self, root: &str) -> Result<(), String> {
         let t = &self.target;
         if t.root != root
@@ -113,16 +88,7 @@ impl Checkpoint {
             return Err("Saved session operation changed its destination".into());
         }
         let valid = match (&self.mutation, self.page) {
-            (Mutation::Policy(_), Page::Preferences) => t.session.is_empty(),
             (Mutation::Metadata(i), Page::Metadata) => i.expected_revision == t.revision,
-            (Mutation::Executor(i), Page::Executor) => {
-                i.expected_revision == t.revision && i.patch.executor_target.is_some()
-            }
-            (Mutation::Create(i), Page::NewExecutor) => {
-                t.workspace.as_ref() == Some(&i.workspace)
-                    && t.revision == 0
-                    && matches!(i.target, SessionCreateTarget::Executor { .. })
-            }
             (Mutation::Read(i), Page::MarkRead) => {
                 t.read_message.as_deref() == Some(&i.read_through_message_id)
             }
@@ -140,19 +106,40 @@ impl Checkpoint {
         self.mutation.validate()
     }
 }
+/// Old business writes remain immutable receipts; only current core operations run.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Checkpoint {
+    Current(CurrentCheckpoint),
+    Legacy(super::legacy::Checkpoint),
+}
+impl Checkpoint {
+    pub fn validate(&self, root: &str) -> Result<(), String> {
+        match self {
+            Self::Current(saved) => saved.validate(root),
+            Self::Legacy(saved) => saved.validate(root),
+        }
+    }
+    pub(super) fn target(&self) -> Target {
+        match self {
+            Self::Current(saved) => saved.target.clone(),
+            Self::Legacy(saved) => saved.target(),
+        }
+    }
+    pub(super) fn page(&self) -> Page {
+        self.current().map_or(Page::Metadata, |saved| saved.page)
+    }
+    pub(super) fn current(&self) -> Option<&CurrentCheckpoint> {
+        match self {
+            Self::Current(saved) => Some(saved),
+            Self::Legacy(_) => None,
+        }
+    }
+}
 #[derive(Clone)]
 pub(super) enum Work {
-    Policy,
     Session,
-    CreationStatus,
-    Executors {
-        query: String,
-        cursor: Option<maka_client::controls::ExecutorCursor>,
-    },
-    Turns {
-        position: u64,
-        through: Option<u64>,
-    },
+    Turns { position: u64, through: Option<u64> },
     Landmarks(String),
     CompactStatus(ContextCompactInput),
     Write(Mutation),
@@ -172,13 +159,8 @@ impl Request {
     }
 }
 pub enum Output {
-    Policy(Box<RuntimePolicySnapshot>),
     Session(Box<SessionCatalogProjection>),
-    Created(Box<SessionCatalogProjection>),
-    CreationStatus(Option<Box<SessionCatalogProjection>>),
-    PolicyChange(RuntimePolicyMutationResult),
     SessionChange(Box<SessionUpdateResult>),
-    Executors(maka_client::controls::ExecutorSearchResult),
     Turns(navigation::TurnsResult),
     Landmarks(navigation::LandmarksResult),
     Compact(Box<ContextCompactResult>),
@@ -188,10 +170,6 @@ pub enum Output {
 pub async fn execute(client: &Client, request: &Request) -> Result<Output, RequestFailure> {
     let session = &request.target.session;
     match &request.work {
-        Work::Policy => client
-            .runtime_policy()
-            .await
-            .map(|v| Output::Policy(Box::new(v))),
         Work::Session => client
             .session(session)
             .await?
@@ -201,11 +179,6 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Reque
                     "Session is no longer available".into(),
                 ))
             }),
-        Work::CreationStatus => client.session(session).await.map(Output::CreationStatus),
-        Work::Executors { query, cursor } => client
-            .session_executors(session, query, cursor.clone())
-            .await
-            .map(Output::Executors),
         Work::Turns { position, through } => client
             .session_turns(navigation::TurnsInput {
                 session_id: session.clone(),
@@ -231,22 +204,10 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Reque
             .await
             .map(|turn| Output::CompactStatus(Box::new(turn))),
         Work::Write(mutation) => match mutation {
-            Mutation::Policy(input) => client
-                .control_policy(input.clone())
-                .await
-                .map(Output::PolicyChange),
             Mutation::Metadata(input) => client
                 .update_session_metadata(input.clone())
                 .await
                 .map(|v| Output::SessionChange(Box::new(v))),
-            Mutation::Executor(input) => client
-                .update_session_configuration(input.clone())
-                .await
-                .map(|v| Output::SessionChange(Box::new(v))),
-            Mutation::Create(input) => client
-                .create_session(input.clone())
-                .await
-                .map(|v| Output::Created(Box::new(v))),
             Mutation::Read(input) => client
                 .mark_session_read(input.clone())
                 .await
@@ -278,7 +239,7 @@ mod tests {
     use super::*;
     #[test]
     fn checkpoint_binds_interrupt_epoch_run_and_revisioned_edits() {
-        let mut saved = Checkpoint {
+        let mut saved = CurrentCheckpoint {
             page: Page::Interrupt,
             target: Target {
                 root: "root".into(),
@@ -288,7 +249,6 @@ mod tests {
                 revision: 3,
                 read_message: None,
                 run: Some(("turn".into(), "run".into())),
-                workspace: None,
             },
             mutation: Mutation::Interrupt(message::InterruptInput {
                 origin_host_epoch: "epoch".into(),

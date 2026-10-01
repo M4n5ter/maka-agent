@@ -124,7 +124,7 @@ fn resource<
             &callback.module,
             callback.id,
             serde_json::to_value(request).map_err(|e| Error::Invalid(e.to_string()))?,
-            json!({"readView":view.id,"inputResource":operation,"sessionId":context.session_id}),
+            json!({"readView":view.id,"inputResource":operation,"sessionId":context.session_id,"cwd":context.cwd,"tools":context.tools}),
             context.cancellation,
             // Finish or fence the VM before the Remote owner's five-second drain.
             Duration::from_secs(4),

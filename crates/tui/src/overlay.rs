@@ -39,12 +39,10 @@ pub(crate) enum Overlay {
     Confirm,
     Plugins,
     Theme,
-    Skills,
     Attachments,
     /// Directory references rank above the session dialogs they serve.
     Reference,
     Revision,
-    Recap,
     Bundle,
     SessionControls,
     Resources,
@@ -64,19 +62,16 @@ impl Overlay {
     /// What an outside click or Esc asks of this layer.
     fn dismiss(self, app: &App) -> Action {
         use crate::pages::{
-            attachments, branch, interactions, manage, onboarding, queue, recap, resume, revision,
-            skills,
+            attachments, branch, interactions, manage, onboarding, queue, resume, revision,
         };
         match self {
             Self::Shutdown => Action::CancelQuit,
             Self::Consent | Self::Confirm => app.apps.dismissal(),
             Self::Plugins => Action::Plugins(crate::pages::plugins::Command::Cancel),
             Self::Theme => Action::Theme(crate::theme::editor::Command::Close),
-            Self::Skills => Action::Skills(skills::Command::Close),
             Self::Attachments => Action::Attachment(attachments::Command::Close),
             Self::Reference | Self::Management => Action::Manage(manage::Command::Close),
             Self::Revision => Action::Revision(revision::Command::Close),
-            Self::Recap => Action::Recap(recap::Command::Close),
             Self::Bundle => Action::Bundle(crate::pages::bundle::Command::Close),
             Self::SessionControls => {
                 Action::SessionControls(crate::pages::session_controls::Command::Close)
@@ -105,11 +100,9 @@ impl App {
             (Consent, self.apps.consent_visible()),
             (Confirm, self.apps.confirm_visible()),
             (Theme, self.theme.editor.is_some()),
-            (Skills, self.skills.dialog.is_some()),
             (Attachments, self.attachments.dialog.is_some()),
             (Reference, self.directory_reference_active()),
             (Revision, self.revision.visible),
-            (Recap, self.recap.visible),
             (Bundle, self.bundle.visible),
             (SessionControls, self.session_controls.visible),
             (Attention, self.attention.visible),
@@ -139,13 +132,11 @@ impl App {
             Overlay::Reference | Overlay::Management => crate::pages::manage::sheet(self),
             Overlay::QueueEdit => crate::pages::queue::edit::sheet(self),
             Overlay::Resume => crate::pages::resume::sheet(self),
-            Overlay::Recap => crate::pages::recap::sheet(self),
             Overlay::Bundle => crate::pages::bundle::sheet(self),
             Overlay::SessionControls => crate::pages::session_controls::sheet(self),
             Overlay::Resources => crate::pages::resources::sheet(self),
             Overlay::Attention => crate::pages::attention::sheet(self),
             Overlay::Branch => crate::pages::branch::sheet(self),
-            Overlay::Skills => crate::pages::skills::sheet(self),
             Overlay::Theme => crate::theme::editor::sheet(self),
             Overlay::Onboarding => crate::pages::onboarding::sheet(self),
             Overlay::Attachments => crate::pages::attachments::sheet(self),
@@ -165,17 +156,11 @@ impl App {
             Overlay::Plugins => self.plugins.confirmation_shown = shown,
             Overlay::Reference | Overlay::Management => self.management.presented(shown),
             Overlay::Resume => self.resume.presented(shown),
-            Overlay::Recap => self.recap.presented(shown),
             Overlay::Bundle => self.bundle.presented(shown),
             Overlay::SessionControls => self.session_controls.presented(shown),
             Overlay::Resources => self.resources_presented = shown,
             Overlay::Attention => self.attention_presented = shown,
             Overlay::Branch => self.branch.presented(shown),
-            Overlay::Skills => {
-                if let Some(dialog) = &mut self.skills.dialog {
-                    dialog.visible = shown;
-                }
-            }
             Overlay::Theme => {
                 if let Some(editor) = &mut self.theme.editor {
                     editor.visible = shown;
@@ -225,7 +210,6 @@ impl App {
             _ if crate::shutdown::ctrl_c(&event) => None,
             Overlay::Reference | Overlay::Management => self.management_sheet_input(&event),
             Overlay::QueueEdit => self.queue_edit_sheet_input(&event),
-            Overlay::Skills => self.skills_sheet_input(&event),
             Overlay::Theme => self.theme_sheet_input(&event),
             Overlay::Onboarding => self.onboarding_sheet_input(&event),
             Overlay::Attachments => self.attachment_sheet_input(&event),

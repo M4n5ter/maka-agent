@@ -122,7 +122,7 @@ impl App {
         if self.completion.popup.as_ref().is_some_and(|popup| {
             matches!(
                 popup.source,
-                Source::Commands | Source::Skills | Source::Providers | Source::Plugin(_)
+                Source::Commands | Source::Providers | Source::Plugin(_)
             )
         }) {
             self.completion_query_changed();

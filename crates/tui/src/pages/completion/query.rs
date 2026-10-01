@@ -39,14 +39,7 @@ impl App {
             job
         } else if popup.requested {
             match &popup.source {
-                Source::Commands | Source::Skills => Job::Skills {
-                    page: match cursor {
-                        Some(Cursor::Skills { revision, cursor }) => {
-                            Some((revision.clone(), cursor.clone()))
-                        }
-                        _ => None,
-                    },
-                },
+                Source::Commands => return None,
                 Source::Workspace { directory } => {
                     let (relative, filter) = popup.query.text().rsplit_once('/').map_or(
                         (directory.clone(), popup.query.text().to_owned()),

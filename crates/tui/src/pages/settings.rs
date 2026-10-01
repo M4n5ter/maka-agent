@@ -85,7 +85,6 @@ pub enum Message {
     Connections,
     SandboxDefaults,
     NetworkProxy,
-    PersonalPreferences,
     HostDetails,
     Connect,
     Refresh,
@@ -569,12 +568,6 @@ fn host(app: &App) -> Vec<Node<Message>> {
         Node::text("proxy", vec![(i18n.text("proxy-title"), Tone::Normal)])
             .on(On::Activate(Message::NetworkProxy))
             .enabled(app.network_proxy_action().is_some()),
-        Node::text(
-            "personal",
-            vec![(i18n.text("controls-preferences"), Tone::Normal)],
-        )
-        .on(On::Activate(Message::PersonalPreferences))
-        .enabled(app.personal_preferences_action().is_some()),
         Node::text("connection-state", vec![(i18n.text(state), tone)]),
         Node::row(
             "connection-actions",
@@ -717,11 +710,6 @@ impl App {
             Message::NetworkProxy => {
                 return self
                     .network_proxy_action()
-                    .and_then(|action| self.apply(action));
-            }
-            Message::PersonalPreferences => {
-                return self
-                    .personal_preferences_action()
                     .and_then(|action| self.apply(action));
             }
             Message::SandboxDefaults => {

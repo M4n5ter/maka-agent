@@ -36,8 +36,17 @@ test('input discovery shares its provider registration and carries only readonly
         resources: {
           title: { fallback: 'Context records' },
           query(request, cx) {
-            assert.deepEqual(Object.keys(cx).sort(), ['sessionId', 'signal', 'workspace']);
+            assert.deepEqual(Object.keys(cx).sort(), [
+              'cwd',
+              'sessionId',
+              'signal',
+              'tools',
+              'workspace',
+            ]);
             assert.equal(cx.sessionId, 'session');
+            assert.equal(cx.cwd, '/workspace');
+            assert.deepEqual(Array.from(cx.tools), ['Skill']);
+            assert.ok(Object.isFrozen(cx.tools));
             assert.equal(cx.workspace.write, undefined);
             assert.equal(request.query, 'rec');
             assert.equal(prepares, 0, 'typing must not enter input preparation');
@@ -45,6 +54,9 @@ test('input discovery shares its provider registration and carries only readonly
           },
           resolve(request, cx) {
             assert.equal(cx.sessionId, 'session');
+            assert.equal(cx.cwd, '/workspace');
+            assert.deepEqual(Array.from(cx.tools), ['Skill']);
+            assert.ok(Object.isFrozen(cx.tools));
             assert.equal(request.id, 'record:7');
             assert.equal(prepares, 0, 'choosing context does not submit it');
             return {
@@ -65,6 +77,8 @@ test('input discovery shares its provider registration and carries only readonly
     f.runtime.invoke(definition.callback, input, {
       inputResource: operation,
       readView: 'readonly-view',
+      cwd: '/workspace',
+      tools: ['Skill'],
       sessionId: 'session',
     });
   const page = await invoke('query', { query: 'rec', limit: 32, locale: 'en' });

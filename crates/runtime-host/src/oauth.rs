@@ -384,6 +384,7 @@ mod tests {
                     Definition::new(
                         Descriptor {
                             label: "External account".into(),
+                            custom_endpoint: false,
                             configuration_schema: json!({"type":"object"}),
                             configuration_defaults: json!({}),
                             authentication: vec![],

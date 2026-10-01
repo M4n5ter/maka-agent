@@ -27,6 +27,7 @@ use maka_plugins::{
 use serde_json::Value;
 use std::sync::Arc;
 mod remote;
+mod terminal;
 pub const ID: &str = "maka.session-recap";
 pub struct Builtin;
 
@@ -49,7 +50,7 @@ impl Plugin for Builtin {
         _config: Value,
     ) -> BoxFuture<'static, Result<Staged, String>> {
         Box::pin(async move {
-            context.lifecycle.identity().map_err(message)?;
+            let identity = context.lifecycle.identity().map_err(message)?;
             let mut staged = Staged::default();
 
             let host = context
@@ -61,7 +62,8 @@ impl Plugin for Builtin {
                 models: host.models,
                 preferences: host.preferences,
             });
-            remote::publish(backend, &mut staged)?;
+            remote::publish(backend.clone(), &identity.package_id, &mut staged)?;
+            terminal::publish(backend, &identity.package_id, &mut staged)?;
 
             Ok(staged)
         })

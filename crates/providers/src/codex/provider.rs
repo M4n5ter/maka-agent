@@ -62,6 +62,7 @@ impl Codex {
         Definition::new(
             Descriptor {
                 label: "ChatGPT Subscription".into(),
+                custom_endpoint: false,
                 configuration_schema: serde_json::to_value(schemars::schema_for!(Configuration))
                     .map_err(|e| maka_plugins::Error::Invalid(e.to_string()))?,
                 configuration_defaults: json!({ "baseUrl": ENDPOINT }),

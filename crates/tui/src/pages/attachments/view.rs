@@ -46,7 +46,7 @@ fn action(command: Command) -> Action {
 
 /// A message's files: the list with each file's upload state, actions on
 /// the selected one, and the local file browser as a second step. Host
-/// directories and Skills, the other things a message can carry, sit at
+/// directories and plugin selections, the other things a message can carry, sit at
 /// the bottom left when there is room.
 pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     let dialog = app.attachments.dialog.as_ref()?;
@@ -99,7 +99,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         sheet = sheet.back(action(Command::Open));
     }
     asides.push(("directories", "references-title", Command::Directory));
-    asides.push(("skills", "skills-title", Command::Skills));
+    asides.push(("selections", "completion-plugins", Command::PluginInputs));
     let close = app.i18n.text("attachments-close");
     // The other sources are also on the composer; below this width they
     // make way for the sheet's own controls.

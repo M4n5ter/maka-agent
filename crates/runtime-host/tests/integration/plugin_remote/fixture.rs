@@ -79,7 +79,7 @@ impl Plugin for Example {
                         Endpoint::new(
                             bundle.content_digest.clone(),
                             Handler::Method(Arc::new(maka_session_import::remote::Import::new(
-                                host.storage,
+                                host.storage.clone(),
                                 host.executions,
                                 host.models,
                             ))),
@@ -97,6 +97,33 @@ impl Plugin for Example {
                         .requiring_host_paths(),
                     )
                     .unwrap();
+                if identity.scope == Scope::Profile {
+                    maka_plugins::executor::terminal::stage(
+                        &mut staged,
+                        &context.lifecycle,
+                        maka_plugins::executor::Executor {
+                            id: "example".to_owned().try_into().unwrap(),
+                            display_name: "Example".into(),
+                            capabilities: maka_plugins::executor::Capabilities {
+                                thinking: true,
+                                ..Default::default()
+                            },
+                            provider: Arc::new(UnusedExecutor),
+                        },
+                        Some(host.storage.clone()),
+                    )
+                    .unwrap();
+                    staged
+                        .insert(
+                            key(&identity.package_id, "controls").unwrap(),
+                            Endpoint::new(
+                                bundle.content_digest.clone(),
+                                Handler::Method(Arc::new(Controls)),
+                            )
+                            .requiring_host_paths(),
+                        )
+                        .unwrap();
+                }
                 for (name, handler) in [
                     (
                         "echo",
@@ -116,6 +143,62 @@ impl Plugin for Example {
                 }
             }
             Ok(staged)
+        })
+    }
+}
+struct UnusedExecutor;
+impl maka_plugins::executor::Provider for UnusedExecutor {
+    fn execute(
+        &self,
+        _: maka_plugins::executor::Request,
+        _: maka_plugins::executor::Context,
+    ) -> BoxFuture<'static, Result<maka_plugins::executor::Outcome, maka_plugins::executor::Error>>
+    {
+        Box::pin(async { panic!("control tests never run executors") })
+    }
+}
+struct Controls;
+impl Method for Controls {
+    fn call(&self, input: Value, caller: Caller) -> BoxFuture<'static, Result<Value, Error>> {
+        Box::pin(async move {
+            fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
+                serde_json::from_value(value).map_err(|e| Error::Invalid(e.to_string()))
+            }
+            let value = match input["kind"].as_str() {
+                Some("preferences") => serde_json::to_value(caller.views.preferences().await?),
+                Some("update_preferences") => serde_json::to_value(
+                    caller
+                        .controls
+                        .update_preferences(decode(input["input"].clone())?)
+                        .await?,
+                ),
+                Some("create") => serde_json::to_value(
+                    caller
+                        .controls
+                        .create_executor_session(decode(input["input"].clone())?)
+                        .await?,
+                ),
+                Some("creation") => serde_json::to_value(
+                    caller
+                        .views
+                        .executor_creation(decode(input["input"].clone())?)
+                        .await?,
+                ),
+                Some("session") => serde_json::to_value(
+                    caller
+                        .views
+                        .executor_session(decode(input["input"].clone())?)
+                        .await?,
+                ),
+                Some("configure") => serde_json::to_value(
+                    caller
+                        .controls
+                        .configure_executor_session(decode(input["input"].clone())?)
+                        .await?,
+                ),
+                _ => return Err(Error::Invalid("Unknown control".into())),
+            };
+            value.map_err(|e| Error::Provider(e.to_string()))
         })
     }
 }

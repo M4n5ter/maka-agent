@@ -113,24 +113,6 @@ impl App {
                 self.completion.close();
                 return self.apply(action);
             }
-            Pick::Skill { id, name } => self.completion_bind(
-                context,
-                Binding {
-                    label: name,
-                    origin: Origin::Skill,
-                    inline: (!id.is_empty()
-                        && id
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
-                    .then_some(InlineReferenceKind::Skill),
-                    payload: Payload::Selection {
-                        provider: crate::pages::skills::PROVIDER.into(),
-                        selector: id,
-                        source: None,
-                        quote: None,
-                    },
-                },
-            ),
             Pick::Workspace(input) => {
                 self.completion.cancel();
                 self.completion.resolve = Some(Job::Capture { input, accept });

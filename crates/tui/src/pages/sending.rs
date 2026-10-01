@@ -168,12 +168,12 @@ impl App {
             || (text.trim().is_empty()
                 && !self.attachments.has(&session)
                 && !self.has_directories(&session)
-                && !self.has_skills(&session))
+                && !self.has_selections(&session))
         {
             return None;
         }
-        let mut input_selections = crate::pages::skills::selections(
-            self.skills
+        let mut input_selections = crate::pages::selections::selections(
+            self.selections
                 .saved
                 .get(&session)
                 .map(Vec::as_slice)
@@ -287,17 +287,19 @@ impl App {
                     self.directories.remove(&request.session);
                 }
                 if self
-                    .skills
+                    .selections
                     .saved
                     .get(&request.session)
                     .is_some_and(|items| {
-                        request
-                            .input_selections
-                            .get(crate::pages::skills::PROVIDER)
-                            .is_some_and(|sent| items.iter().all(|item| sent.contains(&item.id)))
+                        items.iter().all(|item| {
+                            request
+                                .input_selections
+                                .get(&item.provider)
+                                .is_some_and(|sent| sent.contains(&item.id))
+                        })
                     })
                 {
-                    self.skills.saved.remove(&request.session);
+                    self.selections.saved.remove(&request.session);
                 }
                 Delivery::Accepted
             }
@@ -405,17 +407,19 @@ impl App {
                     self.directories.remove(&request.session);
                 }
                 if self
-                    .skills
+                    .selections
                     .saved
                     .get(&request.session)
                     .is_some_and(|items| {
-                        request
-                            .input_selections
-                            .get(crate::pages::skills::PROVIDER)
-                            .is_some_and(|sent| items.iter().all(|item| sent.contains(&item.id)))
+                        items.iter().all(|item| {
+                            request
+                                .input_selections
+                                .get(&item.provider)
+                                .is_some_and(|sent| sent.contains(&item.id))
+                        })
                     })
                 {
-                    self.skills.saved.remove(&request.session);
+                    self.selections.saved.remove(&request.session);
                 }
                 Delivery::Accepted
             }

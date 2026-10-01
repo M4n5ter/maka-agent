@@ -57,20 +57,16 @@ impl App {
         };
         let result = match popup.source {
             Source::Commands => {
-                if matches!(popup.cursor, Some(Cursor::Skills { .. })) {
-                    Some((vec![], None))
-                } else {
-                    let offset = match popup.cursor {
-                        Some(Cursor::Local(offset)) => offset,
-                        _ => 0,
-                    };
-                    Some(super::candidates::commands(
-                        self,
-                        &popup.context,
-                        popup.query.text(),
-                        offset,
-                    ))
-                }
+                let offset = match popup.cursor {
+                    Some(Cursor::Local(offset)) => offset,
+                    _ => 0,
+                };
+                Some(super::candidates::commands(
+                    self,
+                    &popup.context,
+                    popup.query.text(),
+                    offset,
+                ))
             }
             Source::Added => {
                 let rows = self
@@ -96,14 +92,7 @@ impl App {
             _ => None,
         };
         if let Some((rows, next)) = result {
-            let skills = matches!(
-                self.completion.popup.as_ref().map(|popup| &popup.source),
-                Some(Source::Commands)
-            ) && next.is_none();
             self.completion_rows(rows, next);
-            if skills {
-                self.completion.popup.as_mut().unwrap().requested = true;
-            }
         }
     }
     pub(super) fn completion_rows(&mut self, rows: Vec<Candidate>, next: Option<Cursor>) {

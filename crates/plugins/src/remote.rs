@@ -19,6 +19,7 @@
 
 //! Client-facing handlers are distinct from Agent tools: a UI call never fabricates
 //! an Agent invocation or inherits its permissions.
+pub mod executor_session;
 pub mod projects;
 use crate::fiber::Identity;
 use futures_util::future::BoxFuture;
@@ -59,6 +60,8 @@ pub struct Caller {
     /// Host-bound views capture the original caller. Changing metadata above
     /// cannot retarget or elevate this capability.
     pub views: Arc<dyn Views>,
+    /// Canonical writes use captured caller authority, separately from observations.
+    pub controls: Arc<dyn Controls>,
     pub resources: Arc<crate::call::Resources>,
     pub cancellation: CancellationToken,
 }
@@ -81,6 +84,23 @@ pub struct WorkspaceViewInput {
     pub collaboration_mode: maka_runtime::execution::CollaborationMode,
 }
 pub trait Views: Send + Sync {
+    fn executor_session(
+        &self,
+        _session: String,
+    ) -> BoxFuture<'_, Result<Option<executor_session::Session>, Error>> {
+        Box::pin(async { Err(Error::Invalid("Session control is unavailable".into())) })
+    }
+    fn executor_creation(
+        &self,
+        _input: executor_session::Create,
+    ) -> BoxFuture<'_, Result<Option<executor_session::Session>, Error>> {
+        Box::pin(async { Err(Error::Invalid("Creation receipts are unavailable".into())) })
+    }
+
+    fn preferences(&self) -> BoxFuture<'_, Result<crate::preferences::Snapshot, Error>> {
+        Box::pin(async { Err(Error::Invalid("Preferences are unavailable".into())) })
+    }
+
     fn projects(&self, _query: projects::Query) -> BoxFuture<'_, Result<projects::Output, Error>> {
         Box::pin(async { Err(Error::Invalid("Project catalog is unavailable".into())) })
     }
@@ -237,3 +257,31 @@ pub fn validate_payload(value: &Value) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// User-requested canonical mutations; no Agent or ambient execution authority.
+/// Embeddings without this capability reject writes by default.
+pub trait Controls: Send + Sync {
+    fn create_executor_session(
+        &self,
+        _input: executor_session::Create,
+    ) -> BoxFuture<'_, Result<executor_session::Session, Error>> {
+        Box::pin(async { Err(Error::Invalid("Session creation is unavailable".into())) })
+    }
+    fn configure_executor_session(
+        &self,
+        _input: executor_session::Configure,
+    ) -> BoxFuture<'_, Result<executor_session::Configured, Error>> {
+        Box::pin(async {
+            Err(Error::Invalid(
+                "Session configuration is unavailable".into(),
+            ))
+        })
+    }
+    fn update_preferences(
+        &self,
+        _update: crate::preferences::Update,
+    ) -> BoxFuture<'_, Result<crate::preferences::Updated, Error>> {
+        Box::pin(async { Err(Error::Invalid("Preference edits are unavailable".into())) })
+    }
+}
+impl Controls for () {}

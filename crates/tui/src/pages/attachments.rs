@@ -71,7 +71,7 @@ pub enum Command {
     Browse,
     Paste,
     Directory,
-    Skills,
+    PluginInputs,
     Close,
     Path,
     Parent,
@@ -89,7 +89,7 @@ impl Command {
             Self::Browse => "attachments-add",
             Self::Paste => "composer-paste",
             Self::Directory => "references-title",
-            Self::Skills => "skills-title",
+            Self::PluginInputs => "completion-plugins",
             Self::Close => "attachments-close",
             Self::Path => "attachments-path",
             Self::Parent => "directory-parent",
@@ -393,8 +393,8 @@ impl App {
                 && matches!(self.navigation.current(), Route::Session(ref id)
                     if self.attachment_editable(id));
         }
-        if *command == Command::Skills {
-            return self.skills_enabled(&crate::pages::skills::Command::Open);
+        if *command == Command::PluginInputs {
+            return self.completion_enabled(&crate::pages::completion::Command::Resources);
         }
         if *command == Command::Directory {
             return self.enabled(&Action::References);
@@ -425,7 +425,7 @@ impl App {
         match command {
             Command::Open | Command::Close | Command::Details | Command::Select(_) => true,
             Command::Browse => editable && count < capacity,
-            Command::Directory | Command::Skills | Command::Paste => unreachable!(),
+            Command::Directory | Command::PluginInputs | Command::Paste => unreachable!(),
             Command::Parent | Command::Path | Command::EnterPath | Command::Pick(_) => {
                 editable && count < capacity
             }
@@ -460,9 +460,9 @@ impl App {
             self.paste_clipboard();
             return None;
         }
-        if command == Command::Skills {
+        if command == Command::PluginInputs {
             self.attachments.dialog = None;
-            self.skills_action(crate::pages::skills::Command::Open);
+            self.completion_action(crate::pages::completion::Command::Resources);
             return None;
         }
         if command == Command::Directory {
@@ -521,7 +521,7 @@ impl App {
                 dialog.browse = false;
                 dialog.selected = 0;
             }
-            Command::Directory | Command::Skills | Command::Paste => unreachable!(),
+            Command::Directory | Command::PluginInputs | Command::Paste => unreachable!(),
             Command::Browse => {
                 dialog.browse = true;
                 dialog.selected = 0;

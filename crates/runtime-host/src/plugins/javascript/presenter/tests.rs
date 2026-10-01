@@ -123,6 +123,7 @@ pub(super) fn caller(document_id: uuid::Uuid) -> Caller {
         document_id,
         session_id: None,
         access: remote::Access::Granted,
+        controls: Arc::new(()),
         views: Arc::new(Views),
         resources: Arc::default(),
         cancellation: CancellationToken::new(),

@@ -57,8 +57,14 @@ impl Plugin for Builtin {
             let host = context
                 .host
                 .ok_or("external agents require Host capabilities")?;
-            let manager =
-                Manager::load(host, context.data, context.contributions, &mut staged).await?;
+            let manager = Manager::load(
+                host,
+                context.data,
+                context.contributions,
+                context.lifecycle.clone(),
+                &mut staged,
+            )
+            .await?;
             let setup = Arc::new(crate::setup::Provider {
                 manager: manager.clone(),
                 context: context.lifecycle.clone(),

@@ -81,6 +81,8 @@ impl remote::Method for Resource {
                 let context = Context {
                     session_id,
                     workspace: view.files,
+                    cwd: view.workspace.host_cwd,
+                    tools: view.tools,
                     cancellation: cancellation.clone(),
                 };
                 let reply = match request {

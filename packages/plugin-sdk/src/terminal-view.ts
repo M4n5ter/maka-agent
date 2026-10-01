@@ -75,6 +75,8 @@ export interface TerminalView {
   changes?: string;
   /** Lower first among views of the same placement. */
   order?: number;
+  /** Offer this application page from workspace launch menus. */
+  launch?: boolean;
   /** Only Page placement may declare commands; no callback runs during discovery. */
   commands?: readonly TerminalCommand[];
 }

@@ -41,6 +41,7 @@ pub(crate) struct Manager {
     pub host: Services,
     pub data: Option<Directory>,
     publisher: Publisher,
+    owner: maka_plugins::fiber::Context,
     state: tokio::sync::Mutex<State>,
 }
 struct State {
@@ -81,6 +82,7 @@ impl Manager {
         host: Services,
         data: Option<Directory>,
         publisher: Publisher,
+        owner: maka_plugins::fiber::Context,
         staged: &mut Staged,
     ) -> Result<Arc<Self>, String> {
         let record = host
@@ -96,7 +98,7 @@ impl Manager {
         let mut providers = BTreeMap::new();
         for agent in &agents {
             let provider = Provider::new(agent.clone(), host.clone());
-            stage(&provider, staged)?;
+            stage(&provider, &owner, staged)?;
             providers.insert(
                 agent.id.clone(),
                 Active {
@@ -109,6 +111,7 @@ impl Manager {
             host,
             data,
             publisher,
+            owner,
             state: tokio::sync::Mutex::new(State {
                 configuration: Configuration {
                     revision: record.map(|record| record.revision),
@@ -212,7 +215,11 @@ impl Manager {
         for id in obsolete {
             let active = state.providers.get_mut(&id).expect("selected provider");
             if matches!(active.publication, Publication::Initial)
-                && let Err(error) = self.publisher.withdraw::<Executor>(&id)
+                && let Err(error) = maka_plugins::executor::terminal::withdraw(
+                    &self.publisher,
+                    &self.owner,
+                    std::slice::from_ref(&id),
+                )
             {
                 issues.push(format!("{id}: failed to retire registration: {error}"));
                 continue;
@@ -247,7 +254,7 @@ impl Manager {
             }
             let provider = Provider::new(agent, self.host.clone());
             let mut staged = Staged::default();
-            if let Err(error) = stage(&provider, &mut staged) {
+            if let Err(error) = stage(&provider, &self.owner, &mut staged) {
                 issues.push(format!("{id}: {error}"));
                 continue;
             }
@@ -287,25 +294,30 @@ fn snapshot(state: &State) -> Result<serde_json::Value, String> {
     Ok(value)
 }
 
-fn stage(provider: &Provider, staged: &mut Staged) -> Result<(), String> {
+fn stage(
+    provider: &Provider,
+    owner: &maka_plugins::fiber::Context,
+    staged: &mut Staged,
+) -> Result<(), String> {
     let agent = &provider.agent;
-    staged
-        .insert(
-            agent.id.clone(),
-            Executor {
-                id: maka_runtime::executor::ExecutorId::try_from(agent.id.clone())
-                    .map_err(str::to_owned)?,
-                display_name: agent.display_name.clone(),
-                capabilities: Capabilities {
-                    thinking: true,
-                    tool_activity: true,
-                    attachments: false,
-                    history_copy: false,
-                },
-                provider: Arc::new(provider.clone()),
+    maka_plugins::executor::terminal::stage(
+        staged,
+        owner,
+        Executor {
+            id: maka_runtime::executor::ExecutorId::try_from(agent.id.clone())
+                .map_err(str::to_owned)?,
+            display_name: agent.display_name.clone(),
+            capabilities: Capabilities {
+                thinking: true,
+                tool_activity: true,
+                attachments: false,
+                history_copy: false,
             },
-        )
-        .map_err(message)
+            provider: Arc::new(provider.clone()),
+        },
+        Some(provider.host.storage.clone()),
+    )
+    .map_err(message)
 }
 
 fn validate(agents: &[Agent]) -> Result<(), String> {

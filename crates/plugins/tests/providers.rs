@@ -98,6 +98,7 @@ fn publish(catalog: &Catalog, package: &str, scope: Scope) -> (Fiber, maka_plugi
             Definition::new(
                 Descriptor {
                     label: package.into(),
+                    custom_endpoint: false,
                     configuration_schema: json!({"type":"object"}),
                     configuration_defaults: json!({}),
                     authentication: vec![Method {

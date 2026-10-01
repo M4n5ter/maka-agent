@@ -95,6 +95,8 @@ export interface AuthenticationMethod {
 }
 export interface ProviderDescriptor {
   label: string;
+  /** Offers a user-selected endpoint instead of a named service. */
+  customEndpoint?: boolean;
   configurationSchema: Json;
   configurationDefaults: Json;
   authentication: readonly AuthenticationMethod[];

@@ -1118,6 +1118,7 @@ mod tests {
                 document_id: uuid::Uuid::new_v4(),
                 session_id: session,
                 access: maka_plugins::remote::Access::HostPaths,
+                controls: Arc::new(()),
                 views: views.clone(),
                 resources: Arc::default(),
                 cancellation: tokio_util::sync::CancellationToken::new(),

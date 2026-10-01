@@ -97,36 +97,6 @@ impl App {
                 }
                 page.next_cursor.map(Cursor::Workspace)
             }
-            Output::Skills(result) => {
-                let maka_skills::api::InvocableResult::Page {
-                    revision,
-                    items,
-                    next_cursor,
-                } = result
-                else {
-                    self.completion_error("completion-stale");
-                    return;
-                };
-                for item in items.into_iter().filter(|item| {
-                    super::candidates::matches(
-                        &query,
-                        [&item.name, &item.description, &item.reference],
-                    )
-                }) {
-                    rows.push(Candidate {
-                        id: format!("skill:{}", item.id),
-                        title: format!("/{}", item.name),
-                        detail: item.description,
-                        source: self.i18n.text("skills-title"),
-                        enabled: true,
-                        pick: Pick::Skill {
-                            id: item.id,
-                            name: item.name,
-                        },
-                    });
-                }
-                next_cursor.map(|cursor| Cursor::Skills { revision, cursor })
-            }
             Output::Sessions(result) => {
                 let SessionCatalogQueryResult::Page {
                     revision,
@@ -261,16 +231,6 @@ impl App {
             popup.scan = next;
             popup.requested = true;
             return;
-        }
-        if matches!(request.job, Job::Skills { .. })
-            && matches!(
-                self.completion.popup.as_ref().map(|popup| &popup.source),
-                Some(Source::Commands)
-            )
-        {
-            let mut local = std::mem::take(&mut self.completion.popup.as_mut().unwrap().candidates);
-            local.extend(rows);
-            rows = local;
         }
         self.completion_rows(rows, next);
     }

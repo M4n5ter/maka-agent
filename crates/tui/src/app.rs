@@ -84,7 +84,6 @@ pub enum Action {
     Resources(crate::pages::resources::Command),
     Completion(crate::pages::completion::Command),
     Attention(crate::pages::attention::Command),
-    Recap(crate::pages::recap::Command),
     Resume(crate::pages::resume::Command),
     Settings(crate::pages::settings::Message),
     Plugins(crate::pages::plugins::Command),
@@ -93,7 +92,7 @@ pub enum Action {
     Attachment(crate::pages::attachments::Command),
     References,
     Apps(crate::apps::Message),
-    Skills(crate::pages::skills::Command),
+    Selections(crate::pages::selections::Command),
     Revision(crate::pages::revision::Command),
     ToggleSymbols,
     ToggleMotion,
@@ -164,7 +163,6 @@ pub struct App {
     pub inbox: crate::pages::sessions::Sessions,
     pub management: crate::pages::manage::Management,
     pub branch: crate::pages::branch::State,
-    pub recap: crate::pages::recap::State,
     pub bundle: crate::pages::bundle::State,
     pub session_controls: crate::pages::session_controls::State,
     pub resources: crate::pages::resources::State,
@@ -174,7 +172,7 @@ pub struct App {
     pub(crate) attention_presented: bool,
     pub resume: crate::pages::resume::State,
     pub attachments: crate::pages::attachments::State,
-    pub skills: crate::pages::skills::State,
+    pub selections: crate::pages::selections::State,
     pub settings: crate::pages::settings::State,
     pub plugins: crate::pages::plugins::State,
     pub help: bool,
@@ -271,7 +269,6 @@ impl App {
             inbox: crate::pages::sessions::Sessions::inbox(),
             management: Default::default(),
             branch: Default::default(),
-            recap: Default::default(),
             bundle: Default::default(),
             session_controls: Default::default(),
             resources: Default::default(),
@@ -281,7 +278,7 @@ impl App {
             attention_presented: false,
             resume: Default::default(),
             attachments: Default::default(),
-            skills: Default::default(),
+            selections: Default::default(),
             settings: Default::default(),
             plugins: Default::default(),
             help: false,
@@ -351,7 +348,6 @@ impl App {
         ];
         commands.extend(self.management_commands());
         commands.extend(self.branch_commands());
-        commands.extend(self.recap_commands());
         commands.extend(self.bundle_commands());
         commands.extend(self.session_control_commands());
         commands.extend(self.side_branch_commands());
@@ -402,8 +398,8 @@ impl App {
             ));
             commands.push((Action::References, "references-title"));
             commands.push((
-                Action::Skills(crate::pages::skills::Command::Open),
-                "skills-title",
+                Action::Completion(crate::pages::completion::Command::Resources),
+                "completion-plugins",
             ));
             commands.push((
                 Action::SendMessage,
@@ -683,7 +679,6 @@ impl App {
         self.plugins.begin_frame();
         self.attachments.begin_frame();
         self.branch.invalidate_geometry();
-        self.recap.invalidate_geometry();
         self.bundle.invalidate_geometry();
         self.session_controls.invalidate_geometry();
         self.resources.invalidate_geometry();
@@ -837,7 +832,7 @@ impl App {
             Action::Manage(command) => return self.management_action(command),
             Action::Attachment(command) => return self.attachment_action(command),
             Action::References => self.open_references(),
-            Action::Skills(command) => self.skills_action(command),
+            Action::Selections(command) => self.selections_action(command),
             Action::Apps(message) => return self.apps_action(message),
             Action::Branch(command) => return self.branch_action(command),
             Action::Bundle(command) => return self.bundle_action(command),
@@ -845,7 +840,6 @@ impl App {
             Action::Resources(command) => crate::pages::resources::apply(self, command),
             Action::Completion(command) => return self.completion_action(command),
             Action::Attention(command) => self.attention.action(command),
-            Action::Recap(command) => return self.recap_action(command),
             Action::Resume(command) => return self.resume_action(command),
             Action::Settings(message) => return self.settings_action(message),
             Action::Plugins(command) => return self.plugins_action(command),
@@ -1080,8 +1074,8 @@ impl App {
         if let Action::Apps(message) = action {
             return self.apps_enabled(message);
         }
-        if let Action::Skills(command) = action {
-            return self.skills_enabled(command);
+        if let Action::Selections(command) = action {
+            return self.selections_enabled(command);
         }
         if *action == Action::References {
             return self.management.dialog.is_none()
@@ -1094,9 +1088,6 @@ impl App {
         }
         if let Action::Revision(command) = action {
             return self.revision_enabled(command);
-        }
-        if let Action::Recap(command) = action {
-            return self.recap_enabled(command);
         }
         if let Action::Resume(command) = action {
             return self.resume_enabled(command);
@@ -1115,7 +1106,6 @@ impl App {
                 Message::Palette(_) | Message::CustomTheme => !self.theme.busy(),
                 Message::SandboxDefaults => self.sandbox_defaults_action().is_some(),
                 Message::NetworkProxy => self.network_proxy_action().is_some(),
-                Message::PersonalPreferences => self.personal_preferences_action().is_some(),
                 _ => true,
             };
         }
@@ -1160,7 +1150,7 @@ impl App {
         }
         if *action == Action::SteerMessage {
             if let Route::Session(id) = self.navigation.current()
-                && (self.has_skills(&id) || self.completion_requires_idle(&id))
+                && (self.has_selections(&id) || self.completion_requires_idle(&id))
             {
                 return false;
             }
@@ -1250,11 +1240,11 @@ impl App {
                     && !(self.chat.session.as_deref() == Some(&id) && self.chat.removed)
                     && !matches!(&self.sessions.detail, crate::pages::sessions::Detail::Missing { id: missing } if *missing == id)
                     && self.attachments.ready(&id)
-                    && (!(self.has_skills(&id) || self.completion_requires_idle(&id))
+                    && (!(self.has_selections(&id) || self.completion_requires_idle(&id))
                         || self.stop_target().is_none())
                     && (self.attachments.has(&id)
                         || self.has_directories(&id)
-                        || (self.has_skills(&id) || self.completion_requires_idle(&id))
+                        || (self.has_selections(&id) || self.completion_requires_idle(&id))
                         || self
                             .drafts
                             .get(&id)
@@ -1434,7 +1424,7 @@ impl App {
                 editor.text().is_empty()
                     && !self.attachments.has(id)
                     && !self.has_directories(id)
-                    && !(self.has_skills(id) || self.completion_requires_idle(id))
+                    && !(self.has_selections(id) || self.completion_requires_idle(id))
                     && !self.tabs.contains(id)
                     && !self
                         .sending
@@ -1477,7 +1467,7 @@ impl App {
                     editor.text().is_empty()
                         && !self.attachments.has(id)
                         && !self.has_directories(id)
-                        && !(self.has_skills(id) || self.completion_requires_idle(id))
+                        && !(self.has_selections(id) || self.completion_requires_idle(id))
                         && !self.tabs.contains(id)
                         && !self
                             .sending
@@ -1489,7 +1479,7 @@ impl App {
                 self.drafts.remove(&empty);
                 self.attachments.saved.remove(&empty);
                 self.directories.remove(&empty);
-                self.skills.saved.remove(&empty);
+                self.selections.saved.remove(&empty);
                 self.sending.remove(&empty);
                 self.pending_new.remove(&empty);
             } else {
@@ -1524,10 +1514,8 @@ impl App {
             editor.invalidate();
         }
         self.management.invalidate_geometry();
-        self.skills.invalidate_geometry();
         self.management.oauth.invalidate_identity_geometry();
         self.branch.invalidate_geometry();
-        self.recap.invalidate_geometry();
         self.bundle.invalidate_geometry();
         self.session_controls.invalidate_geometry();
         self.resources.invalidate_geometry();

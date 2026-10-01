@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "Cargo.lock": "96117aef7fd7eb03a01a25d152bbbed9898775dd9bcf6104e589c458eb21ce02",
+    "Cargo.lock": "40a57527d5d3c77eb5c54849db6b4998cd6f05afccc4f7ad9b8700e36a1e940e",
     "Cargo.toml": "9e3ac72f0b10722561f482fd1278c5b3f766ed1f9e02dad2dda0780163645881",
     "crates/acp/Cargo.toml": "ec8063c582a78f23c769b41049a7ddbbaae77c7448b61e66c27588265c9c6de9",
     "crates/agent/Cargo.toml": "3f7e5c7bf16591dee2b13be943f6df7a66961a81a615b7ed3484c0f4a0c41fbd",
@@ -49,7 +49,7 @@
     "crates/tool-catalog/Cargo.toml": "cd0db2aeaeb37abec0ef06a1a33e92e10719049929ec9e39a02ce0d279c89c52",
     "crates/tools/Cargo.toml": "ea339c6075b7c5c8f35d8513c1c3bd5107c8432c0b9a316455cd51b668a12513",
     "crates/transport/Cargo.toml": "19b67bc5d90dd95ba1d1b3668ab96caa1451a0553bd6af5800660487b86c42a9",
-    "crates/tui/Cargo.toml": "daabe26cb5f78c6ff8efa161f64fa091d134c291a9abdb534838b69dd4031408",
+    "crates/tui/Cargo.toml": "bd3842688773b186607d6ccd314ccea3cc122db95165119a0114372714b6cd88",
     "crates/web/Cargo.toml": "3edbc2ea947e2f3c857c4cd4333b47a481ecc1c2c1c58a6ac80b2824f6d3ad57",
     "crates/workhub/Cargo.toml": "eebc5612198fa5f163de00c5f74b38df63f93b5576fa9397ad1f57a1e12e70b9",
     "package-lock.json": "b7144e30fbc6708c7c259b573b7155de3d1cf934c71290220cc1bf09b37fda08",

@@ -43,6 +43,7 @@ mod path;
 mod preferences;
 mod preview;
 mod remote;
+mod resources;
 mod snapshot;
 mod terminal;
 mod tools;
@@ -194,12 +195,20 @@ impl Plugin for Builtin {
             terminal::publish(&skills, &mut staged)?;
             remote::publish(&skills, &mut staged)?;
 
-            staged
-                .insert(
-                    ID,
-                    maka_plugins::input::InputPreparation::new(Arc::new(skills.clone())),
-                )
-                .map_err(|error| error.to_string())?;
+            maka_plugins::input::resources::stage(
+                &mut staged,
+                &skills.basis.owner,
+                ID,
+                Arc::new(skills.clone()),
+                maka_plugins::input::resources::Resources {
+                    descriptor: maka_plugins::input::resources::Descriptor {
+                        title: maka_plugins::terminal_ui::Text::localized("Skills", "技能", "技能"),
+                    },
+                    provider: Arc::new(skills.clone()),
+                },
+                None,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(staged)
         })
     }

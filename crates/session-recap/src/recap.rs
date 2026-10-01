@@ -162,6 +162,19 @@ impl Recaps {
             })
             .transpose()
     }
+    /// Reads one original operation without admitting generation.
+    pub async fn query(
+        &self,
+        scope: &call::Scope,
+        session: &str,
+        operation: Uuid,
+    ) -> Result<Option<Receipt>, Error> {
+        self.check(scope, session).await?;
+        Ok(self
+            .record(&format!("{}/{}", prefix(session), operation))
+            .await?
+            .map(|(_, receipt)| receipt))
+    }
     pub async fn generate(
         &self,
         parent: &call::Scope,
@@ -621,6 +634,17 @@ mod tests {
             restarted.read(&scope, "session").await.unwrap(),
             Some(Receipt::Ready { .. })
         ));
+        assert!(
+            matches!(restarted.query(&scope, "session", id).await.unwrap(), Some(Receipt::Ready { operation_id, .. }) if operation_id == id)
+        );
+        assert!(
+            restarted
+                .query(&scope, "session", Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none(),
+            "another operation cannot claim the latest receipt"
+        );
         assert_eq!(models.calls.load(Ordering::SeqCst), 1);
         history.denied.store(true, Ordering::SeqCst);
         assert!(matches!(
@@ -629,6 +653,10 @@ mod tests {
         ));
         assert!(matches!(
             restarted.generate(&scope, "session", id).await,
+            Err(Error::History)
+        ));
+        assert!(matches!(
+            restarted.query(&scope, "session", id).await,
             Err(Error::History)
         ));
         scope.finish().await.unwrap();

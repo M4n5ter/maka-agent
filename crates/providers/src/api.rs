@@ -105,7 +105,13 @@ impl ApiProvider {
             authentication::methods(self.facts.auth_kind).map_err(|error| error.to_string())?;
         Definition::new(
             Descriptor {
-                label: self.facts.label.clone(),
+                label: match self.id {
+                    "openai-compatible" => "Chat Completions".into(),
+                    "openai-responses-compatible" => "Responses".into(),
+                    "anthropic-compatible" => "Anthropic Messages".into(),
+                    _ => self.facts.label.clone(),
+                },
+                custom_endpoint: self.facts.base_url.is_empty(),
                 configuration_schema: serde_json::to_value(schemars::schema_for!(Configuration))
                     .map_err(|error| error.to_string())?,
                 configuration_defaults: if self.facts.base_url.is_empty() {

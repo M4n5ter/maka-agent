@@ -120,9 +120,9 @@ fn new_message_add_menu_reaches_each_source_by_keyboard_and_pointer_in_every_loc
                         "an open add menu cannot send through to the composer"
                     );
                     if pointer {
-                        let label = app
-                            .i18n
-                            .text(["attachments-add", "references-title", "skills-title"][index]);
+                        let label = app.i18n.text(
+                            ["attachments-add", "references-title", "completion-plugins"][index],
+                        );
                         app.input(click(locate(&terminal, &label)));
                     } else {
                         for _ in 0..index {
@@ -139,7 +139,7 @@ fn new_message_add_menu_reaches_each_source_by_keyboard_and_pointer_in_every_loc
                                 .as_ref()
                                 .is_some_and(|dialog| dialog.kind == Kind::Reference)
                         ),
-                        _ => assert!(app.skills.dialog.is_some()),
+                        _ => assert!(app.completion_open()),
                     }
                     assert!(app.palette.is_none());
                     assert_eq!(app.drafts["chat"].text(), "draft 中文🦀");

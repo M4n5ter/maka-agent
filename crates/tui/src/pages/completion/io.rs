@@ -19,7 +19,6 @@
 
 mod messages;
 mod remote;
-mod skills;
 use messages::messages;
 use remote::resource;
 
@@ -87,9 +86,6 @@ pub(super) enum Job {
         input: workspace::Capture,
         accept: bool,
     },
-    Skills {
-        page: Option<(String, String)>,
-    },
     Sessions(session::SessionCatalogQueryInput),
     Providers {
         cursor: Option<String>,
@@ -115,7 +111,6 @@ pub(super) enum Job {
 pub enum Output {
     Workspace(workspace::Page),
     Captured(Binding),
-    Skills(maka_skills::api::InvocableResult),
     Sessions(session::SessionCatalogQueryResult),
     Providers(plugin::Page<InputResourceProjection>),
     Resources {
@@ -167,7 +162,6 @@ pub async fn execute(client: &Client, request: &Request) -> Result<Output, Strin
                 },
             }))
         }
-        Job::Skills { page } => skills::skills(client, request, page).await,
         Job::Sessions(input) => request
             .cancel
             .read(client.session_catalog(input.clone()))

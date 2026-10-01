@@ -19,10 +19,11 @@
 use super::super::{Host, authority::Authority};
 use crate::session::SessionConfiguration;
 use futures_util::future::BoxFuture;
-use maka_plugins::remote::{Access, Error, SessionView, Views, WorkspaceViewInput};
+use maka_plugins::remote::{Access, Controls, Error, SessionView, Views, WorkspaceViewInput};
 use std::sync::{Arc, Weak};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+mod controls;
 mod database;
 mod read;
 use read::ReadGrant;
@@ -106,6 +107,9 @@ impl SessionViews {
         self.host_for(maka_protocol::Operation::PluginRemote).await
     }
     async fn host_for(&self, operation: maka_protocol::Operation) -> Result<Arc<Host>, Error> {
+        if self.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         if !self.authority.has_grant(operation) {
             return Err(Error::Retired);
         }
@@ -131,10 +135,46 @@ impl SessionViews {
                 return Err(Error::Retired);
             }
         }
+        if self.cancellation.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         Ok(host)
     }
 }
 impl Views for SessionViews {
+    fn executor_session(
+        &self,
+        session: String,
+    ) -> BoxFuture<'_, Result<Option<maka_plugins::remote::executor_session::Session>, Error>> {
+        Box::pin(self.controlled_session(session))
+    }
+    fn executor_creation(
+        &self,
+        input: maka_plugins::remote::executor_session::Create,
+    ) -> BoxFuture<'_, Result<Option<maka_plugins::remote::executor_session::Session>, Error>> {
+        Box::pin(self.controlled_creation(input))
+    }
+
+    fn preferences(&self) -> BoxFuture<'_, Result<maka_plugins::preferences::Snapshot, Error>> {
+        Box::pin(async move {
+            let _lease = self.owner.resource_call().map_err(|_| Error::Retired)?;
+            let host = self
+                .host_for(maka_protocol::Operation::RuntimePolicyQuery)
+                .await?;
+            let snapshot = host
+                .configuration
+                .runtime_policy()
+                .await
+                .map_err(|e| Error::Provider(e.to_string()))?;
+            Ok(maka_plugins::preferences::Snapshot {
+                revision: snapshot.revision,
+                privacy: snapshot.policy.privacy,
+                personalization: snapshot.policy.personalization,
+                workspace_instructions: snapshot.policy.workspace_instructions.enabled,
+            })
+        })
+    }
+
     fn projects(
         &self,
         query: maka_plugins::remote::projects::Query,
@@ -350,6 +390,64 @@ impl Views for SessionViews {
                 _ = self.cancellation.cancelled() => Err(Error::Cancelled),
                 result = read => result,
             }
+        })
+    }
+}
+
+impl Controls for SessionViews {
+    fn create_executor_session(
+        &self,
+        input: maka_plugins::remote::executor_session::Create,
+    ) -> BoxFuture<'_, Result<maka_plugins::remote::executor_session::Session, Error>> {
+        Box::pin(self.create_controlled_session(input))
+    }
+    fn configure_executor_session(
+        &self,
+        input: maka_plugins::remote::executor_session::Configure,
+    ) -> BoxFuture<'_, Result<maka_plugins::remote::executor_session::Configured, Error>> {
+        Box::pin(self.configure_controlled_session(input))
+    }
+    fn update_preferences(
+        &self,
+        update: maka_plugins::preferences::Update,
+    ) -> BoxFuture<'_, Result<maka_plugins::preferences::Updated, Error>> {
+        Box::pin(async move {
+            use maka_plugins::preferences::Mutation;
+            use maka_runtime::configuration::policy::{EnabledPolicy, RuntimePolicyMutation};
+            let _lease = self.owner.resource_call().map_err(|_| Error::Retired)?;
+            let host = self
+                .host_for(maka_protocol::Operation::RuntimePolicyMutate)
+                .await?;
+            if !matches!(
+                self.owner.identity().map_err(|_| Error::Retired)?.scope,
+                maka_plugins::composition::Scope::Profile
+            ) {
+                return Err(Error::Invalid(
+                    "Preferences require a profile contribution".into(),
+                ));
+            }
+            let operation = match update.mutation {
+                Mutation::Personalization { value } => {
+                    RuntimePolicyMutation::SetPersonalization { value }
+                }
+                Mutation::WorkspaceInstructions { enabled } => {
+                    RuntimePolicyMutation::SetWorkspaceInstructions {
+                        value: EnabledPolicy { enabled },
+                    }
+                }
+            };
+            let input = serde_json::json!({"expectedRevision":update.expected_revision,"operation":operation});
+            let output = super::super::configuration::execute(
+                &host,
+                maka_protocol::Operation::RuntimePolicyMutate,
+                &input,
+            )
+            .await
+            .map_err(controls::write_error)?;
+            serde_json::from_value(
+                serde_json::to_value(output).map_err(|e| Error::Provider(e.to_string()))?,
+            )
+            .map_err(|e| Error::Provider(e.to_string()))
         })
     }
 }

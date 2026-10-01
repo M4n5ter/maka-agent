@@ -144,7 +144,7 @@ mod tests {
         let request = app.revision_request().unwrap();
         let mut source = sources("source");
         source.messages[1].input_selections.insert(
-            "skills".into(),
+            "selections".into(),
             (0..12).map(|i| format!("skill-{i}")).collect(),
         );
         app.revision_completed(request, Ok(Output::Sources(source)));
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(
             app.revision.saved.as_ref().unwrap().inputs[1].excluded,
             [Resource::Selection {
-                provider: "skills".into(),
+                provider: "selections".into(),
                 index: 11
             }]
         );

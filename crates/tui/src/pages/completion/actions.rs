@@ -29,7 +29,7 @@ impl App {
             | Command::DropSelection(target) => {
                 self.completion_reselection_enabled(target, command)
             }
-            Command::Open(_) | Command::Added => {
+            Command::Open(_) | Command::Added | Command::Resources => {
                 self.completion_context(Some(Kind::Reference)).is_some()
             }
             Command::Remove { draft, id } => {
@@ -89,6 +89,10 @@ impl App {
                 let context = self.completion_context(Some(kind))?;
                 self.completion_start(context, initial(kind), true);
             }
+            Command::Resources => {
+                let context = self.completion_context(Some(Kind::Reference))?;
+                self.completion_start(context, Source::Providers, true);
+            }
             Command::Added => {
                 let context = self.completion_context(Some(Kind::Reference))?;
                 self.completion_start(context, Source::Added, true);
@@ -107,7 +111,6 @@ impl App {
                 self.completion.reselect = None;
                 let source = match category {
                     Category::Commands => Source::Commands,
-                    Category::Skills => Source::Skills,
                     Category::Workspace => Source::Workspace {
                         directory: String::new(),
                     },

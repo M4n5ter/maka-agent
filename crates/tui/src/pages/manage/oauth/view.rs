@@ -96,11 +96,13 @@ pub(in crate::pages::manage) fn sheet(app: &App) -> Sheet<Action> {
                 .iter()
                 .enumerate()
                 .map(|(index, choice)| crate::providers::picker::Choice {
-                    label: choice
-                        .protocol_label()
-                        .map_or_else(|| choice.label(), str::to_owned),
+                    label: if choice.provider.descriptor.custom_endpoint {
+                        choice.provider.descriptor.label.clone()
+                    } else {
+                        choice.label()
+                    },
                     identity: choice.provider.identity.name.clone(),
-                    group: Some(if choice.protocol_label().is_some() {
+                    group: Some(if choice.provider.descriptor.custom_endpoint {
                         (0, app.i18n.text("connection-add-custom"))
                     } else if choice.authentication().interactive {
                         (1, app.i18n.text("connection-add-account"))

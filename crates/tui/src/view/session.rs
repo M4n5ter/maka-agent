@@ -69,7 +69,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, id: &str) {
     });
     let attachment_rows = u16::from(app.attachments.has(id));
     let directory_rows = u16::from(app.has_directories(id));
-    let skill_rows = u16::from(app.has_skills(id));
+    let skill_rows = u16::from(app.has_selections(id));
     let completion_rows = u16::from(
         app.drafts
             .get(id)
@@ -183,7 +183,7 @@ fn welcome_visible(app: &App, id: &str) -> bool {
             .is_some_and(|editor| editor.text().is_empty() && editor.marks().is_empty())
         && !app.attachments.has(id)
         && !app.has_directories(id)
-        && !app.has_skills(id)
+        && !app.has_selections(id)
         && !app.chrome.ascii
         && !app.chrome.details
         && !app.closing
@@ -799,9 +799,10 @@ mod tests {
                 path: "/workspace".into(),
             }],
         );
-        app.skills.saved.insert(
+        app.selections.saved.insert(
             "chat".into(),
-            vec![crate::pages::skills::Picked {
+            vec![crate::pages::selections::Picked {
+                provider: "example.inputs".into(),
                 id: "skill".into(),
                 name: "Skill".into(),
             }],
@@ -815,7 +816,7 @@ mod tests {
         let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
         render(&mut app, &mut terminal);
         for path in [
-            "composer/body/content/skills",
+            "composer/body/content/selections/0",
             "composer/body/content/directories",
             "composer/body/content/attachments",
             "composer/body/leading/buttons/attach",
@@ -835,7 +836,7 @@ mod tests {
         for path in [
             "composer/body/content/attachments",
             "composer/body/content/directories",
-            "composer/body/content/skills",
+            "composer/body/content/selections/0",
             composer::EDITOR,
         ] {
             assert_eq!(app.input(key(KeyCode::Tab)).1, None);

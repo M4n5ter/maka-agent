@@ -123,6 +123,7 @@ impl Fixture {
                 client_instance_id: "launch-editor".into(),
                 session_id: None,
                 access: remote::Access::HostPaths,
+                controls: Arc::new(()),
                 views: Arc::new(NoViews),
                 resources: Arc::default(),
                 cancellation: CancellationToken::new(),

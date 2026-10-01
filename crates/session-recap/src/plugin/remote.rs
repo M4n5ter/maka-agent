@@ -34,22 +34,27 @@ use std::sync::Arc;
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-enum Request {
+pub(super) enum Request {
     Read,
+    Query { operation_id: uuid::Uuid },
     Generate { operation_id: uuid::Uuid },
 }
-pub(super) fn publish(backend: Arc<Recaps>, staged: &mut Staged) -> Result<(), String> {
+pub(super) fn publish(
+    backend: Arc<Recaps>,
+    package: &str,
+    staged: &mut Staged,
+) -> Result<(), String> {
     let service = Arc::new(Service(backend));
     staged
         .insert(
-            key(super::ID, "manage").map_err(message)?,
+            key(package, "manage").map_err(message)?,
             Endpoint::standalone(Handler::Method(service.clone())),
         )
         .map_err(message)?;
 
     Ok(())
 }
-struct Service(Arc<Recaps>);
+pub(super) struct Service(pub(super) Arc<Recaps>);
 impl Method for Service {
     fn call(&self, input: Value, caller: Caller) -> BoxFuture<'static, Result<Value, Error>> {
         let recaps = self.0.clone();
@@ -62,7 +67,9 @@ impl Method for Service {
                 .ok_or_else(|| Error::Invalid("Bind recap to a Session".into()))?;
             let generating = matches!(request, Request::Generate { .. });
             let operation_id = match &request {
-                Request::Generate { operation_id } => *operation_id,
+                Request::Generate { operation_id } | Request::Query { operation_id } => {
+                    *operation_id
+                }
                 Request::Read => uuid::Uuid::new_v4(),
             };
             let capabilities = if generating {
@@ -88,6 +95,9 @@ impl Method for Service {
                 .await?;
             let result = match request {
                 Request::Read => recaps.read(&owned.scope(), session).await,
+                Request::Query { operation_id } => {
+                    recaps.query(&owned.scope(), session, operation_id).await
+                }
                 Request::Generate { operation_id } => recaps
                     .generate(&owned.scope(), session, operation_id)
                     .await

@@ -75,13 +75,19 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
     }
     let target = state.target.as_ref()?;
     let busy = state.pending.is_some() || state.requested.is_some();
-    let editable = !busy && state.saved.is_none() && state.created.is_none();
+    let editable = !busy && state.saved.is_none();
     let mut sheet = Sheet::new(
         format!(
             "session-controls:{}:{:?}:{}",
             target.session, state.page, state.forgetting
         ),
-        app.i18n.text(state.page.label()),
+        app.i18n.text(
+            if matches!(state.saved, Some(super::Checkpoint::Legacy(_))) {
+                "controls-unresolved"
+            } else {
+                state.page.label()
+            },
+        ),
     );
     let mut rows = vec![];
     if !target.name.is_empty() {
@@ -111,21 +117,6 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             .focus("close")
             .back(action(Command::Keep));
     } else {
-        if let Some(workspace) = &target.workspace {
-            let value = match workspace {
-                maka_runtime::execution::WorkspaceTarget::HostPath { path } => path,
-                maka_runtime::execution::WorkspaceTarget::Project { project_id } => project_id,
-            };
-            rows.push(prose(
-                "workspace",
-                format!(
-                    "{}: {}",
-                    app.i18n.text("controls-create-workspace"),
-                    safe(value)
-                ),
-                Tone::Subtle,
-            ));
-        }
         if state.saved.is_some() && !state.saving && !busy {
             rows.push(prose(
                 "unknown",
@@ -140,45 +131,28 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         }
         if !matches!(state.page, Page::History) {
             for (key, _) in &state.fields {
-                let label = match *key {
-                    "name" => "controls-create-name",
-                    "display-name" => "controls-display-name",
-                    "tone" => "controls-tone",
-                    "labels" => "controls-labels",
-                    "query" => "controls-executor-query",
-                    "model" => "controls-executor-model",
-                    _ => unreachable!(),
-                };
+                let label = "controls-labels";
                 let enabled = editable && !(*key == "labels" && state.labels_truncated);
                 rows.push(Node::column(
                     *key,
                     vec![
                         prose("label", app.i18n.text(label), Tone::Subtle),
-                        Node::slot(
-                            "input",
-                            if matches!(*key, "tone" | "labels") {
-                                3
-                            } else {
-                                1
-                            },
-                        )
-                        .on(On::Activate(action(if *key == "query" {
-                            Command::SearchExecutors
-                        } else {
-                            Command::Save
-                        })))
-                        .enabled(enabled),
+                        Node::slot("input", if *key == "labels" { 3 } else { 1 })
+                            .on(On::Activate(action(Command::Save)))
+                            .enabled(enabled),
                     ],
                 ));
-                if *key == "query" {
-                    rows.push(controls(
-                        app,
-                        "executor-search",
-                        vec![("search", Command::SearchExecutors)],
-                    ));
-                }
             }
-            if state.page == Page::Metadata {
+            if let Some(super::Checkpoint::Legacy(saved)) = &state.saved {
+                rows.push(prose(
+                    "original",
+                    safe(&serde_json::to_string_pretty(saved).unwrap_or_default()),
+                    Tone::Subtle,
+                ));
+            }
+            if state.page == Page::Metadata
+                && !matches!(state.saved, Some(super::Checkpoint::Legacy(_)))
+            {
                 let command = Command::Flag(!state.flag);
                 rows.push(
                     prose(
@@ -207,111 +181,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
                     },
                 ));
             }
-            if let Some(policy) = state
-                .policy
-                .as_ref()
-                .filter(|_| state.page == Page::Preferences)
-            {
-                let enabled = policy.policy.workspace_instructions.enabled;
-                let command = Command::Workspace(!enabled);
-                rows.push(
-                    prose(
-                        "workspace-instructions",
-                        format!(
-                            "{} {}",
-                            if enabled { "[x]" } else { "[ ]" },
-                            app.i18n.text("controls-workspace-instructions")
-                        ),
-                        Tone::Normal,
-                    )
-                    .on(On::Activate(action(command.clone())))
-                    .enabled(app.session_controls_offered(&command)),
-                );
-                rows.push(prose(
-                    "workspace-note",
-                    app.i18n.text("controls-workspace-note"),
-                    Tone::Subtle,
-                ));
-            }
-            if state.page.executor() && state.created.is_none() {
-                if let Some(choices) = &state.executors {
-                    for choice in &choices.executors {
-                        let command = Command::Executor(choice.id.clone());
-                        rows.push(prose_executor(
-                            app,
-                            &choice.id,
-                            &choice.display_name,
-                            command,
-                        ));
-                    }
-                    if choices.executors.is_empty() {
-                        rows.push(prose(
-                            "empty",
-                            app.i18n.text("controls-no-executors"),
-                            Tone::Subtle,
-                        ));
-                    }
-                    if !choices.complete {
-                        rows.push(prose(
-                            "filter",
-                            app.i18n.text("controls-filter-executors"),
-                            Tone::Subtle,
-                        ));
-                    }
-                }
-                rows.push(controls(
-                    app,
-                    "executor-pages",
-                    vec![
-                        ("previous", Command::PreviousExecutors),
-                        ("next", Command::NextExecutors),
-                    ],
-                ));
-                let levels = std::iter::once(None).chain(
-                    maka_protocol::session::ThinkingLevel::ALL
-                        .into_iter()
-                        .map(Some),
-                );
-                let choices = levels
-                    .map(|level| crate::ui::Choice {
-                        label: app
-                            .i18n
-                            .text(crate::pages::manage::models::thinking_key(level)),
-                        action: action(Command::Thinking(level)),
-                    })
-                    .collect();
-                rows.push(
-                    prose(
-                        "thinking",
-                        format!(
-                            "{}: {}",
-                            app.i18n.text("session-thinking"),
-                            app.i18n
-                                .text(crate::pages::manage::models::thinking_key(state.thinking))
-                        ),
-                        Tone::Normal,
-                    )
-                    .on(On::Choose {
-                        choices,
-                        current: Some(
-                            state
-                                .thinking
-                                .and_then(|v| {
-                                    maka_protocol::session::ThinkingLevel::ALL
-                                        .iter()
-                                        .position(|l| *l == v)
-                                })
-                                .map_or(0, |i| i + 1),
-                        ),
-                    })
-                    .enabled(editable),
-                );
-                rows.push(prose(
-                    "executor-note",
-                    app.i18n.text("controls-executor-note"),
-                    Tone::Subtle,
-                ));
-            }
+
             if state.page.confirmation() {
                 let note = match state.page {
                     Page::Compact => "controls-compact-note",
@@ -394,17 +264,7 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         if state.initial_read().is_some() {
             rows.push(controls(app, "reload", vec![("refresh", Command::Refresh)]));
         }
-        if state.created.is_some() {
-            rows.push(
-                prose(
-                    "open-created",
-                    app.i18n.text("controls-open-created"),
-                    Tone::Accent,
-                )
-                .on(On::Activate(action(Command::OpenCreated)))
-                .enabled(app.session_controls_offered(&Command::OpenCreated)),
-            );
-        }
+
         sheet = sheet.button(
             "close",
             app.i18n.text("session-cancel"),
@@ -412,13 +272,11 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
             action(Command::Close),
             true,
         );
-        if state.page != Page::History && state.created.is_none() && state.saved.is_none() {
+        if state.page != Page::History && state.saved.is_none() {
             sheet = sheet.button(
                 "save",
                 app.i18n.text(if state.page.confirmation() {
                     "plugins-confirm"
-                } else if state.page == Page::NewExecutor {
-                    "controls-create"
                 } else {
                     "controls-save"
                 }),
@@ -458,25 +316,9 @@ pub(crate) fn sheet(app: &App) -> Option<Sheet<Action>> {
         body
     }))
 }
-fn prose_executor(app: &App, id: &str, name: &str, command: Command) -> Node<Action> {
-    let selected = app.session_controls.executor.as_deref() == Some(id);
-    Node::text(
-        format!("executor-{id}"),
-        vec![(
-            format!("{} {}", if selected { "[x]" } else { "[ ]" }, safe(name)),
-            Tone::Normal,
-        )],
-    )
-    .current(selected)
-    .on(On::Activate(action(command.clone())))
-    .enabled(app.session_controls_offered(&command))
-}
 pub(crate) fn draw_fields(frame: &mut Frame<'_>, app: &mut App) {
     let state = &mut app.session_controls;
-    let editable = state.pending.is_none()
-        && state.requested.is_none()
-        && state.saved.is_none()
-        && state.created.is_none();
+    let editable = state.pending.is_none() && state.requested.is_none() && state.saved.is_none();
     let colors = app.theme.colors();
     for (key, editor) in &mut state.fields {
         let path = field_path(key);
@@ -499,7 +341,6 @@ pub(crate) fn input(app: &mut App, event: &Event) -> Option<(bool, Option<Action
         || state.pending.is_some()
         || state.requested.is_some()
         || state.saved.is_some()
-        || state.created.is_some()
     {
         return None;
     }

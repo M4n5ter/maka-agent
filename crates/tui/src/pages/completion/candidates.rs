@@ -38,14 +38,7 @@ pub(super) fn commands(
     query: &str,
     offset: usize,
 ) -> (Vec<Candidate>, Option<Cursor>) {
-    let mut native = vec![
-        ("help", "command-help", Action::Help),
-        (
-            "skills",
-            "skills-title",
-            Action::Skills(crate::pages::skills::Command::Open),
-        ),
-    ];
+    let mut native = vec![("help", "command-help", Action::Help)];
     if context.draft.input.is_none() {
         native.insert(0, ("new", "session-create", Action::CreateSession));
         if let Some(action) = app.model_action() {
@@ -57,7 +50,6 @@ pub(super) fn commands(
             Action::Search(crate::ui::transcript::search::Command::Open),
         ));
         for (alias, commands) in [
-            ("recap", app.recap_commands()),
             ("branch", app.branch_commands()),
             ("revise", app.revision_commands()),
             ("resume", app.resume_commands()),

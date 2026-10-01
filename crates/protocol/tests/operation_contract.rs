@@ -60,6 +60,7 @@ fn provider_pages() -> Vec<Value> {
         catalog::{Entry, Page},
     };
     let descriptor = Descriptor {
+        custom_endpoint: false,
         label: "模型账户".into(),
         configuration_schema: json!({"type":"object"}),
         configuration_defaults: json!({}),

@@ -126,6 +126,7 @@ impl Fixture {
                 client_instance_id: "saved-view-test".into(),
                 session_id: None,
                 access: maka_plugins::remote::Access::Granted,
+                controls: Arc::new(()),
                 views: Arc::new(NoViews),
                 resources: Arc::default(),
                 cancellation: Default::default(),

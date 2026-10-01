@@ -85,7 +85,6 @@ pub type Bindings = BTreeMap<DraftKey, BTreeMap<String, Binding>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
     Commands,
-    Skills,
     Workspace,
     Sessions,
     Plugins,
@@ -95,7 +94,6 @@ impl Category {
     pub fn label(self) -> &'static str {
         match self {
             Self::Commands => "completion-commands",
-            Self::Skills => "skills-title",
             Self::Workspace => "completion-workspace",
             Self::Sessions => "completion-sessions",
             Self::Plugins => "completion-plugins",
@@ -107,7 +105,6 @@ impl Category {
 #[derive(Clone, Debug)]
 pub(super) enum Source {
     Commands,
-    Skills,
     Workspace { directory: String },
     Sessions,
     Messages { session: String, name: String },
@@ -119,7 +116,6 @@ impl Source {
     pub fn category(&self) -> Category {
         match self {
             Self::Commands => Category::Commands,
-            Self::Skills => Category::Skills,
             Self::Workspace { .. } => Category::Workspace,
             Self::Sessions | Self::Messages { .. } => Category::Sessions,
             Self::Providers | Self::Plugin(_) => Category::Plugins,
@@ -132,10 +128,6 @@ impl Source {
 pub(super) enum Pick {
     Native(Action),
     Command(CommandProjection),
-    Skill {
-        id: String,
-        name: String,
-    },
     Workspace(workspace::Capture),
     Session {
         id: String,
@@ -164,7 +156,6 @@ pub(super) struct Candidate {
 pub(super) enum Cursor {
     Workspace(workspace::Cursor),
     Catalog { revision: String, cursor: String },
-    Skills { revision: String, cursor: String },
     Providers(String),
     Resource(String),
     Messages(u64),

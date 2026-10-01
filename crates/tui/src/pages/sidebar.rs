@@ -300,11 +300,11 @@ fn tree(app: &App, orbit: Option<&'static str>, height: u16, drawer: bool) -> No
             list
         },
     ];
-    if let Some(action) = app.new_executor_session_action() {
+    for (index, action) in app.current_workspace_launches().into_iter().enumerate() {
         children.insert(
             1,
             labelled(
-                "new-executor",
+                format!("launch-{index}"),
                 "+",
                 crate::view::action_label(app, &action),
                 Tone::Accent,
@@ -352,7 +352,12 @@ const PAGES: usize = 5;
 
 /// Plugin pages pinned with Settings: destinations, not sessions.
 fn apps(app: &App) -> Vec<Node<Message>> {
-    let pages = app.apps.pages();
+    let pages: Vec<_> = app
+        .apps
+        .pages()
+        .into_iter()
+        .filter(|entry| !entry.descriptor.launch)
+        .collect();
     let locale = app.i18n.locale().id();
     let current = app.navigation.current();
     let mut rows = vec![];

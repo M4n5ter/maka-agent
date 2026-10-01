@@ -155,11 +155,9 @@ impl Input {
                 (!selected.is_empty()).then(|| (provider.clone(), selected))
             })
             .collect();
-        if !self.skills.is_empty() {
-            let values = input_selections
-                .entry(crate::pages::skills::PROVIDER.into())
-                .or_default();
-            for item in &self.skills {
+        {
+            for item in &self.selections {
+                let values = input_selections.entry(item.provider.clone()).or_default();
                 if !values.contains(&item.id) {
                     values.push(item.id.clone());
                 }
@@ -282,7 +280,7 @@ mod tests {
                     ],
                     "quotes":[{"text":"same"},{"text":"same"}],
                     "directoryReferences":[{"hostId":"host","path":"/workspace"}]
-                },"inputSelections":{"skills":["review","build"]}
+                },"inputSelections":{"selections":["review","build"]}
             }]
         })).unwrap();
         let mut input = Input::new(sources.messages[0].clone());
@@ -291,7 +289,7 @@ mod tests {
             Resource::Quote { index: 0 },
             Resource::Directory { index: 0 },
             Resource::Selection {
-                provider: "skills".into(),
+                provider: "selections".into(),
                 index: 0,
             },
         ] {
@@ -303,7 +301,7 @@ mod tests {
         assert_eq!(message.content.attachments.as_ref().unwrap().len(), 1);
         assert_eq!(message.content.quotes.as_ref().unwrap().len(), 1);
         assert!(message.content.directory_references.is_none());
-        assert_eq!(message.input_selections["skills"], ["build"]);
+        assert_eq!(message.input_selections["selections"], ["build"]);
         let restored: Input =
             serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
         assert_eq!(restored.message(), message);

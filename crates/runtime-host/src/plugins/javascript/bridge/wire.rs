@@ -59,6 +59,18 @@ pub(super) enum Request {
     Preferences,
     #[serde(rename = "remote.session")]
     SessionView(Authority),
+    #[serde(rename = "remote.preferences")]
+    PreferencesView(Authority),
+    #[serde(rename = "remote.updatePreferences")]
+    UpdatePreferences(RemoteControl<maka_plugins::preferences::Update>),
+    #[serde(rename = "remote.executorSession")]
+    ExecutorSession(RemoteControl<String>),
+    #[serde(rename = "remote.executorCreation")]
+    ExecutorCreation(RemoteControl<maka_plugins::remote::executor_session::Create>),
+    #[serde(rename = "remote.createExecutorSession")]
+    CreateExecutorSession(RemoteControl<maka_plugins::remote::executor_session::Create>),
+    #[serde(rename = "remote.configureExecutorSession")]
+    ConfigureExecutorSession(RemoteControl<maka_plugins::remote::executor_session::Configure>),
     #[serde(rename = "remote.projects")]
     ProjectsView(ProjectsView),
     #[serde(rename = "remote.workspace")]
@@ -648,4 +660,11 @@ pub(super) struct CopyAttachment {
     pub source_handle: String,
     pub target_session_id: String,
     pub attachment: maka_runtime::attachment::AttachmentRef,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RemoteControl<T> {
+    pub authority: String,
+    pub input: T,
 }

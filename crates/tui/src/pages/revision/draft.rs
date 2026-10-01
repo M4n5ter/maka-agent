@@ -30,7 +30,8 @@ pub struct Input {
     pub content: MessageContent,
     pub files: Vec<crate::pages::attachments::Saved>,
     pub directories: Vec<turn::DirectoryReference>,
-    pub skills: Vec<crate::pages::skills::Picked>,
+    #[serde(default, alias = "skills")]
+    pub selections: Vec<crate::pages::selections::Picked>,
     pub excluded: Vec<super::resources::Resource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<crate::editor::marks::Mark>,
@@ -53,7 +54,7 @@ impl Input {
             resolved: vec![],
             files: vec![],
             directories: vec![],
-            skills: vec![],
+            selections: vec![],
             original,
         }
     }
@@ -110,7 +111,7 @@ impl Input {
     pub fn validate(&self) -> Result<(), String> {
         self.validate_completion()?;
         self.validate_resources()?;
-        crate::pages::skills::validate(&self.skills)?;
+        crate::pages::selections::validate(&self.selections)?;
         maka_runtime::input::validate_selections(&self.message().input_selections)
             .map_err(str::to_owned)?;
         // The original resource identities remain immutable; exclusions apply at submission.
@@ -247,7 +248,7 @@ mod tests {
         let original = sources::decode_output(&json!({"sessionId":"source","turnId":"old","messages":[
             {"messageId":"one","content":{"text":"🦀 @a.rs end","inlineReferences":[
                 {"kind":"workspace_file","value":"@a.rs","label":"a.rs","start":3}]}},
-            {"messageId":"two","content":{"text":"second"},"inputSelections":{"skills":["review"]}}
+            {"messageId":"two","content":{"text":"second"},"inputSelections":{"selections":["review"]}}
         ]})).unwrap();
         let mut inputs: Vec<_> = original.messages.iter().cloned().map(Input::new).collect();
         inputs[0].replace("中文🦀 @a.rs end".into(), false).unwrap();
@@ -265,7 +266,10 @@ mod tests {
         target.session_id = "target".into();
         let request = batch(&inputs, &target, "new").unwrap();
         assert_eq!(request.messages.len(), 2);
-        assert_eq!(request.messages[1].input_selections["skills"], ["review"]);
+        assert_eq!(
+            request.messages[1].input_selections["selections"],
+            ["review"]
+        );
         target.messages.swap(0, 1);
         assert!(batch(&inputs, &target, "new").is_err());
         let mut corrupt = inputs[0].clone();

@@ -131,23 +131,25 @@ pub(super) async fn execute(
             )?;
             let cancellation = reservation.document.cancellation.child_token();
             let resources = Arc::new(maka_plugins::call::Resources::default());
+            let views = Arc::new(views::SessionViews {
+                host: Arc::downgrade(host),
+                owner: bound.endpoint.owner.clone(),
+                session_id: binding.session_id().map(str::to_owned),
+                connection_id: connection,
+                client_instance_id: client.into(),
+                authority: authority.clone(),
+                access: bound.endpoint.value.access,
+                cancellation: cancellation.clone(),
+                resources: resources.clone(),
+            });
             let caller = Caller {
                 connection_id: connection,
                 client_instance_id: client.into(),
                 document_id: document,
                 session_id: binding.session_id().map(str::to_owned),
                 access: bound.endpoint.value.access,
-                views: Arc::new(views::SessionViews {
-                    host: Arc::downgrade(host),
-                    owner: bound.endpoint.owner.clone(),
-                    session_id: binding.session_id().map(str::to_owned),
-                    connection_id: connection,
-                    client_instance_id: client.into(),
-                    authority: authority.clone(),
-                    access: bound.endpoint.value.access,
-                    cancellation: cancellation.clone(),
-                    resources: resources.clone(),
-                }),
+                views: views.clone(),
+                controls: views,
                 resources,
                 cancellation,
             };

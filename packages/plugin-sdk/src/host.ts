@@ -77,18 +77,62 @@ export interface RemoteCaller {
   readonly documentId: string;
   readonly sessionId: string | null;
   readonly signal: Cancellation;
+  readonly controls: {
+    /** Only personalization and workspace instructions; never privacy or execution authority. */
+    updatePreferences(input: {
+      expectedRevision: number;
+      mutation:
+        | { kind: 'personalization'; value: UserPreferences['personalization'] }
+        | { kind: 'workspace_instructions'; enabled: boolean };
+    }): Promise<ControlUpdated>;
+
+    createExecutorSession(input: ExecutorSessionCreate): Promise<ExecutorSession>;
+
+    configureExecutorSession(input: {
+      expectedRevision: number;
+      executorId: string;
+      settings?: ExecutorSessionCreate['settings'];
+    }): Promise<ControlUpdated>;
+  };
   readonly views: {
     authorize<T>(
       request: import('./authorization.js').AuthorizationRequest,
       use: (call: ResourceContext) => Awaitable<T>,
     ): Promise<T>;
     session(): Promise<SessionView>;
+    preferences(): Promise<UserPreferences>;
+    executorSession(sessionId: string): Promise<ExecutorSession | null>;
+    executorCreation(input: ExecutorSessionCreate): Promise<ExecutorSession | null>;
     projects(input: ProjectSelectionQuery): Promise<ProjectSelectionResult>;
     workspace(input: WorkspaceViewInput): Promise<SessionView>;
     queryDatabase(
       input: import('./database.js').DatabaseRead,
     ): Promise<readonly import('./database.js').DatabaseTable[]>;
   };
+}
+export interface UserPreferences {
+  revision: number;
+  privacy: { incognitoActive: boolean };
+  personalization: { displayName: string; assistantTone: string };
+  workspaceInstructions: boolean;
+}
+export type ControlUpdated =
+  | { kind: 'committed'; revision: number }
+  | { kind: 'revision_conflict'; expectedRevision: number; actualRevision: number };
+export interface ExecutorSessionCreate {
+  sessionId: string;
+  workspace: WorkspaceViewInput['workspace'];
+  executorId: string;
+  settings?: { model?: string; thinkingLevel?: import('./providers.js').ThinkingLevel };
+  name?: string | null;
+}
+export interface ExecutorSession {
+  sessionId: string;
+  revision: number;
+  name: string;
+  workspace: ExecutorSessionCreate['workspace'];
+  executorId: string | null;
+  settings: NonNullable<ExecutorSessionCreate['settings']>;
 }
 export type ProjectSelectionQuery =
   | { kind: 'start' }
@@ -216,6 +260,8 @@ export interface ToolDefinition {
 export interface ExecutorDefinition {
   name: string;
   displayName: string;
+  /** Register the standard creation and configuration views; false for a custom UI. */
+  sessionViews?: boolean;
   capabilities?: {
     thinking?: boolean;
     toolActivity?: boolean;

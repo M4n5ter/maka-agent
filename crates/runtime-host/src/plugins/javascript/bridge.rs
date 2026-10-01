@@ -473,6 +473,35 @@ impl State {
                 let caller = self.calls.remote(&input.authority)?;
                 self.session_view(&input.authority, caller.views.session().await?)
             }
+            Request::PreferencesView(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.views.preferences().await?)
+            }
+            Request::UpdatePreferences(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.controls.update_preferences(input.input).await?)
+            }
+            Request::ExecutorSession(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.views.executor_session(input.input).await?)
+            }
+            Request::ExecutorCreation(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.views.executor_creation(input.input).await?)
+            }
+            Request::CreateExecutorSession(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(caller.controls.create_executor_session(input.input).await?)
+            }
+            Request::ConfigureExecutorSession(input) => {
+                let caller = self.calls.remote(&input.authority)?;
+                encode(
+                    caller
+                        .controls
+                        .configure_executor_session(input.input)
+                        .await?,
+                )
+            }
             Request::ProjectsView(input) => {
                 let caller = self.calls.remote(&input.authority)?;
                 encode(caller.views.projects(input.input).await?)
@@ -649,7 +678,10 @@ impl State {
                     &self.model_calls,
                     &self.calls,
                     &self.source,
-                    &self.context.lifecycle,
+                    super::registration::Activation {
+                        lifecycle: &self.context.lifecycle,
+                        storage: &self.storage,
+                    },
                 )
                 .map_err(Error::invalid)?;
                 let mut registrations = self.registrations.lock().unwrap();

@@ -256,6 +256,7 @@ async fn selectors_reread_exact_session_revision_and_release_scope_on_stale_targ
         document_id: uuid::Uuid::new_v4(),
         session_id: None,
         access: remote::Access::Granted,
+        controls: Arc::new(()),
         views: views.clone(),
         resources: Arc::default(),
         cancellation: CancellationToken::new(),

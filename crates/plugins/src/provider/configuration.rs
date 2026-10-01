@@ -39,6 +39,9 @@ pub struct Connection {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Descriptor {
     pub label: String,
+    /// Offers a user-selected endpoint instead of a named service.
+    #[serde(default)]
+    pub custom_endpoint: bool,
     pub configuration_schema: Value,
     pub configuration_defaults: Value,
     pub authentication: Vec<Method>,
