@@ -15,28 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "maka-client-capability"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-publish.workspace = true
-
-[dependencies]
-base64 = "0.22"
-maka-runtime.workspace = true
-maka-protocol.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-uuid.workspace = true
-unicode-normalization = "0.1.25"
-url = "2"
-
-[dev-dependencies]
-maka-event-log.workspace = true
-tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util", "process"] }
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]

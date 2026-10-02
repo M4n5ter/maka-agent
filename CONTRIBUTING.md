@@ -45,7 +45,7 @@ Submit only work you have the right to contribute, and record third-party source
 
 ## Development
 
-Use Rust 1.98 or newer, Node.js 24 LTS, npm 11.19.0, just, cargo-nextest and Python 3. The license inventory check also uses cargo-deny.
+Use Rust stable, Node.js 24 LTS, npm 11.19.0, just, cargo-nextest and Python 3. The license inventory check also uses cargo-deny.
 
 Use [just](https://github.com/casey/just) for common tasks. Install it with your package manager (`brew install just` on macOS), or `cargo install --locked just`. On Windows, put Git for Windows' `sh` on `PATH`.
 
