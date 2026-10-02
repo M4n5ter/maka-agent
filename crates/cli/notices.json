@@ -56,7 +56,7 @@
     "package.json": "5853fcc6483b1ffcb87c3d35b349475a38eb50a6fdca01bad25a522b317e4fa1",
     "patches/zod+4.6.5.patch": "5a6cbff1b31ca2a5d2b7c006abb7b1002241dbf4ae42c315c27940201f52b081",
     "scripts/apply-dependency-patches.mjs": "67e548835b0de28e3753be559abb5cb2efbe94a46d72e0b756c23f944896d4bd",
-    "scripts/rust/build-v8.mjs": "8fc2026062e1cfdec89d545ff11802d61be05952013bdeadcd506c08fbde651d",
+    "scripts/rust/build-v8.mjs": "9a2c49f1634720f4eef00384102d2147cc555b43b17ae39b915ec23ad78033ef",
     "scripts/rust/bundle-providers.mjs": "0ea3fa0c574a9489ed7ad59a18a11d9a6840aa0c89499d2147663454d30d8c0c",
     "scripts/rust/compile-v8.mjs": "684ebaae379bdf2e8e2f7ca94088b44fbce1d4412079c2fcf905129196b61bfc",
     "scripts/rust/license-files.mjs": "ec19393f0f4f024131918aa7a887a988d3f69d80e794a31e370f3dffcd9d0455",

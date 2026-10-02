@@ -67,7 +67,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     execFileSync(
       'cargo',
       ['metadata', '--locked', '--format-version', '1', '--filter-platform', target],
-      { cwd: root, maxBuffer: 16 * 1024 * 1024, timeout: 180_000 },
+      { cwd: root, maxBuffer: 16 * 1024 * 1024, timeout: 600_000 },
     ),
   );
   console.log((await v8Configuration(root, target, metadata)).key);

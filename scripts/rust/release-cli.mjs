@@ -161,7 +161,7 @@ export async function releaseNativeCli({ source, keys, target, validator, output
               cwd: repositoryRoot,
               env,
               maxBuffer: 16 * 1024 * 1024,
-              timeout: 180_000,
+              timeout: 600_000,
             },
           )
         ).stdout,
