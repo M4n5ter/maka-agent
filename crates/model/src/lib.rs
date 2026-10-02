@@ -514,7 +514,7 @@ impl maka_plugins::model::Events for ChannelEvents {
         Box::pin(async move {
             let bytes = budget::bytes(&event, 8 * 1024 * 1024)?;
             self.total
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::Relaxed,
                     std::sync::atomic::Ordering::Relaxed,
                     |total| {

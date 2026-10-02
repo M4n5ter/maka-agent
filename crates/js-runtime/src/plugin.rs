@@ -303,7 +303,7 @@ impl Vm {
         let id = self
             .0
             .sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| failed("module identity exhausted"))?;
         let (state, receiver) = watch::channel(State::Loading);
         self.0

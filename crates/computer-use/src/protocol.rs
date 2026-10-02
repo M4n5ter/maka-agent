@@ -53,6 +53,9 @@ pub enum Command {
     GetApp {
         target: AppReference,
     },
+    LaunchApp {
+        app: String,
+    },
     Observe {
         handle: Handle,
         kind: ObservationKind,

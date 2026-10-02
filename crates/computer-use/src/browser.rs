@@ -19,16 +19,20 @@
 
 use crate::protocol::*;
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
 use maka_plugins::computer::BrowserConnection;
 use maka_runtime::tools::ToolError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
-use tokio::net::TcpStream;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 mod ax;
 mod cursor;
+mod frames;
+
+#[derive(Clone, Debug)]
+struct ElementRef {
+    backend: u64,
+    frame: Option<frames::Frame>,
+}
 
 pub(crate) fn validate_connections(connections: &[BrowserConnection]) -> Result<(), ToolError> {
     let mut ids = std::collections::HashSet::new();
@@ -84,7 +88,8 @@ struct Tab {
     info: TabInfo,
     socket: Option<Cdp>,
     frame: Option<String>,
-    refs: HashMap<u64, u64>,
+    refs: HashMap<u64, ElementRef>,
+    frames: frames::Frames,
     ax: ax::Projection,
     previous: Option<String>,
     capture: Option<Capture>,
@@ -106,8 +111,7 @@ struct Capture {
     y: f64,
 }
 struct Cdp {
-    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    sequence: u64,
+    connection: std::sync::Arc<cua_driver_core::browser::cdp_ws::CdpConnection>,
 }
 impl Cdp {
     async fn connect(url: &str, provider: &BrowserConnection) -> Result<Self, ToolError> {
@@ -123,52 +127,43 @@ impl Cdp {
                 "browser returned a websocket outside its configured endpoint",
             ));
         }
-        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size(Some(16 * 1024 * 1024));
-        let (socket, _) = tokio::time::timeout(
+        let connection = tokio::time::timeout(
             Duration::from_secs(10),
-            tokio_tungstenite::connect_async_with_config(url.as_str(), Some(config), false),
+            cua_driver_core::browser::cdp_ws::CdpConnection::connect_bounded(
+                url.as_str(),
+                16 * 1024 * 1024,
+            ),
         )
         .await
-        .map_err(failed)?
+        .map_err(|_| failed("browser connection timed out"))?
         .map_err(failed)?;
         Ok(Self {
-            socket,
-            sequence: 0,
+            connection: std::sync::Arc::new(connection),
         })
     }
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, ToolError> {
-        self.sequence += 1;
-        let id = self.sequence;
-        let request = async {
-            self.socket
-                .send(Message::text(
-                    json!({"id":id,"method":method,"params":params}).to_string(),
-                ))
-                .await
-                .map_err(unknown)?;
-            while let Some(message) = self.socket.next().await {
-                let message = message.map_err(unknown)?;
-                if let Message::Text(text) = message {
-                    let response: Value = serde_json::from_str(&text).map_err(unknown)?;
-                    if response["id"] != id {
-                        continue;
-                    }
-                    if let Some(error) = response.get("error") {
-                        return Err(failed(format!("CDP {method}: {error}")));
-                    }
-                    return Ok(response["result"].clone());
-                }
-            }
-            Err(unknown(
-                "browser connection ended before acknowledging the operation",
-            ))
-        };
-        tokio::time::timeout(Duration::from_secs(15), request)
+        self.request_in(None, method, params).await
+    }
+    async fn request_in(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, ToolError> {
+        self.connection
+            .call(session, method, params)
             .await
-            .map_err(|_| unknown(format!("CDP {method} timed out; do not replay a mutation")))?
+            .map_err(|error| {
+                let message = error.to_string();
+                if message.contains(" failed (") {
+                    failed(message)
+                } else {
+                    unknown(format!("{message}; do not replay a mutation"))
+                }
+            })
     }
 }
+
 async fn http(provider: &BrowserConnection, path: &str) -> Result<Value, ToolError> {
     let url = format!("{}{path}", provider.endpoint.trim_end_matches('/'));
     let mut response = reqwest::Client::builder()
@@ -398,6 +393,7 @@ impl Browsers {
                 frame: None,
                 refs: HashMap::new(),
                 ax: ax::Projection::default(),
+                frames: frames::Frames::default(),
                 previous: None,
                 capture: None,
                 navigation: None,
@@ -526,7 +522,11 @@ impl Tab {
             .into_iter()
             .find(|tab| tab.id == self.info.id)
             .expect("verified tab identity");
-        if self.socket.is_none() {
+        if self
+            .socket
+            .as_ref()
+            .is_none_or(|socket| socket.connection.is_closed())
+        {
             self.refs.clear();
             self.capture = None;
             self.frame = None;
@@ -536,6 +536,7 @@ impl Tab {
                 .as_deref()
                 .ok_or_else(|| failed("tab has no CDP websocket"))?;
             self.socket = Some(Cdp::connect(websocket, &self.provider).await?);
+            self.frames = frames::Frames::default();
         }
         Ok(())
     }
@@ -576,14 +577,91 @@ impl Tab {
         let frame = self.frame().await?;
         let mut value = json!({});
         if !matches!(kind, ObservationKind::Screenshot) {
-            let tree = self
-                .request("Accessibility.getFullAXTree", json!({"depth":30}))
+            let frames = self.frames().await?;
+            let mut nodes = Vec::new();
+            for observed in &frames {
+                let session = observed.session.as_deref();
+                self.frame_request(
+                    session,
+                    "Runtime.releaseObjectGroup",
+                    json!({"objectGroup":"maka-cua"}),
+                )
                 .await?;
-            let nodes = tree["nodes"]
-                .as_array()
-                .ok_or_else(|| failed("browser returned no accessibility nodes"))?;
+                let tree = self
+                    .frame_request(
+                        session,
+                        "Accessibility.getFullAXTree",
+                        json!({"depth":30,"frameId":observed.id}),
+                    )
+                    .await?;
+                let dom = self
+                    .frame_request(
+                        session,
+                        "DOM.getDocument",
+                        json!({"depth":30,"pierce":true}),
+                    )
+                    .await?;
+                let layout = self
+                    .frame_request(
+                        session,
+                        "DOMSnapshot.captureSnapshot",
+                        json!({
+                            "computedStyles":cua_driver_core::browser::SEMANTIC_COMPUTED_STYLES,
+                            "includePaintOrder":true,"includeDOMRects":true
+                        }),
+                    )
+                    .await?;
+                let metrics = self
+                    .frame_request(session, "Page.getLayoutMetrics", json!({}))
+                    .await?;
+                let tree = cua_driver_core::browser::semantic_ax_tree(
+                    &tree,
+                    &dom,
+                    &layout,
+                    &metrics,
+                    cua_driver_core::browser::store::FrameRef {
+                        kind: if observed.parent.is_none() {
+                            cua_driver_core::browser::store::FrameKind::Main
+                        } else {
+                            cua_driver_core::browser::store::FrameKind::Iframe
+                        },
+                        oopif_target_id: None,
+                        identity: Some(cua_driver_core::browser::store::FrameIdentity {
+                            frame_id: observed.id.clone(),
+                            loader_id: observed.loader.clone(),
+                        }),
+                    },
+                );
+                let scope =
+                    serde_json::to_string(&[&observed.id, &observed.loader]).map_err(failed)?;
+                for raw in tree["nodes"]
+                    .as_array()
+                    .ok_or_else(|| failed("browser returned no accessibility nodes"))?
+                {
+                    let mut node = raw.clone();
+                    for key in ["nodeId", "parentId"] {
+                        if let Some(id) = node[key].as_str() {
+                            node[key] = json!(format!("{scope}:{id}"));
+                        }
+                    }
+                    if let Some(children) = node["childIds"].as_array() {
+                        node["childIds"] = json!(
+                            children
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|id| format!("{scope}:{id}"))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    node["makaFrame"] = json!(observed);
+                    nodes.push(node);
+                }
+            }
+            if self.frames().await? != frames {
+                return Err(failed("frame changed during observation; observe again"));
+            }
             let mut rows = vec![format!("Tab {}: {}", self.info.id, self.info.url)];
-            let (tree, refs) = self.ax.render(&frame, nodes)?;
+            let (tree, refs) = self.ax.render(&frame, &nodes)?;
             rows.push(tree);
             self.refs = refs;
             if nodes.len() > 2000 {
@@ -644,36 +722,33 @@ impl Tab {
         self.frame = Some(frame);
         Ok(value)
     }
-    async fn element(&mut self, index: u64) -> Result<String, ToolError> {
-        let backend = *self
-            .refs
-            .get(&index)
-            .ok_or_else(|| failed("stale_element: read getAXState first"))?;
-        let resolved = self
-            .request(
-                "DOM.resolveNode",
-                json!({"backendNodeId":backend,"objectGroup":"maka-cua"}),
-            )
-            .await?;
-        resolved["object"]["objectId"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| failed("element is no longer attached"))
-    }
     async fn call_element(
         &mut self,
         index: u64,
         function: &str,
         arguments: Vec<Value>,
+        cancellation: &tokio_util::sync::CancellationToken,
     ) -> Result<Value, ToolError> {
-        let object = self.element(index).await?;
-        // A child frame's bounding rect is local to that frame, while CDP
-        // pointer input is relative to the main viewport. Refuse that semantic
-        // route before focus/scroll/input instead of clicking another element.
-        let function = format!(
-            "function(...args) {{ const view=this.ownerDocument?.defaultView; if (!view || view !== view.top) throw Error('iframe semantic actions are unavailable; use the tab screenshot'); return ({function}).apply(this,args); }}"
-        );
-        let result = self.request("Runtime.callFunctionOn",json!({"objectId":object,"functionDeclaration":function,"arguments":arguments.into_iter().map(|value| json!({"value":value})).collect::<Vec<_>>(),"returnByValue":true})).await?;
+        let element = self.verify_element(index).await?;
+        let frame = element
+            .frame
+            .as_ref()
+            .ok_or_else(|| failed("element frame was not proven"))?;
+        let resolved = self
+            .frame_request(
+                frame.session.as_deref(),
+                "DOM.resolveNode",
+                json!({"backendNodeId":element.backend,"objectGroup":"maka-cua"}),
+            )
+            .await?;
+        let object = resolved["object"]["objectId"]
+            .as_str()
+            .ok_or_else(|| failed("element is no longer attached"))?;
+        check_input(cancellation)?;
+        let result=self.frame_request(frame.session.as_deref(),"Runtime.callFunctionOn",json!({
+            "objectId":object,"functionDeclaration":function,
+            "arguments":arguments.into_iter().map(|value|json!({"value":value})).collect::<Vec<_>>(),"returnByValue":true
+        })).await?;
         if let Some(error) = result.get("exceptionDetails") {
             return Err(failed(format!(
                 "element operation refused: {}",
@@ -682,9 +757,13 @@ impl Tab {
         }
         Ok(result["result"]["value"].clone())
     }
-    async fn focus(&mut self, index: Option<u64>) -> Result<(), ToolError> {
+    async fn focus(
+        &mut self,
+        index: Option<u64>,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), ToolError> {
         if let Some(index) = index {
-            self.call_element(index,"function(){ if(!this.isConnected) throw Error('detached'); this.focus(); if(this.getRootNode().activeElement!==this) throw Error('focus not confirmed'); }",vec![]).await?;
+            self.call_element(index,"function(){ if(!this.isConnected) throw Error('detached'); this.focus(); if(this.getRootNode().activeElement!==this) throw Error('focus not confirmed'); }",vec![],cancellation).await?;
         }
         Ok(())
     }
@@ -726,6 +805,17 @@ impl Tab {
         }
         Ok(())
     }
+    async fn before_element_input(
+        &mut self,
+        index: Option<u64>,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), ToolError> {
+        self.before_input(cancellation).await?;
+        if let Some(index) = index {
+            self.verify_element(index).await?;
+        }
+        check_input(cancellation)
+    }
     async fn action(
         &mut self,
         action: Action,
@@ -742,8 +832,12 @@ impl Tab {
         ) {
             self.before_input(cancellation).await?;
         }
+        let selected_index = match action.cursor_target() {
+            Some(Position::Element(index)) => Some(index),
+            _ => None,
+        };
         if let Action::MoveCursor { target } = &action {
-            let point = self.cursor_point(target).await?;
+            let point = self.cursor_point(target, cancellation).await?;
             return self
                 .draw_cursor(cursor, Some(point), "idle", "update")
                 .await;
@@ -754,7 +848,7 @@ impl Tab {
                 Action::Click { .. } | Action::Scroll { .. } | Action::Drag { .. }
             )
             && let Some(target) = action.cursor_target()
-            && let Ok(point) = self.cursor_point(&target).await
+            && let Ok(point) = self.cursor_point(&target, cancellation).await
         {
             let _ = self
                 .draw_cursor(
@@ -787,6 +881,7 @@ impl Tab {
                     .ok_or_else(|| failed("document identity unavailable"))?
                     .to_owned();
                 self.refs.clear();
+                check_input(cancellation)?;
                 self.request("Page.reload", json!({})).await?;
                 self.navigation = Some(Navigation::Reload(previous));
             }
@@ -806,6 +901,7 @@ impl Tab {
                     .ok_or_else(|| failed("no navigation history in that direction"))?;
                 self.refs.clear();
                 self.navigation = entry["url"].as_str().map(|url| Navigation::Url(url.into()));
+                check_input(cancellation)?;
                 self.request(
                     "Page.navigateToHistoryEntry",
                     json!({"entryId":entry["id"]}),
@@ -817,8 +913,9 @@ impl Tab {
                 self.request("Page.close", json!({})).await?;
             }
             Action::TypeText { index, text } => {
-                self.focus(index).await?;
-                self.before_input(cancellation).await?;
+                self.focus(index, cancellation).await?;
+                self.before_element_input(selected_index, cancellation)
+                    .await?;
                 self.request("Input.insertText", json!({"text":text}))
                     .await?;
             }
@@ -831,10 +928,11 @@ impl Tab {
                     let index = index.ok_or_else(|| {
                         failed("HTML paste requires an observed editable element")
                     })?;
-                    self.call_element(index,"function(html){ if(!this.isConnected || !this.isContentEditable) throw Error('HTML paste requires contenteditable'); this.focus(); if(!document.execCommand('insertHTML',false,html)) throw Error('HTML insertion not supported'); }",vec![json!(text)]).await?;
+                    self.call_element(index,"function(html){ if(!this.isConnected || !this.isContentEditable) throw Error('HTML paste requires contenteditable'); this.focus(); if(!document.execCommand('insertHTML',false,html)) throw Error('HTML insertion not supported'); }",vec![json!(text)],cancellation).await?;
                 } else {
-                    self.focus(index).await?;
-                    self.before_input(cancellation).await?;
+                    self.focus(index, cancellation).await?;
+                    self.before_element_input(selected_index, cancellation)
+                        .await?;
                     self.request("Input.insertText", json!({"text":text}))
                         .await?;
                 }
@@ -844,6 +942,7 @@ impl Tab {
                     index,
                     include_str!("browser/set-value.js"),
                     vec![json!(value)],
+                    cancellation,
                 )
                 .await?;
             }
@@ -866,6 +965,7 @@ impl Tab {
                         json!(options.suffix),
                         json!(selection),
                     ],
+                    cancellation,
                 )
                 .await?;
             }
@@ -878,8 +978,7 @@ impl Tab {
                 let point = match target {
                     Position::Point(point) => self.point(point).await?,
                     Position::Element(index) => {
-                        let point=self.call_element(index,"function(){ if(!this.isConnected || this.disabled) throw Error('element unavailable'); this.scrollIntoView({block:'center',inline:'center'}); const r=this.getBoundingClientRect(); if(r.width<=0||r.height<=0) throw Error('element has no visible area'); const x=r.x+r.width/2,y=r.y+r.height/2; const hit=this.getRootNode().elementFromPoint(x,y); if(hit!==this&&!this.contains(hit)) throw Error('element is occluded'); return [x,y]; }",vec![]).await?;
-                        serde_json::from_value(point).map_err(failed)?
+                        self.element_point(index, true, cancellation).await?
                     }
                 };
                 if cursor.enabled {
@@ -887,15 +986,17 @@ impl Tab {
                         .draw_cursor(cursor, Some(point), "click", "update")
                         .await;
                 }
-                self.before_input(cancellation).await?;
+                self.before_element_input(selected_index, cancellation)
+                    .await?;
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":point[0],"y":point[1],"button":button,"clickCount":count})).await;
                 self.request("Input.dispatchMouseEvent",json!({"type":"mouseReleased","x":point[0],"y":point[1],"button":button,"clickCount":count})).await.map_err(|error|ToolError::CleanupUnconfirmed(format!("mouse release was not acknowledged: {error}")))?;
                 pressed?;
             }
             Action::PressKey { index, key } => {
                 let (key, code, modifiers) = key_event(&key)?;
-                self.focus(index).await?;
-                self.before_input(cancellation).await?;
+                self.focus(index, cancellation).await?;
+                self.before_element_input(selected_index, cancellation)
+                    .await?;
                 let mut event = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,"modifiers":modifiers});
                 if modifiers & 7 == 0 {
                     if key.len() == 1 {
@@ -937,13 +1038,19 @@ impl Tab {
                     Direction::Left => (-pixels, 0.0),
                     Direction::Right => (pixels, 0.0),
                 };
-                let point=match target {Position::Point(point)=>self.point(point).await?,Position::Element(index)=>serde_json::from_value(self.call_element(index,"function(){const r=this.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];}",vec![]).await?).map_err(failed)?};
+                let point = match target {
+                    Position::Point(point) => self.point(point).await?,
+                    Position::Element(index) => {
+                        self.element_point(index, false, cancellation).await?
+                    }
+                };
                 if cursor.enabled {
                     let _ = self
                         .draw_cursor(cursor, Some(point), "scroll", "update")
                         .await;
                 }
-                self.before_input(cancellation).await?;
+                self.before_element_input(selected_index, cancellation)
+                    .await?;
                 self.request(
                     "Input.dispatchMouseEvent",
                     json!({"type":"mouseWheel","x":point[0],"y":point[1],"deltaX":dx,"deltaY":dy}),
@@ -956,7 +1063,8 @@ impl Tab {
                 if cursor.enabled {
                     let _ = self.draw_cursor(cursor, Some(from), "drag", "update").await;
                 }
-                self.before_input(cancellation).await?;
+                self.before_element_input(selected_index, cancellation)
+                    .await?;
                 let pressed=self.request("Input.dispatchMouseEvent",json!({"type":"mousePressed","x":from[0],"y":from[1],"button":"left","clickCount":1})).await;
                 let moved = if pressed.is_ok() {
                     if cursor.enabled {

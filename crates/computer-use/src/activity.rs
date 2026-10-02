@@ -76,6 +76,12 @@ pub(crate) fn command(command: &Command, bound_target: Option<&str>) -> Text {
             None,
         ),
         Command::ListWindows { .. } => ("List windows", "查看窗口列表", "查看視窗清單", None),
+        Command::LaunchApp { app } => (
+            "Launch application",
+            "打开应用",
+            "開啟應用程式",
+            Some(app.as_str()),
+        ),
         Command::GetApp { target } => (
             "Inspect application",
             "查看应用",

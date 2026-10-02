@@ -244,6 +244,47 @@ async fn native_form_retains_exact_ax_elements_and_verifies_submission() {
         scroll["scroll"].as_f64().unwrap() < 0.0,
         "wheel input must reach the observed view: {scroll}"
     );
+    for (direction, axis, sign) in [
+        ("down", "pointY", -1_i64),
+        ("up", "pointY", 1),
+        ("left", "pointX", 1),
+        ("right", "pointX", -1),
+    ] {
+        for amount in [1_i64, 37, 500] {
+            let (ok, output) = evaluate(
+                &repl, bridge.clone(),
+                format!("await app.getScreenshot(); await app.scroll([{x},{y}], '{direction}', {{pixels:{amount}}});"),
+            ).await;
+            assert!(ok, "{}", texts(&output));
+            let event: Value = serde_json::from_str(&form.line().await).unwrap();
+            assert_eq!(
+                event[axis].as_i64(),
+                Some(sign * amount),
+                "pixel-unit delta must reach the exact observed canvas: {event}"
+            );
+        }
+    }
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await app.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok);
+    let canvas_index = index(&texts(&output), "AXButton", "Event canvas");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await app.scroll({canvas_index}, 'down', {{pixels:37}});"),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let event: Value = serde_json::from_str(&form.line().await).unwrap();
+    assert_eq!(
+        event["pointY"].as_i64(),
+        Some(-37),
+        "indexed scroll must reach the observed canvas: {event}"
+    );
     let (ok, output) = evaluate(
         &repl,
         bridge.clone(),
@@ -698,6 +739,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         .unwrap_or_else(|_| "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into());
     let profile = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
     let page = format!("http://{}/", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         loop {
@@ -706,7 +748,13 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
                 let mut request = [0; 4096];
                 let length = stream.read(&mut request).await.unwrap();
                 let request = String::from_utf8_lossy(&request[..length]);
-                let body = if request.starts_with("GET /race-replacement ") {
+                let body = if request.starts_with("GET /iframe-child ") {
+                    r#"<!doctype html><meta charset="utf-8"><title>Cross site child</title><input aria-label="Child name" id="child-name"><button onclick="parent.postMessage('Child submitted '+document.getElementById('child-name').value,'*')">Child submit</button>"#
+                } else if request.starts_with("GET /iframe-shadow ") {
+                    r#"<!doctype html><title>Shadow child</title><button onclick="parent.postMessage('Unexpected shadow input','*')">Shadow child submit</button>"#
+                } else if request.starts_with("GET /iframe-next ") {
+                    r#"<!doctype html><title>Cross site replacement</title><button onclick="parent.postMessage('Unexpected child input','*')">Replacement child submit</button>"#
+                } else if request.starts_with("GET /race-replacement ") {
                     r#"<!doctype html><title>Replacement fixture</title><output id="result">Replacement document clean</output>
 <script>addEventListener('pointerdown',()=>document.getElementById('result').textContent='Unexpected input');</script>"#
                 } else if request.starts_with("GET /navigation-race ") {
@@ -720,12 +768,21 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
 <select aria-label="Color" id="color"><option value="red-id">Red</option><option value="blue-id">Blue</option></select>
 <button onclick="const pointer=document.querySelector('[popover][aria-hidden=true]'); const bounds=pointer.getBoundingClientRect(); const arrived=Math.abs(bounds.x+9.685922-event.clientX)<1 && Math.abs(bounds.y+9.685922-event.clientY)<1; document.getElementById('result').textContent=document.getElementById('name').value+' / '+document.getElementById('message').value+' / '+document.getElementById('color').value+' / cursor arrived: '+arrived">Submit fixture</button>
 <output id="result" aria-live="polite"></output>
+<iframe id="child" src="http://localhost:FIXTURE_PORT/iframe-child" style="margin:15px;width:380px;height:100px"></iframe>
+<button onclick="document.getElementById('child').src='http://localhost:FIXTURE_PORT/iframe-next'">Navigate child</button>
+<div id="shadow-host" style="width:320px;height:160px;margin:120px 0"><iframe id="shadow-child" src="http://localhost:FIXTURE_PORT/iframe-shadow" style="width:300px;height:140px"></iframe></div>
+<button onclick="const host=document.getElementById('shadow-host');host.style.rotate=host.style.rotate==='90deg'?'none':'90deg'">Rotate shadow host</button>
+<button onclick="const wrapper=document.getElementById('shadow-host').shadowRoot.getElementById('slot-wrapper');wrapper.style.rotate=wrapper.style.rotate==='90deg'?'none':'90deg'">Rotate slot wrapper</button>
+<script>document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML='<div id="slot-wrapper"><slot></slot></div>';</script>
+<script>addEventListener('message',event=>{if(event.source===document.getElementById('child').contentWindow || event.source===document.getElementById('shadow-child').contentWindow)document.getElementById('result').textContent=event.data;});</script>
 <button disabled>Disabled fixture</button>
 <button onclick="this.remove()">Remove fixture</button>
+<div id="dom-only" onclick="document.getElementById('result').textContent='DOM fixture activated'" style="cursor:pointer">DOM-only fixture</div>
 <button onclick="document.getElementById('result').textContent='Frame pending'; requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById('result').textContent='Two frames ready'))">Two frames fixture</button>
 <button onclick="document.getElementById('result').textContent='Delay pending'; setTimeout(()=>document.getElementById('result').textContent='Delay ready',120)">Delay fixture</button>
 <style>@keyframes spin{to{transform:rotate(360deg)}} .decoration{animation:spin 1s linear infinite;pointer-events:none;width:20px;height:20px}</style><div aria-hidden="true" class="decoration">Spinner</div>"#
                 };
+                let body = body.replace("FIXTURE_PORT", &port.to_string());
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -737,6 +794,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
     let mut chrome = tokio::process::Command::new(executable)
         .args([
             "--headless=new",
+            "--site-per-process",
             "--no-first-run",
             "--no-default-browser-check",
             "--remote-debugging-port=0",
@@ -808,6 +866,116 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         "{initial}"
     );
     assert!(!initial.contains("InlineTextBox"), "{initial}");
+    let dom_only = index(&initial, "generic", "dom-only");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await tab.click({dom_only}); await tab.getAXState({{disableDiffing:true}});"),
+    )
+    .await;
+    assert!(
+        ok && texts(&output).contains("DOM fixture activated"),
+        "{}",
+        texts(&output)
+    );
+
+    let child_name = index(&initial, "textbox", "Child name");
+    let child_submit = index(&initial, "button", "Child submit");
+    let (ok,output)=evaluate(&repl,bridge.clone(),format!("await tab.typeText({child_name}, '跨进程'); await tab.click({child_submit}); await tab.getAXState({{disableDiffing:true}});")).await;
+    assert!(
+        ok && texts(&output).contains("Child submitted 跨进程"),
+        "{}",
+        texts(&output)
+    );
+    let mut shadow_state = texts(&output);
+    for control in ["Rotate shadow host", "Rotate slot wrapper"] {
+        let shadow = index(&shadow_state, "button", "Shadow child submit");
+        let rotate = index(&shadow_state, "button", control);
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            format!("await tab.click({rotate}); await tab.getAXState({{disableDiffing:true}});"),
+        )
+        .await;
+        assert!(ok, "{}", texts(&output));
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            format!(
+                "try {{ await tab.click({shadow}); }} catch (e) {{ nodeRepl.write(String(e)); }}"
+            ),
+        )
+        .await;
+        assert!(
+            ok && texts(&output).contains("iframe owner occluded, transformed or detached"),
+            "transformed {control} must refuse before child input: {}",
+            texts(&output)
+        );
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            "await tab.getAXState({disableDiffing:true});".into(),
+        )
+        .await;
+        assert!(
+            ok && !texts(&output).contains("Unexpected shadow input"),
+            "{}",
+            texts(&output)
+        );
+        // Restore geometry so transformed content cannot occlude later controls.
+        let rotate = index(&texts(&output), "button", control);
+        let (ok, output) = evaluate(
+            &repl,
+            bridge.clone(),
+            format!("await tab.click({rotate}); await tab.getAXState({{disableDiffing:true}});"),
+        )
+        .await;
+        assert!(ok, "{}", texts(&output));
+        shadow_state = texts(&output);
+    }
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await tab.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(ok, "{}", texts(&output));
+    let child_navigate = index(&texts(&output), "button", "Navigate child");
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!(
+            "await tab.click({child_navigate}); await tab.getAXState({{disableDiffing:true}});"
+        ),
+    )
+    .await;
+    assert!(
+        ok && texts(&output).contains("Replacement child submit"),
+        "{}",
+        texts(&output)
+    );
+    let (ok, _) = evaluate(
+        &repl,
+        bridge.clone(),
+        format!("await tab.click({child_submit});"),
+    )
+    .await;
+    assert!(
+        !ok,
+        "child-only navigation must invalidate an old element index"
+    );
+    let (ok, output) = evaluate(
+        &repl,
+        bridge.clone(),
+        "await tab.getAXState({disableDiffing:true});".into(),
+    )
+    .await;
+    assert!(
+        ok && !texts(&output).contains("Unexpected child input"),
+        "{}",
+        texts(&output)
+    );
+
     let removed = index(&initial, "button", "Remove fixture");
     let disabled = index(&initial, "button", "Disabled fixture");
     let (ok, _) = evaluate(
@@ -856,7 +1024,7 @@ async fn browser_form_uses_independent_repl_and_rejects_stale_document_and_tab()
         observed = texts(&output);
         assert!(
             ok && observed.contains(expected),
-            "first observation missed {expected}: {observed}"
+            "first observation missed {expected}: ok={ok} {output:?}"
         );
         assert!(
             started.elapsed() < Duration::from_secs(5),

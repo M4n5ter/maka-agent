@@ -104,7 +104,7 @@ impl Fiber {
             .map_err(|_| Error::Lifecycle("Fiber requires a running executor"))?;
         static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let generation = GENERATION
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |current| (current < (1 << 53) - 1).then_some(current + 1),

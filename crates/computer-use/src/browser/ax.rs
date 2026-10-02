@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use super::failed;
+use super::{ElementRef, failed};
 use maka_runtime::tools::ToolError;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -36,7 +36,7 @@ impl Projection {
         &mut self,
         document: &str,
         nodes: &[Value],
-    ) -> Result<(String, HashMap<u64, u64>), ToolError> {
+    ) -> Result<(String, HashMap<u64, ElementRef>), ToolError> {
         if self.document != document {
             self.document = document.to_owned();
             self.indices.clear();
@@ -82,7 +82,7 @@ struct Walk<'a> {
     seen: HashSet<&'a str>,
     retained: HashSet<String>,
     rows: Vec<String>,
-    refs: HashMap<u64, u64>,
+    refs: HashMap<u64, ElementRef>,
 }
 impl<'a> Walk<'a> {
     fn visit(&mut self, id: &'a str, depth: usize, parent_name: &str) -> Result<(), ToolError> {
@@ -99,13 +99,23 @@ impl<'a> Walk<'a> {
         let name = node["name"]["value"].as_str().unwrap_or("");
         let content = &node["value"]["value"];
         let transparent = node["ignored"] == true
-            || (matches!(role, "generic" | "none" | "LabelText") && name.is_empty())
+            || (matches!(role, "generic" | "none" | "LabelText")
+                && name.is_empty()
+                && node["actions"].as_array().is_none_or(Vec::is_empty))
             || (role == "StaticText" && !name.is_empty() && name == parent_name);
         let mut child_depth = depth;
         if !transparent {
+            let scope = node["makaFrame"]
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let loader = node["makaFrame"]
+                .get("loader")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let identity = node["backendDOMNodeId"]
                 .as_u64()
-                .map(|id| format!("dom:{id}"))
+                .map(|id| format!("{scope}:{loader}:dom:{id}"))
                 .unwrap_or_else(|| format!("ax:{id}"));
             let index = if let Some(index) = self.projection.indices.get(&identity) {
                 *index
@@ -120,11 +130,23 @@ impl<'a> Walk<'a> {
             };
             self.retained.insert(identity);
             if let Some(backend) = node["backendDOMNodeId"].as_u64() {
-                self.refs.insert(index, backend);
+                self.refs.insert(
+                    index,
+                    ElementRef {
+                        backend,
+                        frame: serde_json::from_value(node["makaFrame"].clone()).ok(),
+                    },
+                );
             }
             let mut row = format!("{}{index} {role} {}", "  ".repeat(depth), json!(name));
             if !content.is_null() && content != "" {
                 row.push_str(&format!(" value={content}"));
+            }
+            if let Some(actions) = node
+                .get("actions")
+                .filter(|value| value.as_array().is_some_and(|actions| !actions.is_empty()))
+            {
+                row.push_str(&format!(" actions={actions}"));
             }
             if let Some(properties) = node["properties"].as_array() {
                 for property in properties {
@@ -184,14 +206,14 @@ mod tests {
             state.contains("value=\"你好\\nvalue\" [focused]"),
             "{state}"
         );
-        let removed = *refs.iter().find(|(_, id)| **id == 10).unwrap().0;
+        let removed = *refs.iter().find(|(_, id)| id.backend == 10).unwrap().0;
         let mut replacement = tree.as_array().unwrap().clone();
         replacement.retain(|node| !matches!(node["nodeId"].as_str(), Some("2" | "4" | "5")));
         replacement[0]["childIds"] = json!(["3", "6"]);
         replacement.push(json!({"nodeId":"6","parentId":"1","backendDOMNodeId":12,"role":{"value":"button"},"name":{"value":"Submit"}}));
         let (_, fresh) = projection.render("document1", &replacement).unwrap();
         assert!(!fresh.contains_key(&removed));
-        assert_eq!(fresh.get(&2), Some(&11));
+        assert_eq!(fresh.get(&2).map(|element| element.backend), Some(11));
         let (_, navigated) = projection
             .render("document2", tree.as_array().unwrap())
             .unwrap();

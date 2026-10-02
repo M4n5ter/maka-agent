@@ -14,6 +14,10 @@ Entry points (selection emits initial state):
 - `await cua.getState({emit?})`: app and configured browser inventory, including inventory errors.
 - `await cua.listApps({emit?})`, `await cua.listWindows({emit?})`.
 - `const app = await cua.getApp("Name / bundle ID / app path")` or `getApp({windowId})`.
+  macOS launches a missing app. Windows getApp selects an already open window;
+  use `await cua.computer.launch_app({app: appId})` with an ID from cua.listApps(),
+  then refresh inventory and select its exact window. Launch revalidates the ID
+  against native inventory; arbitrary executable paths are not accepted.
   Select an exact window when names are ambiguous. macOS may launch the app;
   Linux and Windows require it to be open already.
 - `await cua.listBrowsers({emit?})`, `await cua.listTabs({browser?, emit?})`.
@@ -66,8 +70,10 @@ Browser HTML paste requires an observed contenteditable element.
 Tab navigation: `goto(url)`, `back()`, `forward()`, `reload()`, `close()`.
 Navigation supports HTTP(S) and about:blank and waits for an observable document.
 The main CDP target is covered; cross-process iframe accessibility is not complete.
-Native scrolling accepts page counts; exact pixel distances are currently unsupported.
-CDP scrolling also accepts `{pixels:500}`. Native indexed clicks support one semantic
+Native scrolling accepts page counts. macOS and CDP scrolling also accept
+`{pixels:500}` as input deltas; applications may clamp, animate or transform them.
+Windows/Linux native adapters currently refuse pixel-unit input. macOS/Windows
+indexed scrolling preserves the selected accessibility target. Native indexed clicks support one semantic
 click; use screenshot coordinates for multiple clicks when needed.
 
 After deterministic actions, fetch `getAXState()` in the same call before deciding

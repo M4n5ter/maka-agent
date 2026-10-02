@@ -200,15 +200,20 @@ background delivery. Application-menu actions validate ownership and activate th
 bound window for their context, keeping it active while the menu is open. Closed
 menus are omitted from observations until opened. Dispatches with unverified
 effects produce a visible warning; no uncertain action is automatically replayed.
-Native pixel scrolling currently uses page units, not exact pixel distances.
+macOS pixel scrolling sends Quartz pixel-unit input; content may transform or clamp
+the delta. Windows supports retained-index UIA page scrolling. Native pixel-unit
+input on Windows/Linux is explicitly unavailable, with no page approximation.
 Markdown paste inserts Markdown source as text. macOS name/path/bundle lookup can
-launch an app; Linux/Windows require an open window. Native text selection is macOS
+launch an app. Windows can launch an inventory ID with `cua.computer.launch_app({app})`;
+refresh the inventory and select an exact open window afterward. Linux requires an open window. Native text selection is macOS
 only. An unsupported operation fails before sending its input.
 
 The CDP adapter does not implement client tab mentions, extension/IAB providers,
 visibility/session-name options, deliverable/handoff UI markers or secondary AX
-actions. Its accessibility coverage is the main target; cross-process iframes are
-not advertised as complete. Native opaque surfaces without AX have weaker window
+actions. Accessibility observations merge DOM/layout semantics and include local
+and cross-process child frames; indexed operations retain frame/session/loader
+identity. Pointer actions through transformed frame ancestors refuse explicitly;
+use a fresh tab screenshot for those coordinates. Native opaque surfaces without AX have weaker window
 lifecycle evidence than retained macOS AX targets. Windows observation, semantic
 text edits, screenshots and cursor lifecycle have been verified from WSL against
 a disposable native form. Linux native interaction coverage remains incomplete.

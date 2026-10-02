@@ -94,13 +94,14 @@ impl Tab {
             serde_json::from_value(value["result"]["value"].clone()).map_err(failed)?;
         Ok(json!(state))
     }
-    pub(super) async fn cursor_point(&mut self, target: &Position) -> Result<[f64; 2], ToolError> {
+    pub(super) async fn cursor_point(
+        &mut self,
+        target: &Position,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<[f64; 2], ToolError> {
         match target {
             Position::Point(point) => self.point(*point).await,
-            Position::Element(index) => {
-                let value=self.call_element(*index,"function(){const r=this.getBoundingClientRect(); if(!this.isConnected||r.width<=0||r.height<=0)throw Error('cursor target unavailable'); return [r.x+r.width/2,r.y+r.height/2];}",vec![]).await?;
-                serde_json::from_value(value).map_err(failed)
-            }
+            Position::Element(index) => self.element_point(*index, false, cancellation).await,
         }
     }
 }

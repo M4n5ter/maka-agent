@@ -73,7 +73,10 @@ AX/截图、输入、值编辑、精确文本选择、HTML 粘贴、导航与关
 
 完整方法与平台差异见 [API reference](src/api.md)。当前尚不支持客户端 tab mention、
 extension/IAB 提供端、visibility/sessionName、交付 UI 标记或 CDP 辅助 AX 动作。
-跨进程 iframe 不宣称完整覆盖；原生像素滚动暂按页执行；Markdown 粘贴作为文本。
+AX 观察合并 DOM/layout 语义，并覆盖同进程与跨进程子 frame；索引保留 frame、
+session、loader 身份。祖先发生 CSS 变换时拒绝索引指针操作，改用新截图坐标。
+macOS 使用 Quartz 像素单位投递，应用可变换或限幅输入；Windows 支持保留索引的
+UIA 按页滚动。Windows/Linux 原生像素输入明确不可用，不近似成按页。Markdown 粘贴作为文本。
 原生文本选择仅 macOS；Windows 已通过 WSL 对临时原生表单的观察、文本修改、截图和
 光标生命周期验收；Linux 原生交互覆盖仍不完整。
 

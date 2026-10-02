@@ -138,6 +138,9 @@ impl Executions {
         let input: maka_computer_use::Evaluate =
             serde_json::from_value(input.input).map_err(failed)?;
         let limits = maka_js_runtime::CellLimits {
+            // CUA uses one host call per public operation, including observations.
+            // Keep a finite batch budget independent from general Code Mode.
+            max_tool_calls: 256,
             max_value_bytes: 16 * 1024 * 1024,
             heap_bytes: 128 * 1024 * 1024,
             ..Default::default()
@@ -165,11 +168,27 @@ impl Executions {
             .await;
         let result = match result {
             Ok(result) => result,
-            Err(maka_js_runtime::CellAbort::Tool(error)) => return Err(error),
-            Err(error) => return Err(failed(error)),
+            Err(maka_js_runtime::CellAbort::Tool(error)) => {
+                return Err(with_partial_observations(
+                    error,
+                    &context,
+                    runtime.is_closed(),
+                ));
+            }
+            Err(error) => {
+                return Err(with_partial_observations(
+                    failed(error),
+                    &context,
+                    runtime.is_closed(),
+                ));
+            }
         };
         if let maka_js_runtime::CellResult::Failure { error, .. } = result {
-            return Err(failed(format!("Cua JavaScript error: {}", error.message)));
+            return Err(with_partial_observations(
+                failed(format!("Cua JavaScript error: {}", error.message)),
+                &context,
+                runtime.is_closed(),
+            ));
         }
         let mut content = Vec::new();
         for output in context.take_output() {
@@ -386,4 +405,43 @@ fn computer_mode(evidence: &AgentEvidence, name: &str) -> Result<SandboxMode, To
 }
 fn failed(error: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(error.to_string())
+}
+
+// Preserve already-emitted observations on partial failure without serializing
+// image bytes into diagnostics or changing persistence/unknown-outcome semantics.
+fn with_partial_observations(
+    error: ToolError,
+    context: &maka_js_runtime::CellContext,
+    reset_required: bool,
+) -> ToolError {
+    let mut evidence = String::new();
+    const MAX_BYTES: usize = 16 * 1024;
+    for output in context.take_output() {
+        if let maka_js_runtime::CellOutput::Text { text } = output {
+            for character in text.chars().chain(std::iter::once('\n')) {
+                if evidence.len() + character.len_utf8() > MAX_BYTES {
+                    break;
+                }
+                evidence.push(character);
+            }
+        }
+    }
+    let mut suffix = String::new();
+    if !evidence.is_empty() {
+        suffix.push_str("\nObservations emitted before failure (bounded; actions may already have completed):\n");
+        suffix.push_str(&evidence);
+    }
+    if reset_required {
+        suffix.push_str("\nThis REPL is closed. Use cua_reset, rebind and observe before further actions; do not replay uncertain input.");
+    }
+    match error {
+        ToolError::Failed(message) => ToolError::Failed(message + &suffix),
+        ToolError::Io { kind, message } => ToolError::Io {
+            kind,
+            message: message + &suffix,
+        },
+        ToolError::Persistence(message) => ToolError::Persistence(message + &suffix),
+        ToolError::OutcomeUnknown(message) => ToolError::OutcomeUnknown(message + &suffix),
+        ToolError::CleanupUnconfirmed(message) => ToolError::CleanupUnconfirmed(message + &suffix),
+    }
 }

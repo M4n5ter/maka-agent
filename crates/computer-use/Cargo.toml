@@ -25,6 +25,7 @@ publish.workspace = true
 [dependencies]
 cua-driver-contract.workspace = true
 cua-driver-sdk.workspace = true
+cua-driver-core = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
 maka-plugins.workspace = true
 maka-runtime.workspace = true
 maka-tool-catalog.workspace = true
@@ -34,10 +35,9 @@ schemars.workspace = true
 uuid.workspace = true
 libc.workspace = true
 reqwest.workspace = true
-tokio-tungstenite.workspace = true
 base64 = "0.22.1"
 futures-util.workspace = true
-cursor-overlay = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c", features = ["theme-authoring"] }
+cursor-overlay = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c", features = ["theme-authoring"] }
 sha2.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
@@ -48,15 +48,14 @@ tokio-util.workspace = true
 tiny-skia = { version = "0.11", features = ["png-format"] }
 
 [target.'cfg(windows)'.dependencies]
-platform-windows = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
+platform-windows = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-platform-linux = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
+platform-linux = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-platform-macos = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
-cua-driver-core = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
+platform-macos = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
 core-foundation = "0.10.1"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }

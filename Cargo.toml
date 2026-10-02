@@ -68,8 +68,8 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-cua-driver-sdk = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
-cua-driver-contract = { git = "https://github.com/maka-agent/cua", rev = "37c7c161d332287ee8e9db01125d5fdf29e2c66c" }
+cua-driver-sdk = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
+cua-driver-contract = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
 agent-client-protocol = { version = "2.2.0", default-features = false, features = ["unstable_protocol_v2"] }
 apply-patch = { path = "crates/apply-patch" }
 cap-fs-ext = "4.0.3"

@@ -173,7 +173,12 @@ const bind = async (method, args) => {
 Object.defineProperty(globalThis, 'nodeRepl', { value: Object.freeze({ write, emitImage }) });
 Object.defineProperty(globalThis, 'cua', {
   value: Object.freeze({
-    computer: Object.freeze({ target: nativePlatform }),
+    computer: Object.freeze({
+      target: nativePlatform,
+      ...(nativePlatform === 'windows'
+        ? { launch_app: (input) => invoke('launchApp', { app: input.app }).then(() => {}) }
+        : {}),
+    }),
     cursor: Object.freeze({
       configure: (options = {}) => invoke('configureCursor', { options }),
       getState: () => observation('cursorState'),

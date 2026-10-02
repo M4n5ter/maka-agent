@@ -102,7 +102,7 @@ impl Credit {
             let extra = bytes - self.bytes;
             if self
                 .used
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                     used.checked_add(extra).filter(|n| *n <= limit)
                 })
                 .is_err()
@@ -280,7 +280,7 @@ impl Executor {
             .filter(|n| *n <= self.limit)
             .ok_or(Admission::TooLarge)?;
         self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(bytes).filter(|n| *n <= self.limit)
             })
             .map_err(|_| Admission::Busy)?;

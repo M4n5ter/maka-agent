@@ -438,10 +438,68 @@ impl Target {
                     direction,
                     distance,
                 } => {
+                    if let Some(Distance::Pixels { pixels }) = distance {
+                        if !(1..=20_000).contains(&pixels) {
+                            return Err(failed("scroll pixel distance out of range"));
+                        }
+                        let element = self.element(index)?;
+                        let facts = gather_background_facts(
+                            self.pid,
+                            self.window_id,
+                            Some(element as usize),
+                        );
+                        if let BackgroundInputDecision::Refuse(refusal) = decide_background_input(
+                            ExactWindowTarget {
+                                pid: self.pid,
+                                window_id: self.window_id,
+                            },
+                            &facts,
+                            BackgroundAction::WindowPointer,
+                        ) {
+                            return Err(failed(format!("{}: {}", refusal.code, refusal.reason)));
+                        }
+                        let (x, y) = platform_macos::ax::bindings::element_screen_center(element)
+                            .ok_or_else(|| failed("element has no live scroll point"))?;
+                        let bounds = platform_macos::windows::window_bounds_by_id(self.window_id)
+                            .ok_or_else(|| failed("bound window has no live frame"))?;
+                        let local = (x - bounds.x, y - bounds.y);
+                        if local.0 < 0.0
+                            || local.1 < 0.0
+                            || local.0 >= bounds.width
+                            || local.1 >= bounds.height
+                        {
+                            return Err(failed(
+                                "element scroll point lies outside the bound window",
+                            ));
+                        }
+                        let delta = pixels as i32;
+                        let (dy, dx) = match direction {
+                            Direction::Up => (delta, 0),
+                            Direction::Down => (-delta, 0),
+                            Direction::Left => (0, delta),
+                            Direction::Right => (0, -delta),
+                        };
+                        if cancellation.is_cancelled() {
+                            return Err(failed(
+                                "Computer Use cancelled before pixel scroll dispatch",
+                            ));
+                        }
+                        platform_macos::input::mouse::scroll_pixels_at_xy(
+                            self.pid,
+                            x,
+                            y,
+                            Some(local),
+                            Some(self.window_id),
+                            dy,
+                            dx,
+                        )
+                        .map_err(failed)?;
+                        return Ok(());
+                    }
                     let pages = match distance {
                         None => 1,
                         Some(Distance::Pages(pages)) => pages,
-                        _ => return Err(failed("native semantic scroll accepts page counts")),
+                        Some(Distance::Pixels { .. }) => unreachable!(),
                     };
                     if !(1..=50).contains(&pages) {
                         return Err(failed("scroll page count out of range"));

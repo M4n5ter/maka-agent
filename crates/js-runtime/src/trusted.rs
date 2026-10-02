@@ -150,7 +150,7 @@ impl TrustedRuntime {
     fn next_id(&self) -> Result<u32> {
         self.0
             .sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| failed("object id space exhausted"))
     }
 

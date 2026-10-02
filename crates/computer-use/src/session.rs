@@ -18,7 +18,9 @@
  */
 
 use crate::{driver::Driver, protocol::*};
-use cua_driver_contract::{ListAppsOutput, ListWindowsOutput, WindowInfo, WindowStateOutput};
+use cua_driver_contract::{
+    AppInfo, ListAppsOutput, ListWindowsOutput, WindowInfo, WindowStateOutput,
+};
 use maka_runtime::{
     capability::{CallResult, ContentBlock},
     tools::ToolError,
@@ -131,6 +133,28 @@ impl Session {
                     }
                 };
                 Ok(json!({"apps": apps, "browsers": browsers, "errors":errors}))
+            }
+            Command::LaunchApp { app } => {
+                if !cfg!(target_os = "windows") {
+                    return Err(failed(
+                        "unsupported: explicit native app launch is Windows-only",
+                    ));
+                }
+                let apps: ListAppsOutput = decode(
+                    self.native
+                        .lock()
+                        .await
+                        .invoke("list_apps", json!({}), session, cancellation)
+                        .await?,
+                )?;
+                let args = launch_args(&app, &apps.apps)?;
+                let launched = self
+                    .native
+                    .lock()
+                    .await
+                    .invoke("launch_app", args, session, cancellation)
+                    .await?;
+                Ok(launched.structured_content.unwrap_or(Value::Null))
             }
             Command::GetApp { target } => {
                 #[cfg(target_os = "macos")]
@@ -312,7 +336,7 @@ impl Session {
         )?;
         let windows = self.windows(session, cancellation).await?;
         Ok(json!(apps.apps.into_iter().map(|app| json!({
-            "id":app.bundle_id.unwrap_or_else(|| app.pid.to_string()), "displayName":app.name,
+            "id":app_id(&app), "displayName":app.name,
             "isRunning":app.running, "windows":windows.iter().filter(|w| w.pid == Some(app.pid)).map(window_info).collect::<Vec<_>>()
         })).collect::<Vec<_>>()))
     }
@@ -533,6 +557,13 @@ impl Session {
         if crate::macos::Target::handles(&action)
             && let Some(macos) = target.macos.clone()
         {
+            let pixel_scroll = matches!(
+                &action,
+                Action::Scroll {
+                    distance: Some(Distance::Pixels { .. }),
+                    ..
+                }
+            );
             let cancellation = cancellation.clone();
             let result = tokio::task::spawn_blocking(move || {
                 macos.lock().unwrap().action(action, &cancellation)
@@ -540,7 +571,13 @@ impl Session {
             .await
             .map_err(|error| ToolError::CleanupUnconfirmed(error.to_string()))?;
             self.targets.get_mut(handle).unwrap().capture = None;
-            return result.map(|()| Value::Null);
+            return result.map(|()| {
+                if pixel_scroll {
+                    json!({"effect":"unverifiable","route":"quartz"})
+                } else {
+                    Value::Null
+                }
+            });
         }
         let bound = json!({"kind":"window","pid":window.pid,"window_id":window.window_id});
         #[cfg(target_os = "macos")]
@@ -664,19 +701,22 @@ impl Session {
                 direction,
                 distance,
             } => {
-                let amount = match distance {
-                    None => 1,
-                    Some(Distance::Pages(pages)) => pages,
+                let (by, amount, maximum) = match distance {
+                    None => ("page", 1, 50),
+                    Some(Distance::Pages(pages)) => ("page", pages, 50),
+                    Some(Distance::Pixels { pixels }) if cfg!(target_os = "macos") => {
+                        ("pixel", pixels, 20_000)
+                    }
                     Some(Distance::Pixels { .. }) => {
                         return Err(failed(
-                            "unsupported: this native adapter scrolls in pages, not exact pixels",
+                            "unsupported: pixel-unit input is unavailable on this native adapter",
                         ));
                     }
                 };
-                if amount == 0 || amount > 50 {
-                    return Err(failed("scroll distance must be between 1 and 50 pages"));
+                if amount == 0 || amount > maximum {
+                    return Err(failed("scroll distance out of range"));
                 }
-                let mut args = json!({"direction":direction.name(),"by":"page","amount":amount,"delivery_mode":native_delivery_mode()});
+                let mut args = json!({"direction":direction.name(),"by":by,"amount":amount,"delivery_mode":native_delivery_mode()});
                 match position {
                     Position::Point(point) => {
                         target.point(point, &window)?;
@@ -684,11 +724,13 @@ impl Session {
                         args["x"] = json!(point[0]);
                         args["y"] = json!(point[1]);
                     }
-                    Position::Element(index) if cfg!(target_os = "macos") => {
+                    Position::Element(index)
+                        if cfg!(any(target_os = "macos", target_os = "windows")) =>
+                    {
                         args["pid"] = json!(window.pid);
                         args["window_id"] = json!(window.window_id);
                         args["element_token"] = json!(target.element(index)?.element_token);
-                        args["delivery_mode"] = json!("background");
+                        args["delivery_mode"] = json!(native_delivery_mode());
                     }
                     _ => {
                         return Err(failed(
@@ -873,5 +915,112 @@ pub(crate) fn display_diff(previous: Option<&str>, current: &str) -> String {
         current.into()
     } else {
         diff
+    }
+}
+
+fn app_id(app: &AppInfo) -> String {
+    use sha2::{Digest, Sha256};
+    if cfg!(target_os = "windows")
+        && app.kind.as_deref() != Some("uwp")
+        && let Some(path) = &app.launch_path
+    {
+        return format!("launch:{:x}", Sha256::digest(path.as_bytes()));
+    }
+    if let Some(bundle) = &app.bundle_id {
+        return bundle.clone();
+    }
+    if let Some(path) = &app.launch_path {
+        return format!("launch:{:x}", Sha256::digest(path.as_bytes()));
+    }
+    format!("pid:{}", app.pid)
+}
+
+fn launch_args(app: &str, inventory: &[AppInfo]) -> Result<Value, ToolError> {
+    let mut matches = inventory
+        .iter()
+        .filter(|candidate| app_id(candidate) == app);
+    let target = matches
+        .next()
+        .ok_or_else(|| failed("app identity missing; refresh cua.listApps before launch"))?;
+    if matches.next().is_some() {
+        return Err(failed(
+            "app identity ambiguous; refresh cua.listApps before launch",
+        ));
+    }
+    if target.kind.as_deref() == Some("uwp")
+        && let Some(bundle) = target
+            .bundle_id
+            .as_ref()
+            .filter(|bundle| bundle.contains('!'))
+    {
+        Ok(json!({"aumid":bundle}))
+    } else if let Some(path) = &target.launch_path {
+        Ok(json!({"launch_path":path}))
+    } else {
+        Err(failed(
+            "launch unavailable for this inventory entry; select its open window",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_shortcuts_keep_different_parameters_for_the_same_executable() {
+        let first: AppInfo = serde_json::from_value(json!({"pid":0,"name":"First profile","running":false,"active":false,"bundle_id":"C:\\Apps\\Browser.exe","launch_path":"C:\\Apps\\Browser.exe --profile first"})).unwrap();
+        let mut second = first.clone();
+        second.launch_path = Some("C:\\Apps\\Browser.exe --profile second".into());
+        assert_ne!(app_id(&first), app_id(&second));
+        let id = app_id(&second);
+        let expected = json!({"launch_path":second.launch_path});
+        assert_eq!(launch_args(&id, &[first, second]).unwrap(), expected);
+    }
+    #[test]
+    fn launch_uses_revalidated_inventory_identity_not_pid_zero_or_caller_path() {
+        let app = |path: &str| AppInfo {
+            pid: 0,
+            name: "Installed app".into(),
+            running: false,
+            active: false,
+            bundle_id: None,
+            launch_path: Some(path.into()),
+            kind: Some("desktop".into()),
+            last_used: None,
+        };
+        let first = app(r#""C:\Apps\First.exe" --profile owned"#);
+        let second = app(r#"C:\Apps\Second.exe"#);
+        assert_ne!(app_id(&first), app_id(&second));
+        let id = app_id(&first);
+        let inventory = [first.clone(), second];
+        assert_eq!(
+            launch_args(&id, &inventory).unwrap(),
+            json!({"launch_path":first.launch_path})
+        );
+        assert!(
+            matches!(launch_args("C:\\Apps\\First.exe", &inventory), Err(ToolError::Failed(message)) if message.contains("app identity missing"))
+        );
+        assert!(
+            matches!(launch_args(&id, &[inventory[1].clone()]), Err(ToolError::Failed(message)) if message.contains("app identity missing"))
+        );
+        assert!(
+            matches!(launch_args(&id, &[first.clone(), first.clone()]), Err(ToolError::Failed(message)) if message.contains("app identity ambiguous"))
+        );
+        let mut family_only = first.clone();
+        family_only.kind = Some("uwp".into());
+        family_only.bundle_id = Some("Maka_fixture_family".into());
+        family_only.launch_path = Some(r"shell:appsFolder\Maka_fixture_family!App".into());
+        assert_eq!(
+            launch_args("Maka_fixture_family", &[family_only]).unwrap(),
+            json!({"launch_path":r"shell:appsFolder\Maka_fixture_family!App"})
+        );
+        let mut packaged = first;
+        packaged.bundle_id = Some("Maka_fixture!App".into());
+        packaged.kind = Some("uwp".into());
+        assert_eq!(
+            launch_args("Maka_fixture!App", &[packaged]).unwrap(),
+            json!({"aumid":"Maka_fixture!App"})
+        );
     }
 }
