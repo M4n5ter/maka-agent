@@ -25,7 +25,7 @@ publish.workspace = true
 [dependencies]
 cua-driver-contract.workspace = true
 cua-driver-sdk.workspace = true
-cua-driver-core = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
+cua-driver-core = { git = "https://github.com/maka-agent/cua", rev = "c91452f398c3104a1f8ca60d59f5a0010f796539" }
 maka-plugins.workspace = true
 maka-runtime.workspace = true
 maka-tool-catalog.workspace = true
@@ -37,7 +37,7 @@ libc.workspace = true
 reqwest.workspace = true
 base64 = "0.22.1"
 futures-util.workspace = true
-cursor-overlay = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c", features = ["theme-authoring"] }
+cursor-overlay = { git = "https://github.com/maka-agent/cua", rev = "c91452f398c3104a1f8ca60d59f5a0010f796539", features = ["theme-authoring"] }
 sha2.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
@@ -48,14 +48,14 @@ tokio-util.workspace = true
 tiny-skia = { version = "0.11", features = ["png-format"] }
 
 [target.'cfg(windows)'.dependencies]
-platform-windows = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
+platform-windows = { git = "https://github.com/maka-agent/cua", rev = "c91452f398c3104a1f8ca60d59f5a0010f796539" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-platform-linux = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
+platform-linux = { git = "https://github.com/maka-agent/cua", rev = "c91452f398c3104a1f8ca60d59f5a0010f796539" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-platform-macos = { git = "https://github.com/maka-agent/cua", rev = "f56f1ed8ca47ce2efa36a3932869d0051969e33c" }
+platform-macos = { git = "https://github.com/maka-agent/cua", rev = "c91452f398c3104a1f8ca60d59f5a0010f796539" }
 core-foundation = "0.10.1"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }

@@ -34,8 +34,8 @@ use cua_driver_core::{
 use maka_runtime::tools::ToolError;
 use platform_macos::ax::{
     bindings::*,
-    cache::RetainedElement,
     exact_target::{element_window_id, gather_background_facts},
+    snapshot::RetainedElement,
     tree::walk_tree_budgeted,
 };
 use std::collections::HashMap;

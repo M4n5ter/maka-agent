@@ -10008,16 +10008,16 @@ DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 
-cua-driver-contract@0.29.1 (MIT; see upstream notice)
-cua-driver-core@0.29.1 (MIT; see upstream notice)
-cua-driver-sdk@0.29.1 (MIT); authors declared by package: trycua
-cursor-overlay@0.29.1 (MIT; see upstream notice)
-pip-preview@0.29.1 (MIT; see upstream notice)
-platform-linux@0.29.1 (MIT; see upstream notice)
-platform-macos@0.29.1 (MIT; see upstream notice)
-platform-windows@0.29.1 (MIT; see upstream notice)
+cua-driver-contract@0.32.0 (MIT)
+cua-driver-core@0.32.0 (MIT)
+cua-driver-sdk@0.32.0 (MIT); authors declared by package: trycua
+cursor-overlay@0.32.0 (MIT)
+pip-preview@0.32.0 (MIT)
+platform-linux@0.32.0 (MIT)
+platform-macos@0.32.0 (MIT)
+platform-windows@0.32.0 (MIT)
 
-git+https://github.com/maka-agent/cua?rev=f56f1ed8ca47ce2efa36a3932869d0051969e33c#f56f1ed8ca47ce2efa36a3932869d0051969e33c
+git+https://github.com/maka-agent/cua?rev=c91452f398c3104a1f8ca60d59f5a0010f796539#c91452f398c3104a1f8ca60d59f5a0010f796539
 
 Cua Driver Rust SDK and its workspace crates
 Source: https://github.com/trycua/cua
