@@ -44,7 +44,7 @@ fmt-check:
     node node_modules/@biomejs/biome/bin/biome format .
 
 lint:
-    cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --config 'build.warnings="deny"' --locked --workspace --all-targets
     node node_modules/@biomejs/biome/bin/biome lint .
 
 typecheck:

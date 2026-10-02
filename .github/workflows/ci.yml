@@ -35,6 +35,10 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      MBX_CACHE_EXPORT_GROUP: ci-${{ github.run_id }}-${{ github.run_attempt }}-test
+      MBX_GC_AUTO: '0'
+      MBX_TARGET_VIEWS: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,6 +54,33 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Update Rust
         run: rustup update stable --no-self-update
+      # mr-boxington-action is not on the ASF allowlist. Install the immutable
+      # release directly and transport its cache with GitHub's official actions.
+      - name: Install mbx
+        id: mbx
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release="$RUNNER_TEMP/mbx-release.json"
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/jdx/mr-boxington/releases/latest \
+            --output "$release"
+          jq --exit-status '.immutable == true' "$release" > /dev/null
+          version=$(jq --exit-status --raw-output '.tag_name | ltrimstr("v")' "$release")
+          asset='.assets[] | select(.name == "mbx-x86_64-unknown-linux-gnu.tar.gz")'
+          url=$(jq --exit-status --raw-output "$asset | .browser_download_url" "$release")
+          digest=$(jq --exit-status --raw-output "$asset | .digest | select(startswith(\"sha256:\")) | ltrimstr(\"sha256:\")" "$release")
+          archive="$RUNNER_TEMP/mbx.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 "$url" --output "$archive"
+          echo "$digest  $archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mbx-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/mbx-bin"
+          "$RUNNER_TEMP/mbx-bin/mbx" --version
+          XDG_DATA_HOME="$RUNNER_TEMP/mbx-data" "$RUNNER_TEMP/mbx-bin/mbx" setup --yes
+          echo "$RUNNER_TEMP/mbx-bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/mbx-data/mbx/bin" >> "$GITHUB_PATH"
+          echo "key=mbx-${version}-${RUNNER_OS}-${RUNNER_ARCH}-$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
         with:
           tool: just@1.58.0,cargo-nextest,cargo-deny
@@ -60,6 +91,18 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
+      - name: Restore compiled Rust cache
+        id: mbx-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mbx-cache
+          key: ${{ steps.mbx.outputs.key }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ steps.mbx.outputs.key }}-${{ hashFiles('Cargo.lock') }}-
+            ${{ steps.mbx.outputs.key }}-
+      - name: Import compiled Rust cache
+        if: steps.mbx-cache.outputs.cache-matched-key != ''
+        run: mbx cache import "$RUNNER_TEMP/mbx-cache"
       - name: Select npm
         run: npm install --global --no-audit --no-fund "$(node -p 'require("./package.json").packageManager')"
       - run: just setup
@@ -67,3 +110,12 @@ jobs:
       - run: just build
       - name: Native CLI smoke
         run: target/debug/maka --version
+      - name: Export compiled Rust cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.mbx-cache.outputs.cache-hit != 'true'
+        run: mbx cache export --group "$MBX_CACHE_EXPORT_GROUP" --format directory "$RUNNER_TEMP/mbx-cache"
+      - name: Save compiled Rust cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.mbx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mbx-cache
+          key: ${{ steps.mbx-cache.outputs.cache-primary-key }}
