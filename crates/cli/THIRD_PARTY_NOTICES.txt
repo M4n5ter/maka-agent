@@ -10017,7 +10017,7 @@ platform-linux@0.32.0 (MIT)
 platform-macos@0.32.0 (MIT)
 platform-windows@0.32.0 (MIT)
 
-git+https://github.com/maka-agent/cua?rev=c91452f398c3104a1f8ca60d59f5a0010f796539#c91452f398c3104a1f8ca60d59f5a0010f796539
+git+https://github.com/maka-agent/cua?rev=79c9b58a1b61f66ae966635c464e54cb2c8151d6#79c9b58a1b61f66ae966635c464e54cb2c8151d6
 
 Cua Driver Rust SDK and its workspace crates
 Source: https://github.com/trycua/cua

@@ -1,7 +1,7 @@
 {
   "inputs": {
-    "Cargo.lock": "4aaa9bc7fd4351c202f5fac1271144a42d763af0a77f4fd2fdfa8a54e0938bcf",
-    "Cargo.toml": "fcbe03d23fc0aa31826bc82c71107dd914e5defc784f2797a51bcec40ceb8101",
+    "Cargo.lock": "fc838915f162697cdf232ead443ccef60b5426845e9cc10a38df99ed8cc19c01",
+    "Cargo.toml": "9cd607747f879f53b8327f86087020b2d31bf6ccdd172c72593b7735d97025fb",
     "crates/acp/Cargo.toml": "836cf57acda320dc984f4648e5893580e79063e95ced700f33cfbaa75994b8f8",
     "crates/agent/Cargo.toml": "241d363907d6e5491ba6645de5c114877165e4abd6844b2c581a35fd19c0f4f4",
     "crates/apply-patch/Cargo.toml": "049167f87e46959c056e9c3ec990d2243ea6366f883afc6cf5ff5f1364c94e51",
@@ -10,7 +10,7 @@
     "crates/cli/Cargo.toml": "6751a6cba8ea83f8554582260b488fd2efc6bc1030c2e992bcd8cc255328002e",
     "crates/client-capability/Cargo.toml": "4dd797186eb0ac679b3e0ab1ef4bc8392e27ed0937a5cf778062022df1dc45ad",
     "crates/client/Cargo.toml": "035455eb60a58baf8e6b4a8fba3b3192e475d2e5304cc05e0ba3a19a2bf1bc9d",
-    "crates/computer-use/Cargo.toml": "b82218c47f0798adb2f4705b447751756c0023529df707c683725af10a92838b",
+    "crates/computer-use/Cargo.toml": "47ea75f205bcc481ca51c31a9ac09b0ef2585b15a5ca345c9b42d9d61020a260",
     "crates/computer-use/THIRD_PARTY_NOTICES": "709951ed2ee5c4b9ed933f375a37c5b15ec0efa2dea340dc0f289906d72a7bde",
     "crates/config/Cargo.toml": "58be3b2b9a37611bfaff2949a4a272bf0a4b29adb7afeddf5c463256c97882ae",
     "crates/event-log/Cargo.toml": "c248b64c745c6cb3eef0c3d6472e8ace90e687aceed774ae48a54d9169b87bf6",
@@ -70,5 +70,5 @@
     "scripts/rust/v8-prebuilts.json": "44e8700ccdbda523b1bc0a47a2cdfc26e4c6bc355572dde05a7f10474896cb89",
     "scripts/rust/v8-source.json": "c8bac739fa6361d8c3ca5f7e30021241f5d6cd9e4dc2c1183b97d96c05a59c11"
   },
-  "sha256": "0f7f0d16f8007fdc6dfb3db208d7481de88af3883a74c73c96d7af22a1a5b652"
+  "sha256": "ceb29c1701f16f7d1eb27f39844e22d8efb1f7702cd8a0681171a87098a18a73"
 }
